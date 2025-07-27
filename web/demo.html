@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+
+  <title>LED Strip Simulator</title>
+  <style>
+    body {
+      background: #111;
+      color: white;
+      text-align: center;
+      font-family: sans-serif;
+    }
+    .led-strip {
+      display: flex;
+      justify-content: center;
+      gap: 5px;
+      margin-top: 50px;
+    }
+    .led {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: #222;
+      box-shadow: 0 0 5px #000;
+      transition: background 0.2s;
+    }
+    .cube {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 50vh;
+      height: 50vh;
+      transform-style: preserve-3d;
+      transform: translate(-50%, -50%) rotateX(30deg) rotateY(30deg);
+      /* animation: rotate 5s infinite linear; */
+    }
+
+    .face {
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      background: rgba(255, 255, 255, 0.1);
+      border: 2px solid white;
+      box-sizing: border-box;
+    }
+
+    .front  { transform: rotateY(0deg) translateZ(25vh); }
+    .back   { transform: rotateY(180deg) translateZ(25vh); }
+    .right  { transform: rotateY(90deg) translateZ(25vh); }
+    .left   { transform: rotateY(-90deg) translateZ(25vh); }
+    .top    { transform: rotateX(90deg) translateZ(25vh); }
+    .bottom { transform: rotateX(-90deg) translateZ(25vh); }
+
+    .floor-button {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 25vh;
+      height: 25vh;
+      border-radius: 50%;
+      background: linear-gradient(145deg, #4a90e2, #357abd);
+      border: 3px solid #2c5aa0;
+      box-shadow: 
+        0 8px 16px rgba(0, 0, 0, 0.3),
+        inset 0 2px 4px rgba(255, 255, 255, 0.2);
+      transform: translate(-50%, -50%);
+      cursor: pointer;
+      transition: all 0.3s ease;
+    }
+
+    .floor-button:hover {
+      background: linear-gradient(145deg, #5ba0f2, #4a90e2);
+      box-shadow: 
+        0 12px 24px rgba(0, 0, 0, 0.4),
+        inset 0 2px 4px rgba(255, 255, 255, 0.3);
+      transform: translate(-50%, -50%) scale(1.05);
+    }
+
+    .floor-button:active {
+      transform: translate(-50%, -50%) scale(0.95);
+      box-shadow: 
+        0 4px 8px rgba(0, 0, 0, 0.3),
+        inset 0 1px 2px rgba(0, 0, 0, 0.2);
+    }
+
+    /* @keyframes rotate {
+      from { transform: rotateX(0deg) rotateY(0deg); }
+      to   { transform: rotateX(360deg) rotateY(360deg); }
+    } */
+  </style>
+</head>
+<body class="bg-gray-900 text-white text-center font-sans min-h-screen">
+  <h1 class="text-3xl font-bold mb-8 pt-8">LED Strip Simulator</h1>
+  <div class="cube">
+    <div class="face front"></div>
+    <div class="face back"></div>
+    <div class="face right"></div>
+    <div class="face left"></div>
+    <div class="face top"></div>
+    <div class="face bottom">
+      <div class="floor-button"></div>
+    </div>
+  </div>
+  <div class="flex justify-center gap-1 mt-12" id="led-strip"></div>
+
+  <script>
+    const NUM_LEDS = 30;
+    const strip = document.getElementById("led-strip");
+
+    // Create LED elements
+    const leds = [];
+    for (let i = 0; i < NUM_LEDS; i++) {
+      const led = document.createElement("div");
+      led.className = "w-5 h-5 rounded-full bg-gray-800 shadow-lg transition-colors duration-200";
+      strip.appendChild(led);
+      leds.push(led);
+    }
+
+    // Example animation: Color wipe
+    async function colorWipe(color, delay = 100) {
+      for (let i = 0; i < NUM_LEDS; i++) {
+        leds[i].style.backgroundColor = color;
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    }
+
+    // Example animation: Rainbow
+    function hsvToRgb(h, s, v) {
+      let f = (n, k = (n + h / 60) % 6) =>
+        v - v * s * Math.max(Math.min(k, 4 - k, 1), 0);
+      return `rgb(${f(5) * 255}, ${f(3) * 255}, ${f(1) * 255})`;
+    }
+
+    async function rainbow(delay = 50) {
+      let hue = 0;
+      while (true) {
+        for (let i = 0; i < NUM_LEDS; i++) {
+          leds[i].style.backgroundColor = hsvToRgb((hue + i * 10) % 360, 1, 1);
+        }
+        hue = (hue + 5) % 360;
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    }
+
+    // Start animation
+    colorWipe("red", 50).then(() => rainbow(50));
+  </script>
+</body>
+</html>
