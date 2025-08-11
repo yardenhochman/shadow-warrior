@@ -1,9 +1,79 @@
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import numpy as np
-import time
 import colorsys
 from matplotlib.animation import FuncAnimation
+import math
+import time
+import random
+from collections import deque
+from dataclasses import dataclass
+from enum import Enum
+
+import numpy as np
+# Force an interactive GUI backend (helps on macOS where default can be non-interactive)
+import matplotlib
+
+class Mode(Enum):
+    IDLE = 0
+    VOICE = 1
+    FIGHT = 2
+
+current_mode = Mode.IDLE
+
+@dataclass
+class Config:
+    fps: int = 50
+    gamma: float = 2.2
+    global_brightness: float = 0.9  # master dimmer
+
+    # Layout: total LEDs and named segments
+    poles: int = 6
+    leds_per_pole: int = 40
+    entry_beacon_leds: int = 12  # small "traffic light" icon near entry
+    bag_spot_leds: int = 10      # spotlight ring/narrow strip above bag
+
+    # Game/scoring
+    voice_window_sec: float = 10.0
+    score_decay_per_sec: float = 0.0  # already handled by window; extra decay if you want
+    score_threshold: float = 9000.0
+    min_fight_seconds: float = 35.0
+    max_fight_seconds: float = 90.0
+
+    # Palettes (HSV base or direct RGB)
+    sad_hsv: tuple = (250/360.0, 0.65, 0.7)  # blue-violet
+    alert_hsv: tuple = (0/360.0, 1.0, 1.0)   # red
+    action_hsv: tuple = (25/360.0, 1.0, 1.0) # orange
+
+    # Breathing
+    breathe_speed: float = 0.06
+    breathe_min: float = 0.08
+    breathe_max: float = 0.45
+
+    # Voice-react
+    voice_strobe_min_interval: float = 0.06
+    voice_strobe_max_interval: float = 0.18
+
+    # Ripple on punch
+    ripple_speed_leds_per_sec: float = 120.0
+    ripple_width_leds: int = 6
+
+
+def hsv_to_rgb(h, s, v):
+    r, g, b = colorsys.hsv_to_rgb(h, s, v)
+    return np.array([r, g, b], dtype=np.float32)
+
+
+def apply_gamma(rgb, gamma):
+    return np.power(np.clip(rgb, 0.0, 1.0), 1.0 / gamma)
+
+
+
+
+try:
+    matplotlib.use('TkAgg')  # try Tk first (usually available)
+except Exception:
+    pass
 
 class LEDStripSimulator:
     def __init__(self, num_leds=50, led_size=20, spacing=5):
@@ -11,7 +81,7 @@ class LEDStripSimulator:
         self.led_size = led_size
         self.spacing = spacing
         self.pixels = np.zeros((num_leds, 3))  # RGB values 0-255
-        
+
         # Setup the plot
         self.fig, self.ax = plt.subplots(figsize=(16, 3))
         self.ax.set_xlim(-spacing, num_leds * (led_size + spacing))
@@ -19,7 +89,11 @@ class LEDStripSimulator:
         self.ax.set_aspect('equal')
         self.ax.axis('off')
         self.ax.set_facecolor('black')
-        
+        self.mode_text = self.fig.text(
+            0.5, 0.95, "Mode: IDLE",  # inside the figure, top area
+            ha="center", va="top",
+            color="black", fontsize=14
+        )
         # Create LED circles
         self.led_circles = []
         for i in range(num_leds):
@@ -30,9 +104,12 @@ class LEDStripSimulator:
             self.ax.add_patch(circle)
             self.led_circles.append(circle)
         
-        self.fig.suptitle(f'LED Strip Simulator - {num_leds} LEDs', color='white')
-        plt.tight_layout()
-        
+        # self.fig.suptitle(f'LED Strip Simulator - {num_leds} LEDs', color='black')
+        self.fig.subplots_adjust(top=0.88)
+    
+    def set_mode_label(self, mode: Mode):
+        self.mode_text.set_text(f"Mode: {mode.name}")
+
     def set_pixel(self, index, r, g, b):
         """Set a single pixel color (r, g, b from 0-255)"""
         if 0 <= index < self.num_leds:
@@ -125,30 +202,34 @@ if __name__ == "__main__":
     # Show the simulator
     plt.ion()  # Interactive mode
     plt.show()
-    
+
+    sim.set_mode_label(current_mode)
+
+    def on_key(event):
+        global current_mode
+        if event.key == '1':
+            current_mode = Mode.IDLE
+        elif event.key == '2':
+            current_mode = Mode.VOICE
+        elif event.key == '3':
+            current_mode = Mode.FIGHT
+        # update the on-screen text immediately
+        sim.set_mode_label(current_mode)
+
+    sim.fig.canvas.mpl_connect('key_press_event', on_key)   
     try:
         print("Running LED effects simulation...")
         print("Close the matplotlib window to stop")
         
-        effect_cycle = 0
         while plt.get_fignums():  # While window is open
-            
-            # Cycle through effects every 100 frames
-            if effect_cycle < 100:
-                effects.rainbow_wave(speed=3)
-            elif effect_cycle < 200:
+            if current_mode == Mode.IDLE:
                 effects.breathing(color=(255, 0, 100), speed=0.08)
-            elif effect_cycle < 300:
+            elif current_mode == Mode.VOICE:
+                effects.rainbow_wave(speed=3)
+            elif current_mode == Mode.FIGHT:
                 effects.fire_effect()
-            elif effect_cycle < 400:
-                effects.scanner(color=(0, 255, 0), width=5)
-            else:
-                effects.wave(color=(255, 100, 0), length=15)
-                if effect_cycle > 500:
-                    effect_cycle = 0
             
             sim.show(delay=0.05)
-            effect_cycle += 1
             
     except KeyboardInterrupt:
         print("Simulation stopped")
