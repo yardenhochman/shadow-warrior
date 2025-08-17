@@ -1,0 +1,1 @@
+run watchmedo auto-restart -p "*.py" -R -- python led_simulator.py
