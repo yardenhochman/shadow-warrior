@@ -79,6 +79,23 @@ def normalized_rms(values):
     return math.sqrt(samples_sum / len(values))
 
 
+def exponential_moving_average(alpha, new_value, previous_ema):
+    """
+    Calculate exponential moving average.
+    
+    Args:
+        alpha: Smoothing factor (0 < alpha <= 1)
+               Higher alpha = more responsive to recent changes
+               Lower alpha = more smoothing
+        new_value: The new data point
+        previous_ema: The previous EMA value
+    
+    Returns:
+        Updated EMA value
+    """
+    return alpha * new_value + (1 - alpha) * previous_ema
+
+
 
 
 def is_hardware_PDM(clock, data):
@@ -143,15 +160,6 @@ def read_mic(mic):
         time.sleep(0.1)
 
 
-# Helper functions to pack IMU data into bytes
-def pack_acceleration(accel_data):
-    """Pack acceleration data (x, y, z) into 12 bytes (3 floats)"""
-    return struct.pack('<fff', accel_data[0], accel_data[1], accel_data[2])
-
-def pack_gyroscope(gyro_data):
-    """Pack gyroscope data (x, y, z) into 12 bytes (3 floats)"""
-    return struct.pack('<fff', gyro_data[0], gyro_data[1], gyro_data[2])
-
 # Initialize BLE
 radio = adafruit_ble.BLERadio()
 radio.name = "ShadowWarrior"
@@ -168,6 +176,9 @@ radio.start_advertising(advertisement)
 
 print("Advertising as ShadowWarrior...")
 
+ACCELERATION_ALPHA = 0.8  # EWMA factor for acceleration smoothing
+ACCELERATION_THRESHOLD = 10  # Threshold for acceleration detection
+
 # Main loop
 while True:
     # Wait for connection
@@ -178,24 +189,28 @@ while True:
     
     # Connection loop - send IMU data updates
     while radio.connected:
+        acceleration = 0
         try:
             # Read IMU data
             accel_data = imu.acceleration
             gyro_data = imu.gyro
             
-            # Pack data into bytes for BLE transmission
-            accel_bytes = pack_acceleration(accel_data)
-            gyro_bytes = pack_gyroscope(gyro_data)
+            acceleration_current = math.sqrt(imu.acceleration[0]**2 + imu.acceleration[1]**2 + imu.acceleration[2]**2)
+            acceleration = exponential_moving_average(ACCELERATION_ALPHA, acceleration_current, acceleration)
+
+            if acceleration > ACCELERATION_THRESHOLD:
+                # Pack data into bytes for BLE transmission
+                accel_bytes = struct.pack('<f', acceleration)
+                
+                # Update characteristics with new data (this sends notifications to clients)
+                shadow_warrior_service.acceleration = accel_bytes
+                print(f"Acceleration: {acceleration}")
+
+                # Print data for debugging
+                print(f"Accel: X:{accel_data[0]:.2f}, Y:{accel_data[1]:.2f}, Z:{accel_data[2]:.2f} m/s²")
+                print(f"Gyro: X:{gyro_data[0]:.2f}, Y:{gyro_data[1]:.2f}, Z:{gyro_data[2]:.2f} rad/s")
             
-            # Update characteristics with new data (this sends notifications to clients)
-            shadow_warrior_service.acceleration = accel_bytes
-            shadow_warrior_service.gyroscope = gyro_bytes
-            
-            # Print data for debugging
-            print(f"Accel: X:{accel_data[0]:.2f}, Y:{accel_data[1]:.2f}, Z:{accel_data[2]:.2f} m/s²")
-            print(f"Gyro: X:{gyro_data[0]:.2f}, Y:{gyro_data[1]:.2f}, Z:{gyro_data[2]:.2f} rad/s")
-                        
-            time.sleep(0.1)  # 10Hz update rate
+            time.sleep(0.2)  # 10Hz update rate
             
         except Exception as e:
             print(f"Error in main loop: {e}")
