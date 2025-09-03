@@ -28,6 +28,8 @@ from adafruit_ble.uuid import VendorUUID
 SW_SERVICE_UUID = VendorUUID("6E400001-B5A3-F393-E0A9-E50E24DCCA9E")
 SW_ACCEL_CHAR_UUID = VendorUUID("6E400002-B5A3-F393-E0A9-E50E24DCCA9E")
 SW_GYRO_CHAR_UUID = VendorUUID("6E400003-B5A3-F393-E0A9-E50E24DCCA9E")
+SW_ALPHA_CHAR_UUID = VendorUUID("6E400004-B5A3-F393-E0A9-E50E24DCCA9E")
+SW_THRESHOLD_CHAR_UUID = VendorUUID("6E400005-B5A3-F393-E0A9-E50E24DCCA9E")
 
 class ShadowWarriorService(Service):
     uuid = SW_SERVICE_UUID
@@ -42,6 +44,18 @@ class ShadowWarriorService(Service):
         uuid=SW_GYRO_CHAR_UUID,
         properties=Characteristic.READ | Characteristic.NOTIFY,
         max_length=12  # 3 floats * 4 bytes each
+    )
+    
+    alpha = Characteristic(
+        uuid=SW_ALPHA_CHAR_UUID,
+        properties=Characteristic.READ | Characteristic.WRITE,
+        max_length=4  # 1 float * 4 bytes
+    )
+    
+    threshold = Characteristic(
+        uuid=SW_THRESHOLD_CHAR_UUID,
+        properties=Characteristic.READ | Characteristic.WRITE,
+        max_length=4  # 1 float * 4 bytes
     )
 
 
@@ -179,6 +193,10 @@ print("Advertising as ShadowWarrior...")
 ACCELERATION_ALPHA = 0.8  # EWMA factor for acceleration smoothing
 ACCELERATION_THRESHOLD = 10  # Threshold for acceleration detection
 
+# Initialize characteristics with default values
+shadow_warrior_service.alpha = struct.pack('<f', ACCELERATION_ALPHA)
+shadow_warrior_service.threshold = struct.pack('<f', ACCELERATION_THRESHOLD)
+
 # Main loop
 while True:
     # Wait for connection
@@ -191,6 +209,15 @@ while True:
     while radio.connected:
         acceleration = 0
         try:
+            # Check for parameter updates from BLE client
+            if shadow_warrior_service.alpha:
+                ACCELERATION_ALPHA = struct.unpack('<f', shadow_warrior_service.alpha)[0]
+                print(f"Alpha updated to: {ACCELERATION_ALPHA}")
+            
+            if shadow_warrior_service.threshold:
+                ACCELERATION_THRESHOLD = struct.unpack('<f', shadow_warrior_service.threshold)[0]
+                print(f"Threshold updated to: {ACCELERATION_THRESHOLD}")
+            
             # Read IMU data
             accel_data = imu.acceleration
             gyro_data = imu.gyro
@@ -210,7 +237,7 @@ while True:
                 print(f"Accel: X:{accel_data[0]:.2f}, Y:{accel_data[1]:.2f}, Z:{accel_data[2]:.2f} m/s²")
                 print(f"Gyro: X:{gyro_data[0]:.2f}, Y:{gyro_data[1]:.2f}, Z:{gyro_data[2]:.2f} rad/s")
             
-            time.sleep(0.2)  # 10Hz update rate
+            time.sleep(0.1)  # 10Hz update rate
             
         except Exception as e:
             print(f"Error in main loop: {e}")
