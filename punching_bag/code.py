@@ -5,6 +5,7 @@ import audiobusio
 import math
 import array
 import struct
+import alarm
 from microcontroller import Pin
 import busio
 from adafruit_lsm6ds.lsm6ds3 import LSM6DS3
@@ -64,16 +65,24 @@ class IMU(LSM6DS3):
     def __init__(self):
         self._dpwr = digitalio.DigitalInOut(board.IMU_PWR)
         self._dpwr.direction = digitalio.Direction.OUTPUT
-        self.turn_on()
-        i2c = busio.I2C(board.IMU_SCL, board.IMU_SDA)
-        super().__init__(i2c)
+        self._i2c = None
+        self._initialized = False
+        self.turn_off()  # Start with IMU off to save power
     
     def turn_on(self):
         self._dpwr.value = True
-        time.sleep(0.1)
+        time.sleep(0.1)  # Wait for IMU to power up
+        if not self._initialized:
+            self._i2c = busio.I2C(board.IMU_SCL, board.IMU_SDA)
+            super().__init__(self._i2c)
+            self._initialized = True
 
     def turn_off(self):
         self._dpwr.value = False
+        if self._i2c:
+            self._i2c.deinit()
+            self._i2c = None
+        self._initialized = False
         
 
 
@@ -190,20 +199,49 @@ radio.start_advertising(advertisement)
 
 print("Advertising as ShadowWarrior...")
 
-ACCELERATION_ALPHA = 0.8  # EWMA factor for acceleration smoothing
-ACCELERATION_THRESHOLD = 10  # Threshold for acceleration detection
+acceleration_alpha = 0.8  # EWMA factor for acceleration smoothing
+acceleration_threshold = 10  # Threshold for acceleration detection
 
 # Initialize characteristics with default values
-shadow_warrior_service.alpha = struct.pack('<f', ACCELERATION_ALPHA)
-shadow_warrior_service.threshold = struct.pack('<f', ACCELERATION_THRESHOLD)
+shadow_warrior_service.alpha = struct.pack('<f', acceleration_alpha)
+shadow_warrior_service.threshold = struct.pack('<f', acceleration_threshold)
+
+# Power management and sleep configuration
+SLEEP_DURATION = 2.0  # Sleep for 2 seconds between advertising cycles
+ADVERTISING_DURATION = 0.5  # Advertise for 0.5 seconds before sleeping
+
+print("Starting power-optimized main loop...")
 
 # Main loop
 while True:
-    # Wait for connection
+    # Power-saving advertising loop - IMU is off during this phase
     while not radio.connected:
-        pass
+        print("Advertising... (IMU off)")
+        
+        # Advertise for a short period
+        start_time = time.monotonic()
+        while time.monotonic() - start_time < ADVERTISING_DURATION:
+            if radio.connected:
+                break
+            time.sleep(0.1)  # Small delay to check for connections
+        
+        # If still not connected, go to light sleep to save power
+        if not radio.connected:
+            print("Entering light sleep for power saving...")
+            
+            # Create time alarm for periodic wake-up
+            time_alarm = alarm.time.TimeAlarm(monotonic_time=time.monotonic() + SLEEP_DURATION)
+            
+            # Enter light sleep (BLE advertising continues automatically)
+            alarm.light_sleep_until_alarms(time_alarm)
+            
+            # Wake up and continue advertising cycle
+            print("Woke up from light sleep")
     
-    print("Connected!")
+    print("Connected! Turning on IMU...")
+    
+    # Turn on IMU when client connects
+    imu.turn_on()
     
     # Connection loop - send IMU data updates
     while radio.connected:
@@ -211,21 +249,24 @@ while True:
         try:
             # Check for parameter updates from BLE client
             if shadow_warrior_service.alpha:
-                ACCELERATION_ALPHA = struct.unpack('<f', shadow_warrior_service.alpha)[0]
-                print(f"Alpha updated to: {ACCELERATION_ALPHA}")
-            
+                updated_alpha = struct.unpack('<f', shadow_warrior_service.alpha)[0]
+                if updated_alpha != acceleration_alpha:
+                    acceleration_alpha = updated_alpha
+                    print(f"Alpha updated to: {acceleration_alpha}")
+
             if shadow_warrior_service.threshold:
-                ACCELERATION_THRESHOLD = struct.unpack('<f', shadow_warrior_service.threshold)[0]
-                print(f"Threshold updated to: {ACCELERATION_THRESHOLD}")
-            
-            # Read IMU data
+                updated_threshold = struct.unpack('<f', shadow_warrior_service.threshold)[0]
+                if updated_threshold != acceleration_threshold:
+                    acceleration_threshold = updated_threshold
+                    print(f"Threshold updated to: {acceleration_threshold}")
+                            
             accel_data = imu.acceleration
             gyro_data = imu.gyro
             
             acceleration_current = math.sqrt(imu.acceleration[0]**2 + imu.acceleration[1]**2 + imu.acceleration[2]**2)
-            acceleration = exponential_moving_average(ACCELERATION_ALPHA, acceleration_current, acceleration)
+            acceleration = exponential_moving_average(acceleration_alpha, acceleration_current, acceleration)
 
-            if acceleration > ACCELERATION_THRESHOLD:
+            if acceleration > acceleration_threshold:
                 # Pack data into bytes for BLE transmission
                 accel_bytes = struct.pack('<f', acceleration)
                 
@@ -243,7 +284,10 @@ while True:
             print(f"Error in main loop: {e}")
             break
     
-    print("Disconnected!")
+    print("Disconnected! Turning off IMU to save power...")
+    
+    # Turn off IMU to save power when disconnected
+    imu.turn_off()
     
     # Restart advertising
     radio.start_advertising(advertisement)
