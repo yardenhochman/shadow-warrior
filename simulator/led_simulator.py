@@ -432,7 +432,7 @@ class LEDEffect:
         """Multi-stage voice power effect based on power level"""
         # Calculate how many LEDs should be lit based on power level
         num_lit_leds = int(self.effects.sim.num_leds * power_level)
-        
+
         # Stage 1: Rainbow (0-40%)
         if power_level <= 0.3:
             for i in range(self.effects.sim.num_leds):
@@ -546,13 +546,14 @@ if __name__ == "__main__":
         if event.key == '1':
             current_mode = Mode.IDLE
             sim.set_trigger_held(False)  # Release trigger when going to idle
-        elif event.key == '2':
+        elif event.key == '2' and current_mode != Mode.FIGHT:
             current_mode = Mode.VOICE
             sim.set_trigger_held(True)   # Trigger held when entering voice mode
             print("Key 2 pressed - voice mode and trigger held")
         elif event.key == '3':
             current_mode = Mode.FIGHT
-            sim.set_trigger_held(False)  # Release trigger when going to fight mode
+            sim.set_trigger_held(True)  # Release trigger when going to fight mode
+            print("Key 2 pressed - punch triggered")
         else:
             # Any other key press releases the trigger
             sim.set_trigger_held(False)
@@ -564,6 +565,9 @@ if __name__ == "__main__":
         if event.key == '2':
             sim.set_trigger_held(False)  # Release trigger when key 2 is released
             print("Key 2 released - trigger released")
+        elif event.key == '3':
+            sim.set_trigger_held(False)  # Release trigger when key 3 is released
+            print("Key 3 released - trigger released")
 
     # Connect keyboard events for mode switching and trigger control
     sim.fig.canvas.mpl_connect('key_press_event', on_key_press)
@@ -583,9 +587,16 @@ if __name__ == "__main__":
 
             # Update power level based on trigger state
             if sim.is_trigger_held():
-                # Increase power when trigger is held
-                sim.power_level = min(sim.power_level + sim.power_charge_rate, 1.0)
+                if current_mode == Mode.VOICE:
+                    # Increase power when trigger is held
+                    sim.power_level = min(sim.power_level + sim.power_charge_rate, 1.0)
+                elif current_mode == Mode.FIGHT:
+                    # Increase power when trigger is held
+                    sim.power_level = min(sim.power_level + sim.power_charge_rate * 10, 1.0)
                 # Reset zero timer when power increases
+                sim.power_zero_start_time = None
+            elif current_mode == Mode.FIGHT:
+                sim.power_level = max(sim.power_level - sim.power_decay_rate * 10, 0.0)
                 sim.power_zero_start_time = None
             else:
                 # Decrease power when trigger is not held
@@ -613,10 +624,11 @@ if __name__ == "__main__":
                 led_effect.breath()
                 sim.set_mode_label(Mode.IDLE)
             elif current_mode == Mode.VOICE:
-                # Show power level in voice power effect (always reflects current power)
+                if sim.power_level == 1.0:
+                    current_mode = Mode.FIGHT
                 led_effect.voice_power_effect(power_level=sim.power_level)
             elif current_mode == Mode.FIGHT:
-                led_effect.fire()
+                led_effect.voice_power_effect(power_level=sim.power_level)
             
             sim.show(delay=0.05)
             
