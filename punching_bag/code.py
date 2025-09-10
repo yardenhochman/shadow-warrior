@@ -31,6 +31,7 @@ SW_ACCEL_CHAR_UUID = VendorUUID("6E400002-B5A3-F393-E0A9-E50E24DCCA9E")
 SW_GYRO_CHAR_UUID = VendorUUID("6E400003-B5A3-F393-E0A9-E50E24DCCA9E")
 SW_ALPHA_CHAR_UUID = VendorUUID("6E400004-B5A3-F393-E0A9-E50E24DCCA9E")
 SW_THRESHOLD_CHAR_UUID = VendorUUID("6E400005-B5A3-F393-E0A9-E50E24DCCA9E")
+SW_FIGHT_MODE_CHAR_UUID = VendorUUID("6E400006-B5A3-F393-E0A9-E50E24DCCA9E")
 
 class ShadowWarriorService(Service):
     uuid = SW_SERVICE_UUID
@@ -57,6 +58,12 @@ class ShadowWarriorService(Service):
         uuid=SW_THRESHOLD_CHAR_UUID,
         properties=Characteristic.READ | Characteristic.WRITE,
         max_length=4  # 1 float * 4 bytes
+    )
+    
+    fight_mode = Characteristic(
+        uuid=SW_FIGHT_MODE_CHAR_UUID,
+        properties=Characteristic.READ | Characteristic.WRITE,
+        max_length=1  # 1 byte for boolean
     )
 
 
@@ -201,10 +208,12 @@ print("Advertising as ShadowWarrior...")
 
 acceleration_alpha = 0.8  # EWMA factor for acceleration smoothing
 acceleration_threshold = 10  # Threshold for acceleration detection
+fight_mode = False  # Fight mode - when False, stay in low power even when connected
 
 # Initialize characteristics with default values
 shadow_warrior_service.alpha = struct.pack('<f', acceleration_alpha)
 shadow_warrior_service.threshold = struct.pack('<f', acceleration_threshold)
+shadow_warrior_service.fight_mode = struct.pack('B', int(fight_mode))  # Pack boolean as unsigned byte
 
 # Power management and sleep configuration
 SLEEP_DURATION = 2.0  # Sleep for 2 seconds between advertising cycles
@@ -238,14 +247,10 @@ while True:
             # Wake up and continue advertising cycle
             print("Woke up from light sleep")
     
-    print("Connected! Turning on IMU...")
+    print("Connected! Checking fight mode...")
     
-    # Turn on IMU when client connects
-    imu.turn_on()
-    
-    # Connection loop - send IMU data updates
+    # Connection loop - check fight mode and act accordingly
     while radio.connected:
-        acceleration = 0
         try:
             # Check for parameter updates from BLE client
             if shadow_warrior_service.alpha:
@@ -259,26 +264,51 @@ while True:
                 if updated_threshold != acceleration_threshold:
                     acceleration_threshold = updated_threshold
                     print(f"Threshold updated to: {acceleration_threshold}")
-                            
-            accel_data = imu.acceleration
-            gyro_data = imu.gyro
             
-            acceleration_current = math.sqrt(imu.acceleration[0]**2 + imu.acceleration[1]**2 + imu.acceleration[2]**2)
-            acceleration = exponential_moving_average(acceleration_alpha, acceleration_current, acceleration)
-
-            if acceleration > acceleration_threshold:
-                # Pack data into bytes for BLE transmission
-                accel_bytes = struct.pack('<f', acceleration)
+            # Check fight mode status
+            if shadow_warrior_service.fight_mode:
+                updated_fight_mode = bool(struct.unpack('B', shadow_warrior_service.fight_mode)[0])
+                if updated_fight_mode != fight_mode:
+                    fight_mode = updated_fight_mode
+                    print(f"Fight mode updated to: {'ON' if fight_mode else 'OFF'}")
+                    
+                    if fight_mode and not imu._initialized:
+                        print("Fight mode ON - turning on IMU...")
+                        imu.turn_on()
+                        time.sleep(0.2)  # Give IMU time to stabilize
+                    elif not fight_mode and imu._initialized:
+                        print("Fight mode OFF - turning off IMU for power saving...")
+                        imu.turn_off()
+            
+            # Behavior based on fight mode
+            if fight_mode and imu._initialized:
+                # Active mode - read IMU and send data
+                acceleration = 0
+                accel_data = imu.acceleration
+                gyro_data = imu.gyro
                 
-                # Update characteristics with new data (this sends notifications to clients)
-                shadow_warrior_service.acceleration = accel_bytes
-                print(f"Acceleration: {acceleration}")
+                acceleration_current = math.sqrt(imu.acceleration[0]**2 + imu.acceleration[1]**2 + imu.acceleration[2]**2)
+                acceleration = exponential_moving_average(acceleration_alpha, acceleration_current, acceleration)
 
-                # Print data for debugging
-                print(f"Accel: X:{accel_data[0]:.2f}, Y:{accel_data[1]:.2f}, Z:{accel_data[2]:.2f} m/s²")
-                print(f"Gyro: X:{gyro_data[0]:.2f}, Y:{gyro_data[1]:.2f}, Z:{gyro_data[2]:.2f} rad/s")
-            
-            time.sleep(0.1)  # 10Hz update rate
+                if acceleration > acceleration_threshold:
+                    # Pack data into bytes for BLE transmission
+                    accel_bytes = struct.pack('<f', acceleration)
+                    
+                    # Update characteristics with new data (this sends notifications to clients)
+                    shadow_warrior_service.acceleration = accel_bytes
+                    print(f"Acceleration: {acceleration}")
+
+                    # Print data for debugging
+                    print(f"Accel: X:{accel_data[0]:.2f}, Y:{accel_data[1]:.2f}, Z:{accel_data[2]:.2f} m/s²")
+                    print(f"Gyro: X:{gyro_data[0]:.2f}, Y:{gyro_data[1]:.2f}, Z:{gyro_data[2]:.2f} rad/s")
+                
+                time.sleep(0.1)  # 10Hz update rate in fight mode
+                
+            else:
+                # Low power mode - even when connected, sleep to save battery
+                print("Fight mode OFF - light sleep (connected)")
+                time_alarm = alarm.time.TimeAlarm(monotonic_time=time.monotonic() + 0.5)
+                alarm.light_sleep_until_alarms(time_alarm)
             
         except Exception as e:
             print(f"Error in main loop: {e}")

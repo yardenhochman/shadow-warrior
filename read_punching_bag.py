@@ -24,6 +24,7 @@ SW_ACCEL_CHAR_UUID = "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"
 SW_GYRO_CHAR_UUID = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"
 SW_ALPHA_CHAR_UUID = "6E400004-B5A3-F393-E0A9-E50E24DCCA9E"
 SW_THRESHOLD_CHAR_UUID = "6E400005-B5A3-F393-E0A9-E50E24DCCA9E"
+SW_FIGHT_MODE_CHAR_UUID = "6E400006-B5A3-F393-E0A9-E50E24DCCA9E"
 
 def unpack_accel_data(data):
     if len(data) != 4:
@@ -48,6 +49,17 @@ def unpack_float_data(data):
 def pack_float_data(value):
     """Pack a float value into 4 bytes"""
     return struct.pack('<f', value)
+
+def unpack_bool_data(data):
+    """Unpack 1 byte into a boolean value"""
+    if len(data) != 1:
+        raise ValueError(f"Expected 1 byte, got {len(data)}")
+    
+    return bool(struct.unpack('B', data)[0])
+
+def pack_bool_data(value):
+    """Pack a boolean value into 1 byte"""
+    return struct.pack('B', 1 if value else 0)
 
 def acceleration_callback(sender, data):
     """Callback for acceleration data notifications"""
@@ -118,6 +130,16 @@ async def connect_and_read_data(device_address):
                 print("Missing required characteristics!")
                 return
             
+            # Activate fight mode before streaming data
+            print("Activating fight mode for data streaming...")
+            try:
+                fight_mode_data = pack_bool_data(True)
+                await client.write_gatt_char(SW_FIGHT_MODE_CHAR_UUID, fight_mode_data)
+                print("Fight mode activated - IMU should turn on")
+                await asyncio.sleep(1)  # Give device time to turn on IMU
+            except Exception as e:
+                print(f"Warning: Could not activate fight mode: {e}")
+            
             # Subscribe to notifications
             print("Subscribing to IMU data notifications...")
             await client.start_notify(accel_char, acceleration_callback)
@@ -137,6 +159,15 @@ async def connect_and_read_data(device_address):
             await client.stop_notify(accel_char)
             await client.stop_notify(gyro_char)
             
+            # Deactivate fight mode to save power
+            print("Deactivating fight mode to save power...")
+            try:
+                fight_mode_data = pack_bool_data(False)
+                await client.write_gatt_char(SW_FIGHT_MODE_CHAR_UUID, fight_mode_data)
+                print("Fight mode deactivated - IMU should turn off")
+            except Exception as e:
+                print(f"Warning: Could not deactivate fight mode: {e}")
+            
     except BleakError as e:
         print(f"BLE error: {e}")
     except Exception as e:
@@ -150,21 +181,40 @@ async def read_single_values(device_address):
         async with BleakClient(device_address) as client:
             print(f"Connected to {device_address}")
             
+            # Activate fight mode to ensure IMU is on
+            print("Activating fight mode to read current IMU values...")
+            try:
+                fight_mode_data = pack_bool_data(True)
+                await client.write_gatt_char(SW_FIGHT_MODE_CHAR_UUID, fight_mode_data)
+                await asyncio.sleep(1)  # Give device time to turn on IMU
+                print("Fight mode activated - reading IMU data")
+            except Exception as e:
+                print(f"Warning: Could not activate fight mode: {e}")
+            
             # Read acceleration data
             try:
                 accel_data = await client.read_gatt_char(SW_ACCEL_CHAR_UUID)
-                x, y, z = unpack_imu_data(accel_data)
-                print(f"Acceleration: X={x:6.2f}, Y={y:6.2f}, Z={z:6.2f} m/s²")
+                accel = unpack_accel_data(accel_data)
+                print(f"Acceleration: {accel:6.2f} m/s²")
             except Exception as e:
                 print(f"Error reading acceleration: {e}")
             
-            # Read gyroscope data
+            # Read gyroscope data (note: this characteristic returns 3 floats, not acceleration format)
             try:
                 gyro_data = await client.read_gatt_char(SW_GYRO_CHAR_UUID)
                 x, y, z = unpack_imu_data(gyro_data)
                 print(f"Gyroscope:    X={x:6.2f}, Y={y:6.2f}, Z={z:6.2f} rad/s")
             except Exception as e:
                 print(f"Error reading gyroscope: {e}")
+            
+            # Deactivate fight mode to save power
+            print("Deactivating fight mode to save power...")
+            try:
+                fight_mode_data = pack_bool_data(False)
+                await client.write_gatt_char(SW_FIGHT_MODE_CHAR_UUID, fight_mode_data)
+                print("Fight mode deactivated")
+            except Exception as e:
+                print(f"Warning: Could not deactivate fight mode: {e}")
                 
     except Exception as e:
         print(f"Error: {e}")
@@ -194,15 +244,24 @@ async def read_and_modify_parameters(device_address):
                 click.echo(f"Error reading threshold: {e}")
                 threshold = None
             
+            try:
+                fight_mode_data = await client.read_gatt_char(SW_FIGHT_MODE_CHAR_UUID)
+                fight_mode = unpack_bool_data(fight_mode_data)
+                click.echo(f"Current Fight Mode: {'ON' if fight_mode else 'OFF'}")
+            except Exception as e:
+                click.echo(f"Error reading fight mode: {e}")
+                fight_mode = None
+            
             # Allow parameter modification
             while True:
                 click.echo("\nParameter modification options:")
                 click.echo("1. Update Alpha (EMA smoothing factor)")
                 click.echo("2. Update Threshold (acceleration threshold)")
-                click.echo("3. Refresh current values")
-                click.echo("4. Back to main menu")
+                click.echo("3. Update Fight Mode (on/off)")
+                click.echo("4. Refresh current values")
+                click.echo("5. Back to main menu")
                 
-                choice = click.prompt("Enter your choice (1-4)", type=str).strip()
+                choice = click.prompt("Enter your choice (1-5)", type=str).strip()
                 
                 if choice == "1" and alpha is not None:
                     try:
@@ -231,17 +290,33 @@ async def read_and_modify_parameters(device_address):
                     except Exception as e:
                         click.echo(f"Error updating threshold: {e}")
                 
-                elif choice == "3":
+                elif choice == "3" and fight_mode is not None:
+                    try:
+                        current_state = "ON" if fight_mode else "OFF"
+                        new_state = click.prompt(f"Enter new fight mode (current: {current_state})", type=click.Choice(['ON', 'OFF'], case_sensitive=False))
+                        new_fight_mode = new_state.upper() == 'ON'
+                        packed_data = pack_bool_data(new_fight_mode)
+                        await client.write_gatt_char(SW_FIGHT_MODE_CHAR_UUID, packed_data)
+                        fight_mode = new_fight_mode
+                        click.echo(f"Fight Mode updated to: {new_state.upper()}")
+                    except click.Abort:
+                        click.echo("Operation cancelled.")
+                    except Exception as e:
+                        click.echo(f"Error updating fight mode: {e}")
+
+                elif choice == "4":
                     try:
                         alpha_data = await client.read_gatt_char(SW_ALPHA_CHAR_UUID)
                         alpha = unpack_float_data(alpha_data)
                         threshold_data = await client.read_gatt_char(SW_THRESHOLD_CHAR_UUID)
                         threshold = unpack_float_data(threshold_data)
-                        click.echo(f"Alpha: {alpha:.3f}, Threshold: {threshold:.2f}")
+                        fight_mode_data = await client.read_gatt_char(SW_FIGHT_MODE_CHAR_UUID)
+                        fight_mode = unpack_bool_data(fight_mode_data)
+                        click.echo(f"Alpha: {alpha:.3f}, Threshold: {threshold:.2f}, Fight Mode: {'ON' if fight_mode else 'OFF'}")
                     except Exception as e:
                         click.echo(f"Error refreshing values: {e}")
                 
-                elif choice == "4":
+                elif choice == "5":
                     break
                 else:
                     click.echo("Invalid choice or parameter unavailable.")
@@ -317,16 +392,17 @@ def read(address):
 @click.option('--address', '-a', help='Device BLE address (will scan if not provided)')
 @click.option('--alpha', type=float, help='Set alpha value (0.0-1.0)')
 @click.option('--threshold', type=float, help='Set threshold value')
+@click.option('--fight-mode', type=bool, help='Set fight mode (true/false)')
 @click.option('--interactive', '-i', is_flag=True, help='Interactive parameter modification')
-def params(address, alpha, threshold, interactive):
-    """Read/modify parameters (Alpha, Threshold)"""
+def params(address, alpha, threshold, fight_mode, interactive):
+    """Read/modify parameters (Alpha, Threshold, Fight Mode)"""
     async def _params():
         device_address = address or await find_device()
         
         if interactive:
             await read_and_modify_parameters(device_address)
         else:
-            await set_parameters_direct(device_address, alpha, threshold)
+            await set_parameters_direct(device_address, alpha, threshold, fight_mode)
     
     asyncio.run(_params())
 
@@ -349,7 +425,8 @@ async def list_device_attributes(device_address):
         SW_ACCEL_CHAR_UUID.lower(): "Acceleration data",
         SW_GYRO_CHAR_UUID.lower(): "Gyroscope data", 
         SW_ALPHA_CHAR_UUID.lower(): "Acceleration EWMA Alpha parameter",
-        SW_THRESHOLD_CHAR_UUID.lower(): "Acceleration threshold parameter"
+        SW_THRESHOLD_CHAR_UUID.lower(): "Acceleration threshold parameter",
+        SW_FIGHT_MODE_CHAR_UUID.lower(): "Fight mode (boolean)"
     }
     
     try:
@@ -398,6 +475,10 @@ async def list_device_attributes(device_address):
                                 data = await client.read_gatt_char(char.uuid)
                                 value = unpack_accel_data(data)
                                 click.echo(f"      Current Value: {value:.2f} m/s²")
+                            elif char.uuid.lower() == SW_FIGHT_MODE_CHAR_UUID.lower():
+                                data = await client.read_gatt_char(char.uuid)
+                                value = unpack_bool_data(data)
+                                click.echo(f"      Current Value: {'ON' if value else 'OFF'}")
                         except Exception:
                             click.echo(f"      Current Value: Unable to read")
                     
@@ -410,7 +491,7 @@ async def list_device_attributes(device_address):
     except Exception as e:
         click.echo(f"Error: {e}")
 
-async def set_parameters_direct(device_address, alpha, threshold):
+async def set_parameters_direct(device_address, alpha, threshold, fight_mode):
     """Set parameters directly without interactive menu"""
     click.echo(f"Connecting to {device_address}...")
     
@@ -435,6 +516,14 @@ async def set_parameters_direct(device_address, alpha, threshold):
                 click.echo(f"Error reading threshold: {e}")
                 current_threshold = None
             
+            try:
+                fight_mode_data = await client.read_gatt_char(SW_FIGHT_MODE_CHAR_UUID)
+                current_fight_mode = unpack_bool_data(fight_mode_data)
+                click.echo(f"Current Fight Mode: {'ON' if current_fight_mode else 'OFF'}")
+            except Exception as e:
+                click.echo(f"Error reading fight mode: {e}")
+                current_fight_mode = None
+            
             # Update alpha if provided
             if alpha is not None:
                 if 0.0 <= alpha <= 1.0:
@@ -455,6 +544,17 @@ async def set_parameters_direct(device_address, alpha, threshold):
                     click.echo(f"Threshold updated: {current_threshold:.2f} → {threshold:.2f}")
                 except Exception as e:
                     click.echo(f"Error updating threshold: {e}")
+            
+            # Update fight mode if provided
+            if fight_mode is not None:
+                try:
+                    packed_data = pack_bool_data(fight_mode)
+                    await client.write_gatt_char(SW_FIGHT_MODE_CHAR_UUID, packed_data)
+                    current_str = 'ON' if current_fight_mode else 'OFF'
+                    new_str = 'ON' if fight_mode else 'OFF'
+                    click.echo(f"Fight Mode updated: {current_str} → {new_str}")
+                except Exception as e:
+                    click.echo(f"Error updating fight mode: {e}")
                     
     except Exception as e:
         click.echo(f"Error: {e}")
