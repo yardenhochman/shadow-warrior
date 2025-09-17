@@ -1,0 +1,4 @@
+2025-09-17 16:15:56 [DEBUG] shadow_warrior_brain.test:5: Debug message
+2025-09-17 16:15:56 [INFO] shadow_warrior_brain.test:6: Info message
+2025-09-17 16:15:56 [WARNING] shadow_warrior_brain.test:7: Warning message
+2025-09-17 16:15:56 [ERROR] shadow_warrior_brain.test:8: Error message

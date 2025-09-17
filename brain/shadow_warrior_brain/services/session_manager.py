@@ -9,6 +9,9 @@ from datetime import datetime
 from typing import Optional, Dict, Any
 
 from shadow_warrior_brain.core.state_machine import StateMachine, SessionState, StateTransition
+from shadow_warrior_brain.core.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class SessionManager:
@@ -31,7 +34,7 @@ class SessionManager:
         # Register state machine hooks
         self._register_hooks()
         
-        print("Session Manager initialized")
+        logger.info("Session Manager initialized")
     
     def _register_hooks(self):
         """Register state transition hooks"""
@@ -54,7 +57,7 @@ class SessionManager:
     # State enter hooks
     async def _on_enter_idle(self, state: SessionState, from_state: SessionState):
         """Called when entering IDLE state"""
-        print(f"🏠 Entering IDLE state from {from_state.value}")
+        logger.info(f"🏠 Entering IDLE state from {from_state.value}")
         
         # Turn off fight mode on punching bag
         if self.ble_manager:
@@ -72,12 +75,12 @@ class SessionManager:
     
     async def _on_enter_warming_up(self, state: SessionState, from_state: SessionState):
         """Called when entering WARMING_UP state"""
-        print(f"🔥 Entering WARMING_UP state from {from_state.value}")
+        logger.info(f"🔥 Entering WARMING_UP state from {from_state.value}")
         
         # Start session if from IDLE
         if from_state == SessionState.IDLE:
             self.session_start_time = datetime.now()
-            print("🎯 New training session started")
+            logger.info("🎯 New training session started")
         
         # Enable fight mode but with lower sensitivity
         if self.ble_manager:
@@ -95,7 +98,7 @@ class SessionManager:
     
     async def _on_enter_fight(self, state: SessionState, from_state: SessionState):
         """Called when entering FIGHT state"""
-        print(f"⚡ Entering FIGHT state from {from_state.value}")
+        logger.info(f"⚡ Entering FIGHT state from {from_state.value}")
         
         # Set high-sensitivity parameters for fight
         if self.ble_manager:
@@ -112,7 +115,7 @@ class SessionManager:
     
     async def _on_enter_victory(self, state: SessionState, from_state: SessionState):
         """Called when entering VICTORY state"""
-        print(f"🏆 Entering VICTORY state from {from_state.value}")
+        logger.info(f"🏆 Entering VICTORY state from {from_state.value}")
         
         # Turn off fight mode
         if self.ble_manager:
@@ -126,20 +129,20 @@ class SessionManager:
             session_duration = (victory_time - self.session_start_time).total_seconds()
             self.session_data['victory_time'] = victory_time
             self.session_data['session_duration'] = session_duration
-            print(f"🎉 Victory achieved! Session duration: {session_duration:.1f}s")
+            logger.info(f"🎉 Victory achieved! Session duration: {session_duration:.1f}s")
     
     # State exit hooks
     async def _on_exit_idle(self, state: SessionState):
         """Called when exiting IDLE state"""
-        print("⬅️ Exiting IDLE state")
+        logger.debug("⬅️ Exiting IDLE state")
     
     async def _on_exit_warming_up(self, state: SessionState):
         """Called when exiting WARMING_UP state"""
-        print("⬅️ Exiting WARMING_UP state")
+        logger.debug("⬅️ Exiting WARMING_UP state")
     
     async def _on_exit_fight(self, state: SessionState):
         """Called when exiting FIGHT state"""
-        print("⬅️ Exiting FIGHT state")
+        logger.debug("⬅️ Exiting FIGHT state")
         
         # Record fight statistics
         fight_duration = self.state_machine.get_state_duration()
@@ -151,12 +154,12 @@ class SessionManager:
     
     async def _on_exit_victory(self, state: SessionState):
         """Called when exiting VICTORY state"""
-        print("⬅️ Exiting VICTORY state")
+        logger.debug("⬅️ Exiting VICTORY state")
     
     # General transition hook
     async def _on_any_transition(self, transition: StateTransition):
         """Called on any state transition"""
-        print(f"🔄 Transition: {transition.from_state.value} → {transition.to_state.value}")
+        logger.info(f"🔄 Transition: {transition.from_state.value} → {transition.to_state.value}")
 
         # Update last transition timestamp
         self.last_state_transition_time = transition.timestamp
@@ -203,14 +206,14 @@ class SessionManager:
         """Register a punch during fight state"""
         if self.state_machine.current_state == SessionState.FIGHT:
             self.punch_count += 1
-            print(f"👊 Punch #{self.punch_count} detected! (acceleration: {acceleration:.2f})")
+            logger.info(f"👊 Punch #{self.punch_count} detected! (acceleration: {acceleration:.2f})")
     
     def _reset_session(self):
         """Reset session data for new session"""
         self.session_start_time = None
         self.punch_count = 0
         self.session_data = {}
-        print("🔄 Session data reset")
+        logger.debug("🔄 Session data reset")
     
     # Status and query methods
     def get_current_state(self) -> SessionState:
@@ -244,4 +247,4 @@ class SessionManager:
     async def cleanup(self):
         """Cleanup session manager"""
         await self.emergency_stop()
-        print("Session Manager cleanup complete")
+        logger.info("Session Manager cleanup complete")
