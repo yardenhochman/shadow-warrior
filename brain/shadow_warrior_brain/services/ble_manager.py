@@ -94,31 +94,68 @@ class BLEManager:
 
         try:
             print(f"BLE Manager: Scanning for devices (timeout: {settings.ble_scan_timeout}s)...")
-            discovered_devices = await BleakScanner.discover(timeout=settings.ble_scan_timeout)
 
-            print(f"BLE Manager: Found {len(discovered_devices)} total devices")
+            # Try to get RSSI data - method varies by platform
+            try:
+                # Method 1: Use return_adv=True (works on macOS/CoreBluetooth)
+                discovered_data = await BleakScanner.discover(
+                    timeout=settings.ble_scan_timeout,
+                    return_adv=True
+                )
+                print(f"BLE Manager: Found {len(discovered_data)} total devices (with advertisement data)")
 
-            # Log all discovered devices for debugging
-            for device in discovered_devices:
-                device_name = device.name or "Unknown"
-                rssi = getattr(device, 'rssi', None)
-                print(f"  - {device_name} ({device.address}) RSSI: {rssi}")
+                # Log all discovered devices for debugging
+                for device_address, (device, adv_data) in discovered_data.items():
+                    device_name = device.name or "Unknown"
+                    rssi = adv_data.rssi if adv_data else None
+                    print(f"  - {device_name} ({device_address}) RSSI: {rssi}")
 
-            # Look for Shadow Warrior devices (flexible matching)
-            for device in discovered_devices:
-                if device.name:
-                    # Check for various possible device names
-                    name_lower = device.name.lower()
-                    if any(keyword in name_lower for keyword in ["shadow", "warrior", "punch", "bag", "sw"]):
-                        status = PunchingBagStatus.CONNECTED if (self.connected_device and
-                                                                    self.connected_device.address == device.address) else PunchingBagStatus.DISCONNECTED
-                        devices.append(PunchingBagDevice(
-                            address=device.address,
-                            name=device.name,
-                            rssi=getattr(device, 'rssi', None),
-                            status=status
-                        ))
-                        print(f"BLE Manager: Found matching device: {device.name} ({device.address})")
+                # Look for Shadow Warrior devices (flexible matching)
+                for device_address, (device, adv_data) in discovered_data.items():
+                    if device.name:
+                        # Check for various possible device names
+                        name_lower = device.name.lower()
+                        if any(keyword in name_lower for keyword in ["shadow", "warrior", "punch", "bag", "sw"]):
+                            status = PunchingBagStatus.CONNECTED if (self.connected_device and
+                                                                        self.connected_device.address == device_address) else PunchingBagStatus.DISCONNECTED
+                            rssi = adv_data.rssi if adv_data else None
+                            devices.append(PunchingBagDevice(
+                                address=device_address,
+                                name=device.name,
+                                rssi=rssi,
+                                status=status
+                            ))
+                            print(f"BLE Manager: Found matching device: {device.name} ({device_address}) RSSI: {rssi}")
+
+            except Exception as adv_error:
+                print(f"BLE Manager: Advertisement data method failed: {adv_error}")
+
+                # Method 2: Fallback to simple discover (works on Linux/BlueZ)
+                discovered_devices = await BleakScanner.discover(timeout=settings.ble_scan_timeout)
+                print(f"BLE Manager: Found {len(discovered_devices)} total devices (fallback method)")
+
+                # Log all discovered devices for debugging
+                for device in discovered_devices:
+                    device_name = device.name or "Unknown"
+                    rssi = getattr(device, 'rssi', None)
+                    print(f"  - {device_name} ({device.address}) RSSI: {rssi}")
+
+                # Look for Shadow Warrior devices (flexible matching)
+                for device in discovered_devices:
+                    if device.name:
+                        # Check for various possible device names
+                        name_lower = device.name.lower()
+                        if any(keyword in name_lower for keyword in ["shadow", "warrior", "punch", "bag", "sw"]):
+                            status = PunchingBagStatus.CONNECTED if (self.connected_device and
+                                                                        self.connected_device.address == device.address) else PunchingBagStatus.DISCONNECTED
+                            rssi = getattr(device, 'rssi', None)
+                            devices.append(PunchingBagDevice(
+                                address=device.address,
+                                name=device.name,
+                                rssi=rssi,
+                                status=status
+                            ))
+                            print(f"BLE Manager: Found matching device: {device.name} ({device.address}) RSSI: {rssi}")
 
             if not devices:
                 print("BLE Manager: No Shadow Warrior devices found")
@@ -136,7 +173,10 @@ class BLEManager:
                 await self.client.disconnect()
                 await asyncio.sleep(0.5)  # Brief pause after disconnect
 
-            self.client = BleakClient(device_address)
+            self.client = BleakClient(
+                device_address,
+                disconnected_callback=self._disconnected_callback
+            )
 
             # Connect with timeout
             await asyncio.wait_for(
@@ -159,11 +199,10 @@ class BLEManager:
                     self.connected_device.status = PunchingBagStatus.CONNECTED
                     self.connection_time = datetime.now()
 
+                    print(f"BLE Manager: Connected device info - Name: {device_info.name}, RSSI: {device_info.rssi}")
+
                     # Subscribe to notifications
                     await self._subscribe_to_notifications()
-
-                    # Set up disconnection callback
-                    self.client.set_disconnected_callback(self._disconnected_callback)
 
                     print(f"Connected to punching bag: {device_address}")
                     return True
@@ -209,36 +248,81 @@ class BLEManager:
     def _acceleration_callback(self, sender, data: bytearray):
         """Handle incoming acceleration data"""
         try:
-            # Unpack acceleration data (4 bytes float)
-            acceleration = struct.unpack('<f', data)[0]
-            
-            acceleration_data = AccelerationData(
-                timestamp=datetime.now(),
-                acceleration=acceleration
-            )
-            
+            # Unpack acceleration data according to BLE protocol:
+            # 12 bytes (3 x 32-bit floats, little-endian) for [X, Y, Z] acceleration in m/s²
+            if len(data) == 12:
+                x, y, z = struct.unpack('<fff', data)
+                # Calculate magnitude
+                acceleration = (x**2 + y**2 + z**2) ** 0.5
+
+                acceleration_data = AccelerationData(
+                    timestamp=datetime.now(),
+                    acceleration=acceleration,
+                    x=x,
+                    y=y,
+                    z=z
+                )
+            elif len(data) == 4:
+                # Fallback for single float format (legacy support)
+                acceleration = struct.unpack('<f', data)[0]
+
+                acceleration_data = AccelerationData(
+                    timestamp=datetime.now(),
+                    acceleration=acceleration
+                )
+            else:
+                print(f"Unexpected acceleration data length: {len(data)} bytes")
+                return
+
             self.acceleration_data.append(acceleration_data)
-            
+
         except Exception as e:
             print(f"Error processing acceleration data: {e}")
             
     async def get_punching_bag_status(self) -> Dict[str, Any]:
         """Get current punching bag status"""
         if not self.connected_device:
-            return {
-                "connected": False,
-                "device_address": None,
-                "device_name": None,
-                "fight_mode": False,
-                "connection_time": None
+            # Check if we have any last seen devices to show info about
+            if self._last_seen_devices:
+                last_device = self._last_seen_devices[0]  # Most recent scan result
+                return {
+                    "connected": False,
+                    "device_address": last_device.address,
+                    "device_name": last_device.name,
+                    "rssi": last_device.rssi,
+                    "fight_mode": False,
+                    "connection_time": None
+                }
+            else:
+                return {
+                    "connected": False,
+                    "device_address": None,
+                    "device_name": None,
+                    "rssi": None,
+                    "fight_mode": False,
+                    "connection_time": None
+                }
+
+        # Get latest acceleration data if available
+        latest_acceleration = None
+        if self.acceleration_data:
+            latest = self.acceleration_data[-1]
+            latest_acceleration = {
+                "x": getattr(latest, 'x', None),
+                "y": getattr(latest, 'y', None),
+                "z": getattr(latest, 'z', None),
+                "acceleration": latest.acceleration,
+                "timestamp": latest.timestamp.isoformat()
             }
-            
+
         return {
             "connected": True,
             "device_address": self.connected_device.address,
             "device_name": self.connected_device.name,
+            "rssi": self.connected_device.rssi,
             "fight_mode": self.fight_mode,
             "connection_time": self.connection_time,
+            "latest_acceleration": latest_acceleration,
             "parameters": {
                 "alpha": self.current_params.alpha,
                 "threshold": self.current_params.threshold,

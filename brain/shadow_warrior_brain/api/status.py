@@ -11,7 +11,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
 from shadow_warrior_brain.models.api_responses import (
-    BrainState, Statistics, ErrorResponse
+    BrainState, Statistics
 )
 
 router = APIRouter()
@@ -37,7 +37,7 @@ async def get_brain_state(request: Request) -> BrainState:
     audio_manager = getattr(request.app.state, 'audio_manager', None)
     session_manager = getattr(request.app.state, 'session_manager', None)
 
-    # Build comprehensive state response
+    # Build comprehensive state response (consistent with SSE format)
     brain_state = {
         "timestamp": datetime.now(),
         "startup_timestamp": _startup_timestamp.isoformat(),
@@ -46,25 +46,25 @@ async def get_brain_state(request: Request) -> BrainState:
             "version": "0.1.0"
         }
     }
-    
+
     # Get punching bag status
     if ble_manager:
         brain_state["punching_bag"] = await ble_manager.get_punching_bag_status()
     else:
         brain_state["punching_bag"] = {"connected": False, "status": "manager_unavailable"}
-    
-    # Get audio status  
+
+    # Get audio status
     if audio_manager:
         brain_state["audio"] = await audio_manager.get_status()
     else:
         brain_state["audio"] = {"connected": False, "status": "manager_unavailable"}
-    
+
     # Get session status
     if session_manager:
         brain_state["session"] = session_manager.get_session_status()
     else:
         brain_state["session"] = {"current_state": "unknown", "status": "manager_unavailable"}
-    
+
     # LED status (placeholder - not implemented)
     brain_state["leds"] = {
         "connected_controllers": 0,
