@@ -20,8 +20,10 @@ class PunchingBagStatus(BaseModel):
     connected: bool = Field(description="Whether punching bag is connected")
     device_address: Optional[str] = Field(None, description="BLE device address")
     device_name: Optional[str] = Field(None, description="Device name")
+    rssi: Optional[int] = Field(None, description="Signal strength (RSSI)")
     fight_mode: bool = Field(default=False, description="Whether fight mode is enabled")
     connection_time: Optional[datetime] = Field(None, description="Connection timestamp")
+    latest_acceleration: Optional[Dict[str, Any]] = Field(None, description="Latest acceleration reading")
     parameters: Optional[Dict[str, Any]] = Field(None, description="Device parameters")
     status: Optional[str] = Field(None, description="Status message when unavailable")
 
