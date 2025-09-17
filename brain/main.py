@@ -5,11 +5,15 @@ Run the FastAPI application using uvicorn
 """
 
 import uvicorn
+from shadow_warrior_brain.core.logging_config import setup_logging, get_logger
+
+logger = get_logger(__name__)
 
 
 def main():
     """Run the Brain Controller application"""
-    print("Starting Shadow Warrior Brain Controller...")
+    setup_logging(debug=True)
+    logger.info("Starting Shadow Warrior Brain Controller...")
     uvicorn.run(
         "shadow_warrior_brain.main:app",
         host="0.0.0.0",

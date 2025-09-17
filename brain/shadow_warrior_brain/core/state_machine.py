@@ -10,6 +10,10 @@ from enum import Enum
 from typing import Dict, List, Callable, Optional, Any
 from dataclasses import dataclass
 
+from shadow_warrior_brain.core.logging_config import get_logger
+
+logger = get_logger(__name__)
+
 
 class SessionState(Enum):
     """Training session states"""
@@ -64,7 +68,7 @@ class StateMachine:
         # State duration tracking
         self._state_durations: Dict[SessionState, float] = {}
         
-        print(f"State machine initialized in {self.current_state.value} state")
+        logger.info(f"State machine initialized in {self.current_state.value} state")
     
     def can_transition_to(self, target_state: SessionState) -> bool:
         """Check if transition to target state is valid"""
@@ -82,7 +86,7 @@ class StateMachine:
             True if transition was successful, False otherwise
         """
         if not self.can_transition_to(target_state):
-            print(f"Invalid transition: {self.current_state.value} -> {target_state.value}")
+            logger.warning(f"Invalid transition: {self.current_state.value} -> {target_state.value}")
             return False
         
         # Calculate duration in current state
@@ -98,7 +102,7 @@ class StateMachine:
             metadata=metadata
         )
         
-        print(f"State transition: {self.current_state.value} -> {target_state.value} "
+        logger.info(f"State transition: {self.current_state.value} -> {target_state.value} "
               f"(duration: {duration:.1f}s)")
         
         # Call exit hooks for current state
@@ -123,7 +127,7 @@ class StateMachine:
         Force transition to any state (bypasses validation)
         Use with caution - mainly for emergency stops or admin overrides
         """
-        print(f"FORCED transition: {self.current_state.value} -> {target_state.value}")
+        logger.warning(f"FORCED transition: {self.current_state.value} -> {target_state.value}")
         
         # Calculate duration in current state
         now = datetime.now()
@@ -163,17 +167,17 @@ class StateMachine:
     def on_enter(self, state: SessionState, hook: Callable):
         """Register a hook to be called when entering a specific state"""
         self._on_enter_hooks[state].append(hook)
-        print(f"Registered enter hook for {state.value} state")
+        logger.debug(f"Registered enter hook for {state.value} state")
     
     def on_exit(self, state: SessionState, hook: Callable):
         """Register a hook to be called when exiting a specific state"""
         self._on_exit_hooks[state].append(hook)
-        print(f"Registered exit hook for {state.value} state")
+        logger.debug(f"Registered exit hook for {state.value} state")
     
     def on_transition(self, hook: Callable):
         """Register a hook to be called on any state transition"""
         self._on_transition_hooks.append(hook)
-        print("Registered transition hook")
+        logger.debug("Registered transition hook")
     
     # Hook execution methods
     async def _call_enter_hooks(self, state: SessionState, from_state: SessionState):
@@ -185,7 +189,7 @@ class StateMachine:
                 else:
                     hook(state, from_state)
             except Exception as e:
-                print(f"Error in enter hook for {state.value}: {e}")
+                logger.error(f"Error in enter hook for {state.value}: {e}")
     
     async def _call_exit_hooks(self, state: SessionState):
         """Call all exit hooks for a state"""
@@ -196,7 +200,7 @@ class StateMachine:
                 else:
                     hook(state)
             except Exception as e:
-                print(f"Error in exit hook for {state.value}: {e}")
+                logger.error(f"Error in exit hook for {state.value}: {e}")
     
     async def _call_transition_hooks(self, transition: StateTransition):
         """Call all transition hooks"""
@@ -207,7 +211,7 @@ class StateMachine:
                 else:
                     hook(transition)
             except Exception as e:
-                print(f"Error in transition hook: {e}")
+                logger.error(f"Error in transition hook: {e}")
     
     # Status and query methods
     def get_current_state(self) -> SessionState:

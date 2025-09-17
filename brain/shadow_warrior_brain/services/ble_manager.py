@@ -15,6 +15,9 @@ from shadow_warrior_brain.models.punching_bag import (
     PunchingBagDevice, PunchingBagStatus, PunchingBagParams, AccelerationData
 )
 from shadow_warrior_brain.core.config import settings
+from shadow_warrior_brain.core.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class BLEManager:
@@ -50,7 +53,7 @@ class BLEManager:
         """Start background scanning for devices and auto-connection"""
         self._scanning = True
         self._shutting_down = False
-        print("BLE Manager: Started background scanning")
+        logger.info("BLE Manager: Started background scanning")
 
         if settings.ble_auto_connect:
             self._auto_connect_task = asyncio.create_task(self._auto_connect_loop())
@@ -80,20 +83,20 @@ class BLEManager:
         if self.client and self.client.is_connected:
             try:
                 await self.client.disconnect()
-                print("BLE Manager: Disconnected from device")
+                logger.info("BLE Manager: Disconnected from device")
             except Exception as e:
-                print(f"BLE Manager: Error during disconnect: {e}")
+                logger.error(f"BLE Manager: Error during disconnect: {e}")
 
         self.connected_device = None
         self.connection_time = None
-        print("BLE Manager: Cleanup complete")
+        logger.info("BLE Manager: Cleanup complete")
         
     async def scan_for_punching_bags(self) -> List[PunchingBagDevice]:
         """Scan for available punching bag devices"""
         devices = []
 
         try:
-            print(f"BLE Manager: Scanning for devices (timeout: {settings.ble_scan_timeout}s)...")
+            logger.info(f"BLE Manager: Scanning for devices (timeout: {settings.ble_scan_timeout}s)...")
 
             # Try to get RSSI data - method varies by platform
             try:
@@ -102,13 +105,13 @@ class BLEManager:
                     timeout=settings.ble_scan_timeout,
                     return_adv=True
                 )
-                print(f"BLE Manager: Found {len(discovered_data)} total devices (with advertisement data)")
+                logger.debug(f"BLE Manager: Found {len(discovered_data)} total devices (with advertisement data)")
 
                 # Log all discovered devices for debugging
                 for device_address, (device, adv_data) in discovered_data.items():
                     device_name = device.name or "Unknown"
                     rssi = adv_data.rssi if adv_data else None
-                    print(f"  - {device_name} ({device_address}) RSSI: {rssi}")
+                    logger.debug(f"  - {device_name} ({device_address}) RSSI: {rssi}")
 
                 # Look for Shadow Warrior devices (flexible matching)
                 for device_address, (device, adv_data) in discovered_data.items():
@@ -125,20 +128,20 @@ class BLEManager:
                                 rssi=rssi,
                                 status=status
                             ))
-                            print(f"BLE Manager: Found matching device: {device.name} ({device_address}) RSSI: {rssi}")
+                            logger.info(f"BLE Manager: Found matching device: {device.name} ({device_address}) RSSI: {rssi}")
 
             except Exception as adv_error:
-                print(f"BLE Manager: Advertisement data method failed: {adv_error}")
+                logger.warning(f"BLE Manager: Advertisement data method failed: {adv_error}")
 
                 # Method 2: Fallback to simple discover (works on Linux/BlueZ)
                 discovered_devices = await BleakScanner.discover(timeout=settings.ble_scan_timeout)
-                print(f"BLE Manager: Found {len(discovered_devices)} total devices (fallback method)")
+                logger.debug(f"BLE Manager: Found {len(discovered_devices)} total devices (fallback method)")
 
                 # Log all discovered devices for debugging
                 for device in discovered_devices:
                     device_name = device.name or "Unknown"
                     rssi = getattr(device, 'rssi', None)
-                    print(f"  - {device_name} ({device.address}) RSSI: {rssi}")
+                    logger.debug(f"  - {device_name} ({device.address}) RSSI: {rssi}")
 
                 # Look for Shadow Warrior devices (flexible matching)
                 for device in discovered_devices:
@@ -155,13 +158,13 @@ class BLEManager:
                                 rssi=rssi,
                                 status=status
                             ))
-                            print(f"BLE Manager: Found matching device: {device.name} ({device.address}) RSSI: {rssi}")
+                            logger.info(f"BLE Manager: Found matching device: {device.name} ({device.address}) RSSI: {rssi}")
 
             if not devices:
-                print("BLE Manager: No Shadow Warrior devices found")
+                logger.warning("BLE Manager: No Shadow Warrior devices found")
 
         except Exception as e:
-            print(f"BLE Manager: Scan error - {e}")
+            logger.error(f"BLE Manager: Scan error - {e}")
 
         return devices
         
@@ -199,20 +202,20 @@ class BLEManager:
                     self.connected_device.status = PunchingBagStatus.CONNECTED
                     self.connection_time = datetime.now()
 
-                    print(f"BLE Manager: Connected device info - Name: {device_info.name}, RSSI: {device_info.rssi}")
+                    logger.debug(f"BLE Manager: Connected device info - Name: {device_info.name}, RSSI: {device_info.rssi}")
 
                     # Subscribe to notifications
                     await self._subscribe_to_notifications()
 
-                    print(f"Connected to punching bag: {device_address}")
+                    logger.info(f"Connected to punching bag: {device_address}")
                     return True
 
         except asyncio.TimeoutError:
-            print(f"BLE connection timeout for device: {device_address}")
+            logger.warning(f"BLE connection timeout for device: {device_address}")
         except BleakError as e:
-            print(f"BLE connection error: {e}")
+            logger.error(f"BLE connection error: {e}")
         except Exception as e:
-            print(f"Unexpected error during connection: {e}")
+            logger.error(f"Unexpected error during connection: {e}")
 
         # Clean up on failure
         if self.client:
@@ -232,7 +235,7 @@ class BLEManager:
             
         self.connected_device = None
         self.connection_time = None
-        print("Disconnected from punching bag")
+        logger.info("Disconnected from punching bag")
         
     async def _subscribe_to_notifications(self):
         """Subscribe to acceleration data notifications"""
@@ -241,9 +244,9 @@ class BLEManager:
             
         try:
             await self.client.start_notify(self.ACCEL_CHAR_UUID, self._acceleration_callback)
-            print("Subscribed to acceleration notifications")
+            logger.info("Subscribed to acceleration notifications")
         except Exception as e:
-            print(f"Failed to subscribe to notifications: {e}")
+            logger.error(f"Failed to subscribe to notifications: {e}")
             
     def _acceleration_callback(self, sender, data: bytearray):
         """Handle incoming acceleration data"""
@@ -271,13 +274,13 @@ class BLEManager:
                     acceleration=acceleration
                 )
             else:
-                print(f"Unexpected acceleration data length: {len(data)} bytes")
+                logger.warning(f"Unexpected acceleration data length: {len(data)} bytes")
                 return
 
             self.acceleration_data.append(acceleration_data)
 
         except Exception as e:
-            print(f"Error processing acceleration data: {e}")
+            logger.error(f"Error processing acceleration data: {e}")
             
     async def get_punching_bag_status(self) -> Dict[str, Any]:
         """Get current punching bag status"""
@@ -355,7 +358,7 @@ class BLEManager:
             return True
             
         except Exception as e:
-            print(f"Error setting parameters: {e}")
+            logger.error(f"Error setting parameters: {e}")
             return False
             
     async def get_parameters(self) -> PunchingBagParams:
@@ -379,7 +382,7 @@ class BLEManager:
                 self.fight_mode = self.current_params.fight_mode
                 
         except Exception as e:
-            print(f"Error reading parameters: {e}")
+            logger.error(f"Error reading parameters: {e}")
             
         return self.current_params
         
@@ -401,39 +404,39 @@ class BLEManager:
                     await asyncio.sleep(settings.ble_retry_interval)
                     continue
 
-                print(f"BLE Manager: Auto-connect cycle {self._retry_attempts + 1}")
+                logger.info(f"BLE Manager: Auto-connect cycle {self._retry_attempts + 1}")
                 devices = await self.scan_for_punching_bags()
                 self._last_seen_devices = devices
 
                 if devices:
                     # Try to connect to the first available device
                     device = devices[0]
-                    print(f"BLE Manager: Attempting to connect to {device.name} ({device.address})")
+                    logger.info(f"BLE Manager: Attempting to connect to {device.name} ({device.address})")
 
                     success = await self.connect_to_punching_bag(device.address)
                     if success:
-                        print(f"BLE Manager: Successfully connected to {device.name}")
+                        logger.info(f"BLE Manager: Successfully connected to {device.name}")
                         self._retry_attempts = 0
                     else:
                         self._retry_attempts += 1
-                        print(f"BLE Manager: Connection failed (attempt {self._retry_attempts})")
+                        logger.warning(f"BLE Manager: Connection failed (attempt {self._retry_attempts})")
 
                         # Check max retry attempts
                         if (settings.ble_max_retry_attempts > 0 and
                             self._retry_attempts >= settings.ble_max_retry_attempts):
-                            print("BLE Manager: Max retry attempts reached, stopping auto-connect")
+                            logger.warning("BLE Manager: Max retry attempts reached, stopping auto-connect")
                             break
                 else:
-                    print("BLE Manager: No punching bag devices found in scan")
+                    logger.warning("BLE Manager: No punching bag devices found in scan")
 
                 # Wait before next attempt
                 await asyncio.sleep(settings.ble_retry_interval)
 
             except asyncio.CancelledError:
-                print("BLE Manager: Auto-connect loop cancelled")
+                logger.info("BLE Manager: Auto-connect loop cancelled")
                 break
             except Exception as e:
-                print(f"BLE Manager: Error in auto-connect loop: {e}")
+                logger.error(f"BLE Manager: Error in auto-connect loop: {e}")
                 await asyncio.sleep(settings.ble_retry_interval)
 
     async def _monitor_connection(self):
@@ -445,18 +448,18 @@ class BLEManager:
                 if self.connected_device and self.client:
                     # Check if connection is still alive
                     if not self.client.is_connected:
-                        print("BLE Manager: Connection lost, will attempt to reconnect")
+                        logger.warning("BLE Manager: Connection lost, will attempt to reconnect")
                         await self._handle_disconnection()
 
             except asyncio.CancelledError:
-                print("BLE Manager: Connection monitor cancelled")
+                logger.info("BLE Manager: Connection monitor cancelled")
                 break
             except Exception as e:
-                print(f"BLE Manager: Error in connection monitor: {e}")
+                logger.error(f"BLE Manager: Error in connection monitor: {e}")
 
     async def _handle_disconnection(self):
         """Handle unexpected disconnection gracefully"""
-        print("BLE Manager: Handling disconnection...")
+        logger.info("BLE Manager: Handling disconnection...")
 
         # Clean up current connection state
         if self.client:
@@ -464,18 +467,18 @@ class BLEManager:
                 if self.client.is_connected:
                     await self.client.disconnect()
             except Exception as e:
-                print(f"BLE Manager: Error during cleanup disconnect: {e}")
+                logger.error(f"BLE Manager: Error during cleanup disconnect: {e}")
 
         # Reset connection state
         self.connected_device = None
         self.connection_time = None
         self.client = None
 
-        print("BLE Manager: Disconnection handled, auto-connect will retry")
+        logger.info("BLE Manager: Disconnection handled, auto-connect will retry")
 
     def _disconnected_callback(self, client):
         """Callback triggered when device disconnects unexpectedly"""
-        print(f"BLE Manager: Device disconnected callback triggered for {client.address}")
+        logger.debug(f"BLE Manager: Device disconnected callback triggered for {client.address}")
         if not self._shutting_down:
             # Schedule disconnection handling in the event loop
             asyncio.create_task(self._handle_disconnection())

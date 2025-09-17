@@ -9,6 +9,9 @@ from collections import deque
 
 from shadow_warrior_brain.models.audio import AudioDevice, AudioStatus, AudioLevel
 from shadow_warrior_brain.core.config import settings
+from shadow_warrior_brain.core.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class AudioManager:
@@ -26,12 +29,12 @@ class AudioManager:
     async def start_monitoring(self):
         """Start background audio monitoring"""
         self.monitoring = True
-        print("Audio Manager: Started monitoring")
+        logger.info("Audio Manager: Started monitoring")
         
     async def cleanup(self):
         """Cleanup audio resources"""
         self.monitoring = False
-        print("Audio Manager: Cleanup complete")
+        logger.info("Audio Manager: Cleanup complete")
         
     async def get_available_devices(self) -> List[AudioDevice]:
         """Get list of available audio input devices"""
@@ -72,7 +75,7 @@ class AudioManager:
                 
             self.selected_device = device
             self.selected_device.is_selected = True
-            print(f"Selected audio device: {device.name}")
+            logger.info(f"Selected audio device: {device.name}")
             return True
             
         return False
@@ -119,12 +122,12 @@ class AudioManager:
             self.monitoring = True
             # Start background task for continuous monitoring
             asyncio.create_task(self._monitor_audio_levels())
-            print("Audio monitoring started")
+            logger.info("Audio monitoring started")
             
     async def stop_monitoring(self):
         """Stop audio level monitoring"""
         self.monitoring = False
-        print("Audio monitoring stopped")
+        logger.info("Audio monitoring stopped")
         
     async def _monitor_audio_levels(self):
         """Background task for continuous audio level monitoring"""
