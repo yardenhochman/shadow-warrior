@@ -1,0 +1,25 @@
+{
+  "name": "Shadow Warrior Brain Controller",
+  "short_name": "SW Brain",
+  "description": "Real-time monitoring dashboard for Shadow Warrior boxing training system",
+  "start_url": "/",
+  "display": "standalone",
+  "theme_color": "#1a1a2e",
+  "background_color": "#16213e",
+  "orientation": "portrait-primary",
+  "categories": ["sports", "fitness", "monitoring"],
+  "icons": [
+    {
+      "src": "/static/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/static/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
