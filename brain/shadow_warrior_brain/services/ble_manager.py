@@ -16,6 +16,7 @@ from shadow_warrior_brain.models.punching_bag import (
 )
 from shadow_warrior_brain.core.config import settings
 from shadow_warrior_brain.core.logging_config import get_logger
+from shadow_warrior_brain.core.events import event_bus, EventType
 
 logger = get_logger(__name__)
 
@@ -48,6 +49,10 @@ class BLEManager:
         self._retry_attempts = 0
         self._last_seen_devices: List[PunchingBagDevice] = []
         self._shutting_down = False
+
+        # State tracking for events
+        self._last_connected_device: Optional[str] = None
+        self._last_connection_state = False
         
     async def start_scanning(self):
         """Start background scanning for devices and auto-connection"""
@@ -208,6 +213,22 @@ class BLEManager:
                     await self._subscribe_to_notifications()
 
                     logger.info(f"Connected to punching bag: {device_address}")
+
+                    # Emit connection event if this is a new connection
+                    if not self._last_connection_state or self._last_connected_device != device_address:
+                        await event_bus.emit_event(
+                            EventType.BLE_DEVICE_CONNECTED,
+                            "ble_manager",
+                            {
+                                "device_address": device_address,
+                                "device_name": device_info.name,
+                                "rssi": device_info.rssi,
+                                "connection_time": self.connection_time.isoformat()
+                            }
+                        )
+                        self._last_connection_state = True
+                        self._last_connected_device = device_address
+
                     return True
 
         except asyncio.TimeoutError:
@@ -230,9 +251,26 @@ class BLEManager:
         
     async def disconnect_punching_bag(self):
         """Disconnect from current punching bag device"""
+        device_address = self.connected_device.address if self.connected_device else "unknown"
+        device_name = self.connected_device.name if self.connected_device else "unknown"
+
         if self.client and self.client.is_connected:
             await self.client.disconnect()
-            
+
+        # Emit disconnection event if we were connected
+        if self._last_connection_state:
+            await event_bus.emit_event(
+                EventType.BLE_DEVICE_DISCONNECTED,
+                "ble_manager",
+                {
+                    "device_address": device_address,
+                    "device_name": device_name,
+                    "disconnect_time": datetime.now().isoformat()
+                }
+            )
+            self._last_connection_state = False
+            self._last_connected_device = None
+
         self.connected_device = None
         self.connection_time = None
         logger.info("Disconnected from punching bag")
@@ -278,6 +316,20 @@ class BLEManager:
                 return
 
             self.acceleration_data.append(acceleration_data)
+
+            # Emit data received event (only for significant acceleration changes to avoid spam)
+            if acceleration_data.acceleration > 1.0:  # Only emit for movements above 1 m/s²
+                asyncio.create_task(event_bus.emit_event(
+                    EventType.BLE_DATA_RECEIVED,
+                    "ble_manager",
+                    {
+                        "acceleration": acceleration_data.acceleration,
+                        "x": acceleration_data.x,
+                        "y": acceleration_data.y,
+                        "z": acceleration_data.z,
+                        "timestamp": acceleration_data.timestamp.isoformat()
+                    }
+                ))
 
         except Exception as e:
             logger.error(f"Error processing acceleration data: {e}")
@@ -461,6 +513,9 @@ class BLEManager:
         """Handle unexpected disconnection gracefully"""
         logger.info("BLE Manager: Handling disconnection...")
 
+        device_address = self.connected_device.address if self.connected_device else "unknown"
+        device_name = self.connected_device.name if self.connected_device else "unknown"
+
         # Clean up current connection state
         if self.client:
             try:
@@ -468,6 +523,21 @@ class BLEManager:
                     await self.client.disconnect()
             except Exception as e:
                 logger.error(f"BLE Manager: Error during cleanup disconnect: {e}")
+
+        # Emit disconnection event if we were connected
+        if self._last_connection_state:
+            await event_bus.emit_event(
+                EventType.BLE_DEVICE_DISCONNECTED,
+                "ble_manager",
+                {
+                    "device_address": device_address,
+                    "device_name": device_name,
+                    "disconnect_time": datetime.now().isoformat(),
+                    "unexpected": True
+                }
+            )
+            self._last_connection_state = False
+            self._last_connected_device = None
 
         # Reset connection state
         self.connected_device = None

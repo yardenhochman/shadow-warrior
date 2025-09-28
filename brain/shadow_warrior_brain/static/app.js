@@ -170,13 +170,29 @@ class BrainController {
         if (data.audio) {
             const audio = data.audio;
             const isConnected = audio.connected || false;
+            const isMonitoring = audio.monitoring || false;
 
-            this.updateElement('audio-status', isConnected ? 'Active' : 'Inactive');
-            this.updateIndicator('audio-indicator', isConnected ? 'connected' : 'disconnected');
+            // Status shows both connection and monitoring state
+            let statusText = 'Inactive';
+            let indicatorStatus = 'disconnected';
+
+            if (isConnected && isMonitoring) {
+                statusText = audio.is_shouting ? 'Shouting!' : 'Monitoring';
+                indicatorStatus = audio.is_shouting ? 'connected' : 'connected';
+            } else if (isConnected) {
+                statusText = 'Connected';
+                indicatorStatus = 'unknown';
+            }
+
+            this.updateElement('audio-status', statusText);
+            this.updateIndicator('audio-indicator', indicatorStatus);
 
             this.updateElement('audio-device', audio.device_name || (isConnected ? 'Unknown Device' : '-'));
 
-            if (audio.current_level && audio.current_level.level_db !== undefined) {
+            // Show current audio level or shout score
+            if (isMonitoring && audio.shout_score !== undefined) {
+                this.updateElement('audio-level', `Score: ${audio.shout_score.toFixed(1)}`);
+            } else if (audio.current_level && audio.current_level.level_db !== undefined) {
                 this.updateElement('audio-level', `${audio.current_level.level_db.toFixed(1)} dB`);
             } else {
                 this.updateElement('audio-level', '-');
@@ -371,6 +387,14 @@ class BrainController {
                             preview = `Acceleration: x=${acc.x?.toFixed(2)}, y=${acc.y?.toFixed(2)}, z=${acc.z?.toFixed(2)}`;
                         } else if (parsed.audio && parsed.audio.current_level) {
                             preview = `Audio: ${parsed.audio.current_level.level_db?.toFixed(1)} dB`;
+                        } else if (parsed.audio && parsed.audio.monitoring) {
+                            if (parsed.audio.is_shouting) {
+                                preview = `Audio: SHOUTING! (Score: ${parsed.audio.shout_score?.toFixed(1)})`;
+                            } else {
+                                preview = `Audio: Monitoring (Score: ${parsed.audio.shout_score?.toFixed(1)})`;
+                            }
+                        } else if (parsed.audio) {
+                            preview = `Audio: ${parsed.audio.connected ? 'Connected' : 'Disconnected'}`;
                         } else {
                             preview = `Event: ${Object.keys(parsed).join(', ')}`;
                         }
@@ -644,9 +668,9 @@ class BrainController {
             if (stats.sensor_data.audio) {
                 const audio = stats.sensor_data.audio;
                 html += '<div class="stats-item"><span class="stats-label">Audio Device:</span><span class="stats-value">' + (audio.device_name || 'Unknown') + '</span></div>';
-                if (audio.current_level) {
-                    html += '<div class="stats-item"><span class="stats-label">Audio Level:</span><span class="stats-value">' + (audio.current_level.level_db?.toFixed(1) || 'N/A') + ' dB</span></div>';
-                }
+                html += '<div class="stats-item"><span class="stats-label">Monitoring:</span><span class="stats-value">' + (audio.monitoring ? 'Yes' : 'No') + '</span></div>';
+                html += '<div class="stats-item"><span class="stats-label">Shout Score:</span><span class="stats-value">' + (audio.shout_score?.toFixed(1) || '0.0') + '</span></div>';
+                html += '<div class="stats-item"><span class="stats-label">Is Shouting:</span><span class="stats-value">' + (audio.is_shouting ? 'Yes' : 'No') + '</span></div>';
             }
 
             html += '</div>';
@@ -858,9 +882,36 @@ class BrainController {
                 html += '<div class="state-item"><span class="state-label">Device:</span><span class="state-value">' + audio.device_name + '</span></div>';
             }
 
-            if (audio.current_level && audio.current_level.level_db !== undefined) {
-                html += '<div class="state-item"><span class="state-label">Level:</span><span class="state-value">' + audio.current_level.level_db.toFixed(1) + ' dB</span></div>';
+            if (audio.device_id !== undefined) {
+                html += '<div class="state-item"><span class="state-label">Device ID:</span><span class="state-value">' + audio.device_id + '</span></div>';
             }
+
+            html += '<div class="state-item"><span class="state-label">Monitoring:</span><span class="state-value">' + (audio.monitoring ? 'Yes' : 'No') + '</span></div>';
+
+            if (audio.sample_rate) {
+                html += '<div class="state-item"><span class="state-label">Sample Rate:</span><span class="state-value">' + audio.sample_rate + ' Hz</span></div>';
+            }
+
+            if (audio.channels) {
+                html += '<div class="state-item"><span class="state-label">Channels:</span><span class="state-value">' + audio.channels + '</span></div>';
+            }
+
+            // Shouting detection info
+            html += '<div class="state-nested">';
+            html += '<div class="state-item"><span class="state-label">Shout Score:</span><span class="state-value">' + (audio.shout_score?.toFixed(2) || '0.00') + '</span></div>';
+            html += '<div class="state-item"><span class="state-label">Is Shouting:</span><span class="state-value">' + (audio.is_shouting ? 'Yes' : 'No') + '</span></div>';
+
+            if (audio.last_shout_event) {
+                const event = audio.last_shout_event;
+                html += '<div class="state-item"><span class="state-label">Last Shout:</span><span class="state-value">' + (new Date(event.timestamp).toLocaleTimeString()) + '</span></div>';
+                if (event.duration) {
+                    html += '<div class="state-item"><span class="state-label">Duration:</span><span class="state-value">' + event.duration.toFixed(2) + 's</span></div>';
+                }
+                if (event.strength) {
+                    html += '<div class="state-item"><span class="state-label">Strength:</span><span class="state-value">' + event.strength.toFixed(2) + '</span></div>';
+                }
+            }
+            html += '</div>';
 
             html += '</div>';
         }

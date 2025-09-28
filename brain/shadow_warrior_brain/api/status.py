@@ -13,6 +13,7 @@ from fastapi.responses import StreamingResponse
 from shadow_warrior_brain.models.api_responses import (
     BrainState, Statistics
 )
+from shadow_warrior_brain.core.events import event_bus, Event
 
 router = APIRouter()
 
@@ -23,9 +24,8 @@ _startup_timestamp = datetime.now()
 # Global shutdown event for SSE connections
 _shutdown_event = asyncio.Event()
 
-# Track last state for change detection (per-connection)
-# Note: This is a simple implementation. For production with many connections,
-# consider using a more sophisticated state management system.
+# Event-driven state management
+# SSE connections subscribe to the event bus for real-time updates
 
 
 @router.get("/state", response_model=BrainState)
@@ -80,35 +80,6 @@ def signal_shutdown():
     _shutdown_event.set()
 
 
-def extract_state_without_time_fields(state: Dict[str, Any]) -> Dict[str, Any]:
-    """Extract state data excluding time-based fields for change detection"""
-    state_copy = state.copy()
-
-    # Remove time-based fields that don't represent actual state changes
-    state_copy.pop('timestamp', None)
-
-    # Remove session duration fields that change continuously
-    if 'session' in state_copy and state_copy['session']:
-        session = state_copy['session'].copy()
-        session.pop('session_duration', None)
-        state_copy['session'] = session
-
-    # Remove timestamps from nested objects
-    if 'punching_bag' in state_copy and state_copy['punching_bag']:
-        pb = state_copy['punching_bag'].copy()
-        if 'connection_time' in pb:
-            pb.pop('connection_time', None)
-        state_copy['punching_bag'] = pb
-
-    if 'audio' in state_copy and state_copy['audio']:
-        audio = state_copy['audio'].copy()
-        if 'current_level' in audio and audio['current_level']:
-            level = audio['current_level'].copy()
-            level.pop('timestamp', None)
-            audio['current_level'] = level
-        state_copy['audio'] = audio
-
-    return state_copy
 
 
 async def get_state_data(request: Request) -> Dict[str, Any]:
@@ -151,16 +122,32 @@ async def get_state_data(request: Request) -> Dict[str, Any]:
 
 @router.get("/events")
 async def stream_brain_state(request: Request):
-    """Server-Sent Events stream for real-time state updates"""
+    """Server-Sent Events stream for real-time state updates via pub/sub"""
 
     async def event_generator():
-        last_state_without_uptime = None
+        # Queue to collect events for this SSE connection
+        event_queue = asyncio.Queue()
+
+        # Event handler for this connection
+        async def handle_event(event: Event):
+            """Handle events from the event bus"""
+            try:
+                # Convert event to state update format
+                current_state = await get_state_data(request)
+                current_state["last_event"] = event.to_dict()
+
+                await event_queue.put(current_state)
+            except Exception as e:
+                # Put error in queue if state fetching fails
+                error_data = {"error": str(e), "timestamp": datetime.now().isoformat()}
+                await event_queue.put(error_data)
 
         try:
+            # Subscribe to all events
+            await event_bus.subscribe_all(handle_event)
+
             # Send initial state
             initial_state = await get_state_data(request)
-            last_state_without_uptime = extract_state_without_time_fields(initial_state)
-
             event_data = json.dumps(initial_state, default=str)
             yield f"data: {event_data}\n\n"
 
@@ -170,26 +157,21 @@ async def stream_brain_state(request: Request):
                     break
 
                 try:
-                    # Get current state
-                    current_state = await get_state_data(request)
-                    current_state_for_comparison = extract_state_without_time_fields(current_state)
-
-                    # Only send update if state has actually changed (excluding uptime/timestamps)
-                    if current_state_for_comparison != last_state_without_uptime:
-                        last_state_without_uptime = current_state_for_comparison
+                    # Wait for events from the queue or timeout
+                    try:
+                        state_update = await asyncio.wait_for(event_queue.get(), timeout=10.0)
 
                         # Format as SSE event
-                        event_data = json.dumps(current_state, default=str)
+                        event_data = json.dumps(state_update, default=str)
                         yield f"data: {event_data}\n\n"
 
-                    # Wait before next check, but also check for shutdown
-                    try:
-                        await asyncio.wait_for(_shutdown_event.wait(), timeout=1.0)
-                        # If we get here, shutdown was signaled
-                        break
                     except asyncio.TimeoutError:
-                        # Timeout is expected - continue the loop
-                        continue
+                        # Send heartbeat to keep connection alive
+                        heartbeat_data = {
+                            "type": "heartbeat",
+                            "timestamp": datetime.now().isoformat()
+                        }
+                        yield f"data: {json.dumps(heartbeat_data)}\n\n"
 
                 except Exception as e:
                     # Send error event and continue
@@ -202,6 +184,12 @@ async def stream_brain_state(request: Request):
             # Send final error event
             error_data = {"error": str(e), "timestamp": datetime.now().isoformat()}
             yield f"data: {json.dumps(error_data)}\n\n"
+        finally:
+            # Clean up subscription
+            try:
+                await event_bus.unsubscribe_all(handle_event)
+            except Exception:
+                pass  # Ignore cleanup errors
 
     return StreamingResponse(
         event_generator(),
@@ -296,10 +284,12 @@ async def get_statistics(request: Request) -> Statistics:
     # Get audio statistics (if available)
     if audio_manager:
         audio_status = await audio_manager.get_status()
-        if audio_status.get('current_level'):
+        if audio_status.get('connected'):
             statistics["sensor_data"]["audio"] = {
-                "current_level": audio_status['current_level'],
-                "device_name": audio_status.get('device_name', 'unknown')
+                "device_name": audio_status.get('device_name', 'unknown'),
+                "monitoring": audio_status.get('monitoring', False),
+                "shout_score": audio_status.get('shout_score', 0.0),
+                "is_shouting": audio_status.get('is_shouting', False)
             }
 
     return Statistics(**statistics)
