@@ -10,6 +10,7 @@ from typing import Optional, Dict, Any
 
 from shadow_warrior_brain.core.state_machine import StateMachine, SessionState, StateTransition
 from shadow_warrior_brain.core.logging_config import get_logger
+from shadow_warrior_brain.core.events import event_bus, EventType
 
 logger = get_logger(__name__)
 
@@ -30,10 +31,15 @@ class SessionManager:
         self.punch_count = 0
         self.session_data = {}
         self.last_state_transition_time: Optional[datetime] = datetime.now()  # Initialize with current time
-        
+
+        # State tracking for events
+        self._last_state = self.state_machine.current_state
+        self._last_punch_count = 0
+        self._last_session_active = False
+
         # Register state machine hooks
         self._register_hooks()
-        
+
         logger.info("Session Manager initialized")
     
     def _register_hooks(self):
@@ -173,6 +179,38 @@ class SessionManager:
         }
 
         self.session_data.setdefault('transitions', []).append(transition_data)
+
+        # Emit state change event if state actually changed
+        if self._last_state != transition.to_state:
+            await event_bus.emit_event(
+                EventType.SESSION_STATE_CHANGED,
+                "session_manager",
+                {
+                    "from_state": transition.from_state.value,
+                    "to_state": transition.to_state.value,
+                    "timestamp": transition.timestamp.isoformat(),
+                    "metadata": transition.metadata
+                }
+            )
+            self._last_state = transition.to_state
+
+            # Emit specific session events
+            if transition.to_state == SessionState.WARMING_UP and transition.from_state == SessionState.IDLE:
+                await event_bus.emit_event(
+                    EventType.SESSION_STARTED,
+                    "session_manager",
+                    {"session_type": "warming_up", "timestamp": transition.timestamp.isoformat()}
+                )
+            elif transition.to_state == SessionState.IDLE and transition.from_state in [SessionState.FIGHT, SessionState.VICTORY, SessionState.WARMING_UP]:
+                await event_bus.emit_event(
+                    EventType.SESSION_ENDED,
+                    "session_manager",
+                    {
+                        "final_punch_count": self.punch_count,
+                        "session_duration": (transition.timestamp - self.session_start_time).total_seconds() if self.session_start_time else 0,
+                        "timestamp": transition.timestamp.isoformat()
+                    }
+                )
     
     # Public interface methods
     async def start_warming_up(self) -> bool:
@@ -207,12 +245,26 @@ class SessionManager:
         if self.state_machine.current_state == SessionState.FIGHT:
             self.punch_count += 1
             logger.info(f"👊 Punch #{self.punch_count} detected! (acceleration: {acceleration:.2f})")
+
+            # Emit punch detected event if count changed
+            if self.punch_count != self._last_punch_count:
+                asyncio.create_task(event_bus.emit_event(
+                    EventType.SESSION_PUNCH_DETECTED,
+                    "session_manager",
+                    {
+                        "punch_number": self.punch_count,
+                        "acceleration": acceleration,
+                        "timestamp": datetime.now().isoformat()
+                    }
+                ))
+                self._last_punch_count = self.punch_count
     
     def _reset_session(self):
         """Reset session data for new session"""
         self.session_start_time = None
         self.punch_count = 0
         self.session_data = {}
+        self._last_punch_count = 0
         logger.debug("🔄 Session data reset")
     
     # Status and query methods

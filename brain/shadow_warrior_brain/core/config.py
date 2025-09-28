@@ -25,6 +25,15 @@ class Settings(BaseSettings):
     audio_sample_rate: int = 44100
     audio_channels: int = 1
     audio_buffer_size: int = 1024
+    audio_device_id: int = -1  # -1 for default device
+    audio_update_rate: float = 0.1  # seconds between audio level updates
+    audio_status_log_interval: float = 30.0  # seconds between status logs
+
+    # Shouting detection configuration
+    shout_threshold_db: float = -15.0  # dB threshold for detecting shouting
+    shout_min_duration: float = 0.5  # minimum duration in seconds for valid shout
+    shout_score_decay: float = 0.95  # score decay factor per update
+    shout_score_boost: float = 1.0  # base score increment per shout sample
     
     # LED configuration (for future use)
     led_update_rate: int = 30  # Hz
