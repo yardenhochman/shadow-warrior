@@ -1,0 +1,20 @@
+{
+  "name": "mobile",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "emulators": "firebase emulators:start",
+    "emulators:hosting": "firebase emulators:start --only hosting",
+    "emulators:database": "firebase emulators:start --only database",
+    "deploy": "firebase deploy",
+    "deploy:hosting": "firebase deploy --only hosting",
+    "deploy:database": "firebase deploy --only database"
+  },
+  "devDependencies": {
+    "vite": "^6.3.5"
+  }
+}
