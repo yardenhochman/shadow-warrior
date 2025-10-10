@@ -31,7 +31,7 @@ class ShadowWarrior {
     this.audioMinLevel = 0.1;  // Minimum audio level to ensure responsiveness
     
     // Accelerometer scaling settings
-    this.accelScale = 2.0;  // Multiplier to scale accelerometer energy
+    this.accelScale = 3.0;  // Multiplier to scale accelerometer energy (increased from 2.0)
     this.accelThreshold = 1.0;  // Minimum threshold for accelerometer
     
     // Energy smoothing state
@@ -181,7 +181,7 @@ class ShadowWarrior {
               <label>Accel Scale:</label>
               <div class="control-buttons">
                 <button id="accel-minus" class="btn-small">-</button>
-                <span id="accel-scale-value">2.0</span>
+                <span id="accel-scale-value">3.0</span>
                 <button id="accel-plus" class="btn-small">+</button>
               </div>
             </div>
@@ -603,7 +603,7 @@ class ShadowWarrior {
       }
 
       // Combined energy with better balance between audio and accelerometer
-      const normalizedAccel = Math.min(1, accelEnergy / 10); // Scale accelerometer to 0-1
+      const normalizedAccel = Math.min(1, accelEnergy / 5); // Scale accelerometer to 0-1 (reduced from /10)
       let combinedEnergy = Math.min(1, (normalizedAccel + this.audioLevel) / 2);
       
       // Validate combined energy to prevent NaN
@@ -621,6 +621,8 @@ class ShadowWarrior {
       
       if (accelChanged) {
         console.log('Accelerometer data changed:', this.accelerometerData);
+        console.log('Raw accel energy:', rawAccelEnergy.toFixed(2), 'Scaled:', scaledAccelEnergy.toFixed(2), 'Smoothed:', accelEnergy.toFixed(2));
+        console.log('Normalized accel:', normalizedAccel.toFixed(2), 'Audio level:', this.audioLevel.toFixed(2), 'Combined:', combinedEnergy.toFixed(2));
         lastAccelData = { ...this.accelerometerData };
       }
       
