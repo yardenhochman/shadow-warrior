@@ -108,6 +108,7 @@ class ShadowWarrior {
           <button id="stop-btn" class="btn secondary" disabled>Stop Training</button>
           <button id="connect-ble" class="btn">Connect BLE</button>
           <button id="request-permission" class="btn" style="display: none;">Request Motion Permission</button>
+          <button id="simulate-z-move" class="btn">Simulate Z Move</button>
         </div>
 
         <div class="audio-controls">
@@ -256,6 +257,9 @@ class ShadowWarrior {
     document.getElementById('audio-min-minus').addEventListener('click', () => this.adjustAudioMinLevel(-0.05));
     document.getElementById('audio-min-plus').addEventListener('click', () => this.adjustAudioMinLevel(0.05));
     
+    // Simulate Z move button
+    document.getElementById('simulate-z-move').addEventListener('click', () => this.simulateZMove());
+    
     // Check if we need to show permission button for iOS
     this.checkPermissionRequirements();
   }
@@ -317,6 +321,22 @@ class ShadowWarrior {
     const stateFactor = isIncreasing ? 0.9 : 0.99;
     
     return stateFactor * currentSmoothed + attackFactor * rawValue;
+  }
+
+  simulateZMove() {
+    // Simulate a strong Z-axis movement for testing
+    const originalZ = this.accelerometerData.z;
+    
+    // Create a strong Z movement
+    this.accelerometerData.z = 15.0; // Strong upward movement
+    
+    console.log('Simulated Z move - Z changed from', originalZ.toFixed(2), 'to', this.accelerometerData.z.toFixed(2));
+    
+    // Reset after a short delay to simulate the movement ending
+    setTimeout(() => {
+      this.accelerometerData.z = originalZ;
+      console.log('Z move simulation ended - Z reset to', this.accelerometerData.z.toFixed(2));
+    }, 500);
   }
 
   enableTestMode() {
