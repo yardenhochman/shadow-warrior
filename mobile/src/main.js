@@ -25,7 +25,11 @@ class ShadowWarrior {
     this.maxDataPoints = 100;
     
     // Audio scaling settings
-    this.audioScale = 3.0;  // Multiplier to scale audio level
+    this.audioScale = 5.0;  // Multiplier to scale audio level
+    
+    // Accelerometer scaling settings
+    this.accelScale = 2.0;  // Multiplier to scale accelerometer energy
+    this.accelThreshold = 1.0;  // Minimum threshold for accelerometer
     
     // Track caching
     this.cachedTracks = new Map();
@@ -142,8 +146,24 @@ class ShadowWarrior {
               <label>Audio Scale:</label>
               <div class="control-buttons">
                 <button id="audio-minus" class="btn-small">-</button>
-                <span id="audio-scale-value">3.0</span>
+                <span id="audio-scale-value">5.0</span>
                 <button id="audio-plus" class="btn-small">+</button>
+              </div>
+            </div>
+            <div class="control-group">
+              <label>Accel Scale:</label>
+              <div class="control-buttons">
+                <button id="accel-minus" class="btn-small">-</button>
+                <span id="accel-scale-value">2.0</span>
+                <button id="accel-plus" class="btn-small">+</button>
+              </div>
+            </div>
+            <div class="control-group">
+              <label>Accel Threshold:</label>
+              <div class="control-buttons">
+                <button id="threshold-minus" class="btn-small">-</button>
+                <span id="threshold-value">1.0</span>
+                <button id="threshold-plus" class="btn-small">+</button>
               </div>
             </div>
           </div>
@@ -189,6 +209,14 @@ class ShadowWarrior {
     document.getElementById('audio-minus').addEventListener('click', () => this.adjustAudioScale(-0.5));
     document.getElementById('audio-plus').addEventListener('click', () => this.adjustAudioScale(0.5));
     
+    // Accelerometer scale controls
+    document.getElementById('accel-minus').addEventListener('click', () => this.adjustAccelScale(-0.2));
+    document.getElementById('accel-plus').addEventListener('click', () => this.adjustAccelScale(0.2));
+    
+    // Accelerometer threshold controls
+    document.getElementById('threshold-minus').addEventListener('click', () => this.adjustAccelThreshold(-0.1));
+    document.getElementById('threshold-plus').addEventListener('click', () => this.adjustAccelThreshold(0.1));
+    
     // Check if we need to show permission button for iOS
     this.checkPermissionRequirements();
   }
@@ -223,6 +251,18 @@ class ShadowWarrior {
     this.audioScale = Math.max(0.5, Math.min(10.0, this.audioScale + delta));
     document.getElementById('audio-scale-value').textContent = this.audioScale.toFixed(1);
     console.log('Audio scale adjusted to:', this.audioScale);
+  }
+
+  adjustAccelScale(delta) {
+    this.accelScale = Math.max(0.5, Math.min(5.0, this.accelScale + delta));
+    document.getElementById('accel-scale-value').textContent = this.accelScale.toFixed(1);
+    console.log('Accelerometer scale adjusted to:', this.accelScale);
+  }
+
+  adjustAccelThreshold(delta) {
+    this.accelThreshold = Math.max(0.0, Math.min(3.0, this.accelThreshold + delta));
+    document.getElementById('threshold-value').textContent = this.accelThreshold.toFixed(1);
+    console.log('Accelerometer threshold adjusted to:', this.accelThreshold);
   }
 
   enableTestMode() {
@@ -436,23 +476,28 @@ class ShadowWarrior {
       this.addGraphData('accelZ', this.accelerometerData.z);
       this.addGraphData('audio', this.audioLevel);
 
-      // Calculate accelerometer energy
-      const accelEnergy = Math.sqrt(
+      // Calculate accelerometer energy with enhanced sensitivity
+      const rawAccelEnergy = Math.sqrt(
         this.accelerometerData.x ** 2 + 
         this.accelerometerData.y ** 2 + 
         this.accelerometerData.z ** 2
       );
+      
+      // Apply scaling and threshold for more responsive shaking detection
+      const accelEnergy = Math.max(0, (rawAccelEnergy - this.accelThreshold) * this.accelScale);
 
-      // Calculate audio level
+      // Calculate audio level with enhanced sensitivity
       if (this.analyser) {
         const dataArray = new Uint8Array(this.analyser.frequencyBinCount);
         this.analyser.getByteFrequencyData(dataArray);
         const rawLevel = dataArray.reduce((sum, value) => sum + value, 0) / dataArray.length / 255;
-        this.audioLevel = Math.min(1, rawLevel * this.audioScale);
+        // Apply exponential scaling for more dramatic response to louder sounds
+        this.audioLevel = Math.min(1, Math.pow(rawLevel * this.audioScale, 1.5));
       }
 
-      // Combined energy (normalized 0-1)
-      const combinedEnergy = Math.min(1, (accelEnergy / 20) + this.audioLevel);
+      // Combined energy with better balance between audio and accelerometer
+      const normalizedAccel = Math.min(1, accelEnergy / 10); // Scale accelerometer to 0-1
+      const combinedEnergy = Math.min(1, (normalizedAccel + this.audioLevel) / 2);
 
       // Log only on significant changes
       const accelChanged = Math.abs(this.accelerometerData.x - lastAccelData.x) > 0.1 ||
