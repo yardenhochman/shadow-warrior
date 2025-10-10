@@ -516,20 +516,48 @@ class ShadowWarrior {
       // Apply scaling and threshold for more responsive shaking detection
       const accelEnergy = Math.max(0, (rawAccelEnergy - this.accelThreshold) * this.accelScale);
 
-      // Calculate audio level with enhanced sensitivity
+      // Calculate audio level with enhanced sensitivity and NaN protection
       if (this.analyser) {
-        const dataArray = new Uint8Array(this.analyser.frequencyBinCount);
-        this.analyser.getByteFrequencyData(dataArray);
-        const rawLevel = dataArray.reduce((sum, value) => sum + value, 0) / dataArray.length / 255;
-        // Apply exponential scaling for more dramatic response to louder sounds
-        const scaledLevel = Math.pow(rawLevel * this.audioScale, 1.5);
-        // Ensure minimum audio level for better responsiveness
-        this.audioLevel = Math.max(this.audioMinLevel, Math.min(1, scaledLevel));
+        try {
+          const dataArray = new Uint8Array(this.analyser.frequencyBinCount);
+          this.analyser.getByteFrequencyData(dataArray);
+          
+          // Calculate raw level with safety checks
+          const sum = dataArray.reduce((acc, value) => acc + value, 0);
+          const rawLevel = (sum / dataArray.length) / 255;
+          
+          // Validate raw level
+          if (isNaN(rawLevel) || !isFinite(rawLevel)) {
+            console.warn('Invalid raw audio level detected, using fallback');
+            this.audioLevel = this.audioMinLevel;
+          } else {
+            // Apply exponential scaling for more dramatic response to louder sounds
+            const scaledLevel = Math.pow(Math.max(0, rawLevel) * this.audioScale, 1.5);
+            
+            // Validate scaled level and ensure it's within bounds
+            if (isNaN(scaledLevel) || !isFinite(scaledLevel)) {
+              console.warn('Invalid scaled audio level detected, using fallback');
+              this.audioLevel = this.audioMinLevel;
+            } else {
+              // Ensure minimum audio level for better responsiveness
+              this.audioLevel = Math.max(this.audioMinLevel, Math.min(1, scaledLevel));
+            }
+          }
+        } catch (error) {
+          console.error('Audio processing error:', error);
+          this.audioLevel = this.audioMinLevel;
+        }
       }
 
       // Combined energy with better balance between audio and accelerometer
       const normalizedAccel = Math.min(1, accelEnergy / 10); // Scale accelerometer to 0-1
-      const combinedEnergy = Math.min(1, (normalizedAccel + this.audioLevel) / 2);
+      let combinedEnergy = Math.min(1, (normalizedAccel + this.audioLevel) / 2);
+      
+      // Validate combined energy to prevent NaN
+      if (isNaN(combinedEnergy) || !isFinite(combinedEnergy)) {
+        console.warn('Invalid combined energy detected, using fallback');
+        combinedEnergy = 0.1; // Safe fallback value
+      }
 
       // Log only on significant changes
       const accelChanged = Math.abs(this.accelerometerData.x - lastAccelData.x) > 0.1 ||
@@ -556,9 +584,9 @@ class ShadowWarrior {
       document.getElementById('audio-level').textContent = this.audioLevel.toFixed(2);
       document.getElementById('combined-energy').textContent = combinedEnergy.toFixed(2);
 
-      // Update audio volume
-      if (this.audioElement) {
-        this.audioElement.volume = combinedEnergy;
+      // Update audio volume with NaN protection
+      if (this.audioElement && !isNaN(combinedEnergy) && isFinite(combinedEnergy)) {
+        this.audioElement.volume = Math.max(0, Math.min(1, combinedEnergy));
       }
 
       // Update loudness meter
@@ -586,7 +614,14 @@ class ShadowWarrior {
 
   updateLoudnessMeter(level) {
     const meterFill = document.getElementById('meter-fill');
-    const percentage = Math.min(100, level * 100);
+    
+    // Validate level to prevent NaN
+    if (isNaN(level) || !isFinite(level)) {
+      console.warn('Invalid audio level for meter, using fallback');
+      level = this.audioMinLevel;
+    }
+    
+    const percentage = Math.min(100, Math.max(0, level * 100));
     
     // Set the fill width
     meterFill.style.width = `${percentage}%`;
