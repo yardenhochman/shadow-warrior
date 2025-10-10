@@ -97,10 +97,65 @@ class ShadowWarrior {
                 <td id="accel-x-value">0.00</td>
                 <td id="accel-y-value">0.00</td>
                 <td id="accel-z-value">0.00</td>
-                <td id="accel-energy">0.00</td>
+                <td id="accel-energy-value">0.00</td>
+              </tr>
+              <tr>
+                <td colspan="5">
+                  <div class="energy-meter-row">
+                    <label>Energy Level:</label>
+                    <div class="energy-meter">
+                      <div class="meter-fill" id="accel-energy-meter"></div>
+                      <span class="meter-value" id="accel-energy-display">0.00</span>
+                    </div>
+                  </div>
+                </td>
+              </tr>
+              <tr>
+                <td colspan="5">
+                  <div class="microphone-meter-row">
+                    <label>Microphone Level:</label>
+                    <div class="microphone-meter">
+                      <div class="meter-fill" id="meter-fill"></div>
+                      <span class="meter-value" id="microphone-display">0.00</span>
+                    </div>
+                  </div>
+                </td>
+              </tr>
+              <tr>
+                <td colspan="5">
+                  <div class="audio-track-meter-row">
+                    <label>Audio Track Level:</label>
+                    <div class="audio-track-meter">
+                      <div class="meter-fill" id="track-meter-fill"></div>
+                      <span class="meter-value" id="track-display">0.00</span>
+                    </div>
+                  </div>
+                </td>
               </tr>
             </tbody>
           </table>
+        </div>
+
+        <div class="debug-graphs">
+          <h3>Debug Graphs</h3>
+          <div class="graph-container">
+            <div class="graph">
+              <h4>Audio Level</h4>
+              <canvas id="audio-graph" width="300" height="100"></canvas>
+            </div>
+            <div class="graph">
+              <h4>Accelerometer X</h4>
+              <canvas id="accel-x-graph" width="300" height="100"></canvas>
+            </div>
+            <div class="graph">
+              <h4>Accelerometer Y</h4>
+              <canvas id="accel-y-graph" width="300" height="100"></canvas>
+            </div>
+            <div class="graph">
+              <h4>Accelerometer Z</h4>
+              <canvas id="accel-z-graph" width="300" height="100"></canvas>
+            </div>
+          </div>
         </div>
 
         <div class="controls">
@@ -108,7 +163,6 @@ class ShadowWarrior {
           <button id="stop-btn" class="btn secondary" disabled>Stop Training</button>
           <button id="connect-ble" class="btn">Connect BLE</button>
           <button id="request-permission" class="btn" style="display: none;">Request Motion Permission</button>
-          <button id="simulate-z-move" class="btn">Simulate Z Move</button>
         </div>
 
         <div class="audio-controls">
@@ -131,44 +185,6 @@ class ShadowWarrior {
         </div>
 
 
-        <div class="loudness-meter">
-          <h3>Microphone Level</h3>
-          <div class="meter-container">
-            <div class="meter-bar">
-              <div class="meter-fill" id="meter-fill"></div>
-              <div class="meter-zones">
-                <div class="zone green"></div>
-                <div class="zone yellow"></div>
-                <div class="zone red"></div>
-              </div>
-            </div>
-            <div class="meter-labels">
-              <span>0</span>
-              <span>0.3</span>
-              <span>0.7</span>
-              <span>1.0</span>
-            </div>
-          </div>
-        </div>
-
-        <div class="loudness-meter">
-          <h3>Audio Track Level</h3>
-          <div class="meter-container">
-            <div class="meter-bar">
-              <div class="meter-fill" id="track-meter-fill"></div>
-              <div class="meter-zones">
-                <div class="zone green"></div>
-                <div class="zone yellow"></div>
-                <div class="zone red"></div>
-              </div>
-            </div>
-            <div class="meter-labels">
-              <span>0</span>
-              <span>0.3</span>
-              <span>0.7</span>
-              <span>1.0</span>
-            </div>
-          </div>
           <div class="audio-controls">
             <div class="control-group">
               <label>Audio Scale:</label>
@@ -204,28 +220,6 @@ class ShadowWarrior {
             </div>
           </div>
         </div>
-
-        <div class="debug-graphs">
-          <h3>Debug Graphs</h3>
-          <div class="graph-container">
-            <div class="graph">
-              <h4>Audio Level</h4>
-              <canvas id="audio-graph" width="300" height="100"></canvas>
-            </div>
-            <div class="graph">
-              <h4>Accelerometer X</h4>
-              <canvas id="accel-x-graph" width="300" height="100"></canvas>
-            </div>
-            <div class="graph">
-              <h4>Accelerometer Y</h4>
-              <canvas id="accel-y-graph" width="300" height="100"></canvas>
-            </div>
-            <div class="graph">
-              <h4>Accelerometer Z</h4>
-              <canvas id="accel-z-graph" width="300" height="100"></canvas>
-            </div>
-          </div>
-        </div>
       </div>
     `;
   }
@@ -256,9 +250,6 @@ class ShadowWarrior {
     // Audio minimum level controls
     document.getElementById('audio-min-minus').addEventListener('click', () => this.adjustAudioMinLevel(-0.05));
     document.getElementById('audio-min-plus').addEventListener('click', () => this.adjustAudioMinLevel(0.05));
-    
-    // Simulate Z move button
-    document.getElementById('simulate-z-move').addEventListener('click', () => this.simulateZMove());
     
     // Check if we need to show permission button for iOS
     this.checkPermissionRequirements();
@@ -315,62 +306,18 @@ class ShadowWarrior {
   }
 
   applyEnergySmoothing(rawValue, currentSmoothed, isIncreasing) {
-    // Fast attack when going up (0.8*state + 0.2*input)
-    // Slow release when going down (0.95*state + 0.05*input)
-    const attackFactor = isIncreasing ? 0.2 : 0.05;
-    const stateFactor = isIncreasing ? 0.8 : 0.95;
+    // Fast attack when going up (0.7*state + 0.3*input)
+    // Faster release when going down (0.85*state + 0.15*input)
+    const attackFactor = isIncreasing ? 0.3 : 0.15;
+    const stateFactor = isIncreasing ? 0.7 : 0.85;
     
     return stateFactor * currentSmoothed + attackFactor * rawValue;
-  }
-
-  simulateZMove() {
-    // Simulate a realistic Z-axis movement for testing with gradual attack and release
-    const originalZ = this.accelerometerData.z;
-    const targetZ = 20.0; // Strong upward movement
-    const duration = 1000; // 1 second total duration
-    const steps = 20; // Number of steps for smooth animation
-    const stepDuration = duration / steps;
-    
-    console.log('Simulated Z move - Starting gradual movement from', originalZ.toFixed(2), 'to', targetZ.toFixed(2));
-    
-    let currentStep = 0;
-    
-    const animateZ = () => {
-      if (currentStep <= steps) {
-        // Calculate position in the animation (0 to 1)
-        const progress = currentStep / steps;
-        
-        // Create a smooth curve: fast attack, slow release
-        let zValue;
-        if (progress <= 0.3) {
-          // Fast attack phase (0-30% of animation)
-          const attackProgress = progress / 0.3;
-          zValue = originalZ + (targetZ - originalZ) * attackProgress;
-        } else {
-          // Slow release phase (30-100% of animation)
-          const releaseProgress = (progress - 0.3) / 0.7;
-          // Use exponential decay for smooth release
-          const decayFactor = Math.pow(1 - releaseProgress, 2);
-          zValue = originalZ + (targetZ - originalZ) * decayFactor;
-        }
-        
-        this.accelerometerData.z = zValue;
-        currentStep++;
-        
-        setTimeout(animateZ, stepDuration);
-      } else {
-        // Ensure we end at the original value
-        this.accelerometerData.z = originalZ;
-        console.log('Z move simulation ended - Z reset to', this.accelerometerData.z.toFixed(2));
-      }
-    };
-    
-    animateZ();
   }
 
   enableTestMode() {
     // Simulate accelerometer data for desktop testing
     this.testMode = true;
+    this.motionSimulationActive = false;
     console.log('Test mode enabled - simulating accelerometer data');
     
     // Add test controls
@@ -379,6 +326,8 @@ class ShadowWarrior {
         <h4>Test Mode (Desktop)</h4>
         <p>Simulating accelerometer data for testing</p>
         <button id="simulate-motion" class="btn">Simulate Motion</button>
+        <button id="start-continuous-motion" class="btn">Start Continuous Motion</button>
+        <button id="stop-continuous-motion" class="btn" style="display: none;">Stop Continuous Motion</button>
       </div>
     `;
     
@@ -387,6 +336,12 @@ class ShadowWarrior {
       document.querySelector('.controls').insertAdjacentHTML('afterend', testControls);
       document.getElementById('simulate-motion').addEventListener('click', () => {
         this.simulateMotion();
+      });
+      document.getElementById('start-continuous-motion').addEventListener('click', () => {
+        this.startContinuousMotion();
+      });
+      document.getElementById('stop-continuous-motion').addEventListener('click', () => {
+        this.stopContinuousMotion();
       });
     }
   }
@@ -402,6 +357,63 @@ class ShadowWarrior {
     };
     
     console.log('Simulated motion:', this.accelerometerData);
+  }
+
+  startContinuousMotion() {
+    if (!this.testMode) return;
+    
+    this.motionSimulationActive = true;
+    document.getElementById('start-continuous-motion').style.display = 'none';
+    document.getElementById('stop-continuous-motion').style.display = 'inline-block';
+    
+    // Start continuous motion simulation
+    this.continuousMotionInterval = setInterval(() => {
+      if (!this.motionSimulationActive) return;
+      
+      // Add small random variations to simulate natural motion
+      const variation = 0.5;
+      this.accelerometerData = {
+        x: this.accelerometerData.x + (Math.random() - 0.5) * variation,
+        y: this.accelerometerData.y + (Math.random() - 0.5) * variation,
+        z: this.accelerometerData.z + (Math.random() - 0.5) * variation
+      };
+      
+      // Apply decay to return to baseline over time
+      const decayFactor = 0.95;
+      this.accelerometerData.x *= decayFactor;
+      this.accelerometerData.y *= decayFactor;
+      this.accelerometerData.z *= decayFactor;
+      
+      // Occasionally add larger motion spikes
+      if (Math.random() < 0.1) {
+        this.accelerometerData.x += (Math.random() - 0.5) * 10;
+        this.accelerometerData.y += (Math.random() - 0.5) * 10;
+        this.accelerometerData.z += (Math.random() - 0.5) * 10;
+      }
+      
+    }, 50); // Update every 50ms for smooth motion
+    
+    console.log('Continuous motion simulation started');
+  }
+
+  stopContinuousMotion() {
+    this.motionSimulationActive = false;
+    if (this.continuousMotionInterval) {
+      clearInterval(this.continuousMotionInterval);
+      this.continuousMotionInterval = null;
+    }
+    
+    // Reset accelerometer data to 0 to allow natural decay
+    this.accelerometerData = {
+      x: 0,
+      y: 0,
+      z: 0
+    };
+    
+    document.getElementById('start-continuous-motion').style.display = 'inline-block';
+    document.getElementById('stop-continuous-motion').style.display = 'none';
+    
+    console.log('Continuous motion simulation stopped - accelerometer reset to 0');
   }
 
   async startTraining() {
@@ -464,6 +476,11 @@ class ShadowWarrior {
     if (this.websocket) {
       this.websocket.close();
       this.websocket = null;
+    }
+    
+    // Stop continuous motion simulation if running
+    if (this.motionSimulationActive) {
+      this.stopContinuousMotion();
     }
     
     // Reset status indicators
@@ -705,7 +722,11 @@ class ShadowWarrior {
       document.getElementById('accel-x-value').textContent = this.accelerometerData.x.toFixed(2);
       document.getElementById('accel-y-value').textContent = this.accelerometerData.y.toFixed(2);
       document.getElementById('accel-z-value').textContent = this.accelerometerData.z.toFixed(2);
-      document.getElementById('accel-energy').textContent = accelEnergy.toFixed(2);
+      // Update energy meter
+      const energyPercentage = Math.min(100, (accelEnergy / 100) * 100); // Scale to 0-100%
+      document.getElementById('accel-energy-meter').style.width = energyPercentage + '%';
+      document.getElementById('accel-energy-value').textContent = accelEnergy.toFixed(1);
+      document.getElementById('accel-energy-display').textContent = accelEnergy.toFixed(1);
       document.getElementById('audio-level').textContent = this.audioLevel.toFixed(2);
       document.getElementById('combined-energy').textContent = combinedEnergy.toFixed(2);
 
@@ -758,6 +779,7 @@ class ShadowWarrior {
 
   updateLoudnessMeter(level) {
     const meterFill = document.getElementById('meter-fill');
+    const microphoneDisplay = document.getElementById('microphone-display');
     
     // Validate level to prevent NaN
     if (isNaN(level) || !isFinite(level)) {
@@ -769,6 +791,11 @@ class ShadowWarrior {
     
     // Set the fill width
     meterFill.style.width = `${percentage}%`;
+    
+    // Update display value
+    if (microphoneDisplay) {
+      microphoneDisplay.textContent = level.toFixed(2);
+    }
     
     // Change color based on level
     if (level <= 0.3) {
@@ -782,6 +809,7 @@ class ShadowWarrior {
 
   updateTrackMeter(level) {
     const meterFill = document.getElementById('track-meter-fill');
+    const trackDisplay = document.getElementById('track-display');
     
     // Validate level to prevent NaN
     if (isNaN(level) || !isFinite(level)) {
@@ -793,6 +821,11 @@ class ShadowWarrior {
     
     // Set the fill width
     meterFill.style.width = `${percentage}%`;
+    
+    // Update display value
+    if (trackDisplay) {
+      trackDisplay.textContent = level.toFixed(2);
+    }
     
     // Change color based on level (different colors for track)
     if (level <= 0.3) {

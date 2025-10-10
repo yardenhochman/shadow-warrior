@@ -575,3 +575,90 @@ h1 {
     font-size: 0.8em;
   }
 }
+
+/* Energy Meter Styles */
+.energy-meter-row {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  padding: 10px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.energy-meter-row label {
+  color: #4ecdc4;
+  font-weight: 600;
+  font-size: 0.9em;
+  width: 140px;
+  flex-shrink: 0;
+}
+
+.energy-meter {
+  position: relative;
+  flex: 1;
+  height: 25px;
+  background: #333;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid #555;
+  min-width: 200px;
+}
+
+.energy-meter .meter-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #00ff00, #ffff00, #ff0000);
+  width: 0%;
+  transition: width 0.1s ease-out;
+  border-radius: 12px;
+}
+
+/* Microphone and Audio Track Meter Styles - Aligned with Energy Meter */
+.microphone-meter-row,
+.audio-track-meter-row {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  padding: 10px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.microphone-meter-row label,
+.audio-track-meter-row label {
+  color: #4ecdc4;
+  font-weight: 600;
+  font-size: 0.9em;
+  width: 140px;
+  flex-shrink: 0;
+}
+
+.microphone-meter,
+.audio-track-meter {
+  position: relative;
+  flex: 1;
+  height: 25px;
+  background: #333;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid #555;
+  min-width: 200px;
+}
+
+.microphone-meter .meter-fill,
+.audio-track-meter .meter-fill {
+  height: 100%;
+  width: 0%;
+  transition: width 0.1s ease-out;
+  border-radius: 12px;
+}
+
+.meter-value {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 0.7em;
+  font-weight: bold;
+  color: white;
+  text-shadow: 1px 1px 2px rgba(0,0,0,0.8);
+  z-index: 1;
+}
