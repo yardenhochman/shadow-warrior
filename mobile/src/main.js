@@ -535,19 +535,11 @@ class ShadowWarrior {
     const processData = () => {
       if (!this.isRunning) return;
 
-      // Calculate track level from audio element volume
-      if (this.audioElement) {
-        this.trackLevel = this.audioElement.volume || 0;
-      } else {
-        this.trackLevel = 0;
-      }
-
-      // Store data for graphs
+      // Store data for graphs (track level will be updated after volume change)
       this.addGraphData('accelX', this.accelerometerData.x);
       this.addGraphData('accelY', this.accelerometerData.y);
       this.addGraphData('accelZ', this.accelerometerData.z);
       this.addGraphData('audio', this.audioLevel);
-      this.addGraphData('track', this.trackLevel);
 
       // Calculate accelerometer energy with enhanced sensitivity
       const rawAccelEnergy = Math.sqrt(
@@ -646,7 +638,21 @@ class ShadowWarrior {
         const energyBoost = combinedEnergy * 0.7;
         const finalVolume = Math.max(0, Math.min(1, baseVolume + energyBoost));
         this.audioElement.volume = finalVolume;
+        
+        // Update track level after volume change
+        this.trackLevel = finalVolume;
+        
+        // Debug logging for volume changes
+        if (Math.abs(finalVolume - (this.lastTrackVolume || 0)) > 0.05) {
+          console.log('Volume change - Combined energy:', combinedEnergy.toFixed(2), 'Final volume:', finalVolume.toFixed(2));
+          this.lastTrackVolume = finalVolume;
+        }
+      } else {
+        this.trackLevel = 0;
       }
+      
+      // Add track level to graph data
+      this.addGraphData('track', this.trackLevel);
 
       // Update loudness meters
       this.updateLoudnessMeter(this.audioLevel);
