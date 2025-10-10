@@ -8,3 +8,15 @@ shadow_warrior_brain.egg-info/
 venv/
 node_modules/
 package-lock.json
+.playwright-mcp/accelerometer-meter-issue.png
+
+# CoreBluetoothApp build artifacts
+CoreBluetoothApp/build/
+CoreBluetoothApp/DerivedData/
+CoreBluetoothApp/*.xcworkspace/xcuserdata/
+CoreBluetoothApp/*.xcodeproj/xcuserdata/
+CoreBluetoothApp/*.xcodeproj/project.xcworkspace/xcuserdata/
+CoreBluetoothApp/web/__pycache__/
+CoreBluetoothApp/web/*.pem
+CoreBluetoothApp/web/*.crt
+CoreBluetoothApp/web/*.key
