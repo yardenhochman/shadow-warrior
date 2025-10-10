@@ -4,7 +4,8 @@ import { KNOWN_TRACKS, getTrackById, getTracksByEnergy, getRandomTrack, getTrack
 class ShadowWarrior {
   constructor() {
     this.accelerometerData = { x: 0, y: 0, z: 0 };
-    this.audioLevel = 0;
+    this.rawAudioLevel = 0;  // Raw microphone level before gain
+    this.audioLevel = 0;  // Processed audio level after gain and smoothing
     this.trackLevel = 0;  // Audio track volume level
     this.audioContext = null;
     this.analyser = null;
@@ -31,8 +32,8 @@ class ShadowWarrior {
     this.audioMinLevel = 0.1;  // Minimum audio level to ensure responsiveness
     
     // Accelerometer scaling settings
-    this.accelScale = 5.0;  // Multiplier to scale accelerometer energy (increased from 3.0)
-    this.accelThreshold = 0.5;  // Minimum threshold for accelerometer (reduced from 1.0)
+    this.accelScale = 8.0;  // Multiplier to scale accelerometer energy (increased for beat alignment)
+    this.accelThreshold = 0.1;  // Minimum threshold for accelerometer (reduced for beat alignment)
     
     // Energy smoothing state
     this.smoothedAudioLevel = 0;
@@ -49,6 +50,7 @@ class ShadowWarrior {
     this.createUI();
     this.setupEventListeners();
     this.preloadDefaultTrack();
+    this.refreshAudioDevices();
   }
 
   createUI() {
@@ -117,6 +119,17 @@ class ShadowWarrior {
                     <div class="microphone-meter">
                       <div class="meter-fill" id="meter-fill"></div>
                       <span class="meter-value" id="microphone-display">0.00</span>
+                    </div>
+                  </div>
+                </td>
+              </tr>
+              <tr>
+                <td colspan="5">
+                  <div class="microphone-output-meter-row">
+                    <label>Microphone Output (with gain):</label>
+                    <div class="microphone-output-meter">
+                      <div class="meter-fill" id="microphone-output-meter-fill"></div>
+                      <span class="meter-value" id="microphone-output-display">0.00</span>
                     </div>
                   </div>
                 </td>
@@ -220,6 +233,25 @@ class ShadowWarrior {
             </div>
           </div>
         </div>
+
+        <div class="audio-device-controls">
+          <h3>🎤 Audio Device Selection</h3>
+          <div class="device-selection">
+            <div class="device-group">
+              <label for="mic-device-select">Microphone Input:</label>
+              <select id="mic-device-select" class="device-dropdown">
+                <option value="">Select microphone...</option>
+              </select>
+            </div>
+            <div class="device-group">
+              <label for="speaker-device-select">Speaker Output:</label>
+              <select id="speaker-device-select" class="device-dropdown">
+                <option value="">Select speaker...</option>
+              </select>
+            </div>
+            <button id="refresh-devices" class="btn">Refresh Devices</button>
+          </div>
+        </div>
       </div>
     `;
   }
@@ -250,6 +282,11 @@ class ShadowWarrior {
     // Audio minimum level controls
     document.getElementById('audio-min-minus').addEventListener('click', () => this.adjustAudioMinLevel(-0.05));
     document.getElementById('audio-min-plus').addEventListener('click', () => this.adjustAudioMinLevel(0.05));
+    
+    // Audio device selection controls
+    document.getElementById('refresh-devices').addEventListener('click', () => this.refreshAudioDevices());
+    document.getElementById('mic-device-select').addEventListener('change', (e) => this.selectMicrophoneDevice(e.target.value));
+    document.getElementById('speaker-device-select').addEventListener('change', (e) => this.selectSpeakerDevice(e.target.value));
     
     // Check if we need to show permission button for iOS
     this.checkPermissionRequirements();
@@ -306,10 +343,10 @@ class ShadowWarrior {
   }
 
   applyEnergySmoothing(rawValue, currentSmoothed, isIncreasing) {
-    // Fast attack when going up (0.7*state + 0.3*input)
-    // Faster release when going down (0.85*state + 0.15*input)
-    const attackFactor = isIncreasing ? 0.3 : 0.15;
-    const stateFactor = isIncreasing ? 0.7 : 0.85;
+    // Much faster attack for beat alignment (0.4*state + 0.6*input)
+    // Faster release for beat alignment (0.7*state + 0.3*input)
+    const attackFactor = isIncreasing ? 0.6 : 0.3;
+    const stateFactor = isIncreasing ? 0.4 : 0.7;
     
     return stateFactor * currentSmoothed + attackFactor * rawValue;
   }
@@ -596,7 +633,16 @@ class ShadowWarrior {
   async startMicrophone() {
     try {
       console.log('Starting microphone...');
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      
+      // Check if a specific microphone device is selected
+      const micSelect = document.getElementById('mic-device-select');
+      const selectedMicId = micSelect ? micSelect.value : null;
+      
+      const constraints = selectedMicId ? 
+        { audio: { deviceId: { exact: selectedMicId } } } : 
+        { audio: true };
+      
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
       console.log('Microphone stream obtained:', stream);
       
       this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
@@ -634,7 +680,7 @@ class ShadowWarrior {
       this.addGraphData('accelX', this.accelerometerData.x);
       this.addGraphData('accelY', this.accelerometerData.y);
       this.addGraphData('accelZ', this.accelerometerData.z);
-      this.addGraphData('audio', this.audioLevel);
+      this.addGraphData('audio', this.rawAudioLevel);
 
       // Calculate accelerometer energy with enhanced sensitivity
       const rawAccelEnergy = Math.sqrt(
@@ -643,8 +689,8 @@ class ShadowWarrior {
         this.accelerometerData.z ** 2
       );
       
-      // Apply scaling and threshold for more responsive shaking detection
-      const scaledAccelEnergy = Math.max(0, (rawAccelEnergy - this.accelThreshold) * this.accelScale);
+      // Apply scaling and threshold for more responsive shaking detection with beat alignment sensitivity
+      const scaledAccelEnergy = Math.max(0, (rawAccelEnergy - this.accelThreshold) * this.accelScale * 4); // 4x more sensitive for beat alignment
       
       // Apply energy smoothing to accelerometer
       const isAccelIncreasing = scaledAccelEnergy > this.smoothedAccelEnergy;
@@ -674,12 +720,12 @@ class ShadowWarrior {
               console.warn('Invalid scaled audio level detected, using fallback');
               this.audioLevel = this.audioMinLevel;
             } else {
-              // Ensure minimum audio level for better responsiveness
-              const rawAudioLevel = Math.max(this.audioMinLevel, Math.min(1, scaledLevel));
+              // Store raw audio level (before gain and smoothing) - this is what the first meter shows
+              this.rawAudioLevel = Math.max(this.audioMinLevel, Math.min(1, scaledLevel));
               
               // Apply energy smoothing to audio
-              const isAudioIncreasing = rawAudioLevel > this.smoothedAudioLevel;
-              this.smoothedAudioLevel = this.applyEnergySmoothing(rawAudioLevel, this.smoothedAudioLevel, isAudioIncreasing);
+              const isAudioIncreasing = this.rawAudioLevel > this.smoothedAudioLevel;
+              this.smoothedAudioLevel = this.applyEnergySmoothing(this.rawAudioLevel, this.smoothedAudioLevel, isAudioIncreasing);
               this.audioLevel = this.smoothedAudioLevel;
             }
           }
@@ -704,18 +750,18 @@ class ShadowWarrior {
                           Math.abs(this.accelerometerData.y - lastAccelData.y) > 0.1 ||
                           Math.abs(this.accelerometerData.z - lastAccelData.z) > 0.1;
       
-      const audioChanged = Math.abs(this.audioLevel - lastAudioLevel) > 0.05;
+      const audioChanged = Math.abs(this.rawAudioLevel - lastAudioLevel) > 0.05;
       
       if (accelChanged) {
         console.log('Accelerometer data changed:', this.accelerometerData);
         console.log('Raw accel energy:', rawAccelEnergy.toFixed(2), 'Scaled:', scaledAccelEnergy.toFixed(2), 'Smoothed:', accelEnergy.toFixed(2));
-        console.log('Normalized accel:', normalizedAccel.toFixed(2), 'Audio level:', this.audioLevel.toFixed(2), 'Combined:', combinedEnergy.toFixed(2));
+        console.log('Normalized accel:', normalizedAccel.toFixed(2), 'Raw audio:', this.rawAudioLevel.toFixed(2), 'Processed audio:', this.audioLevel.toFixed(2), 'Combined:', combinedEnergy.toFixed(2));
         lastAccelData = { ...this.accelerometerData };
       }
       
       if (audioChanged) {
-        console.log('Audio level changed:', this.audioLevel.toFixed(3));
-        lastAudioLevel = this.audioLevel;
+        console.log('Raw audio level changed:', this.rawAudioLevel.toFixed(3), 'Processed audio level:', this.audioLevel.toFixed(3));
+        lastAudioLevel = this.rawAudioLevel;
       }
 
       // Update UI
@@ -727,7 +773,7 @@ class ShadowWarrior {
       document.getElementById('accel-energy-meter').style.width = energyPercentage + '%';
       document.getElementById('accel-energy-value').textContent = accelEnergy.toFixed(1);
       document.getElementById('accel-energy-display').textContent = accelEnergy.toFixed(1);
-      document.getElementById('audio-level').textContent = this.audioLevel.toFixed(2);
+      document.getElementById('audio-level').textContent = this.rawAudioLevel.toFixed(2);
       document.getElementById('combined-energy').textContent = combinedEnergy.toFixed(2);
 
       // Update audio volume with NaN protection and base volume
@@ -754,7 +800,8 @@ class ShadowWarrior {
       this.addGraphData('track', this.trackLevel);
 
       // Update loudness meters
-      this.updateLoudnessMeter(this.audioLevel);
+      this.updateLoudnessMeter(this.rawAudioLevel);
+      this.updateMicrophoneOutputMeter(combinedEnergy);
       this.updateTrackMeter(this.trackLevel);
 
       // Update graphs
@@ -804,6 +851,36 @@ class ShadowWarrior {
       meterFill.style.background = 'linear-gradient(90deg, #f7b731, #f39c12)';
     } else {
       meterFill.style.background = 'linear-gradient(90deg, #ff6b6b, #ee5a24)';
+    }
+  }
+
+  updateMicrophoneOutputMeter(level) {
+    const meterFill = document.getElementById('microphone-output-meter-fill');
+    const microphoneOutputDisplay = document.getElementById('microphone-output-display');
+    
+    // Validate level to prevent NaN
+    if (isNaN(level) || !isFinite(level)) {
+      console.warn('Invalid microphone output level for meter, using fallback');
+      level = this.audioMinLevel;
+    }
+    
+    const percentage = Math.min(100, Math.max(0, level * 100));
+    
+    // Set the fill width
+    meterFill.style.width = `${percentage}%`;
+    
+    // Update display value
+    if (microphoneOutputDisplay) {
+      microphoneOutputDisplay.textContent = level.toFixed(2);
+    }
+    
+    // Change color based on level (different colors for microphone output)
+    if (level <= 0.3) {
+      meterFill.style.background = 'linear-gradient(90deg, #2ecc71, #27ae60)';
+    } else if (level <= 0.7) {
+      meterFill.style.background = 'linear-gradient(90deg, #f39c12, #e67e22)';
+    } else {
+      meterFill.style.background = 'linear-gradient(90deg, #e74c3c, #c0392b)';
     }
   }
 
@@ -1143,6 +1220,9 @@ class ShadowWarrior {
       this.audioElement = new Audio(url);
       this.audioElement.loop = true;
       
+      // Apply preselected speaker device if available
+      this.applySelectedSpeakerDevice();
+      
       // Add event listeners
       this.audioElement.addEventListener('canplaythrough', () => {
         console.log('Track ready to play:', trackName);
@@ -1250,6 +1330,9 @@ class ShadowWarrior {
       this.audioElement = cachedAudio.cloneNode();
       this.audioElement.loop = true;
       
+      // Apply preselected speaker device if available
+      this.applySelectedSpeakerDevice();
+      
       // Play the cached track
       this.audioElement.play().catch(e => {
         console.error('Error playing cached track:', e);
@@ -1259,6 +1342,125 @@ class ShadowWarrior {
       return true;
     }
     return false;
+  }
+
+  async refreshAudioDevices() {
+    try {
+      console.log('Refreshing audio devices...');
+      
+      // Get available audio input devices (microphones)
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const audioInputs = devices.filter(device => device.kind === 'audioinput');
+      const audioOutputs = devices.filter(device => device.kind === 'audiooutput');
+      
+      // Populate microphone dropdown
+      const micSelect = document.getElementById('mic-device-select');
+      micSelect.innerHTML = '<option value="">Select microphone...</option>';
+      
+      audioInputs.forEach((device, index) => {
+        const option = document.createElement('option');
+        option.value = device.deviceId;
+        option.textContent = device.label || `Microphone ${index + 1}`;
+        micSelect.appendChild(option);
+      });
+      
+      // Preselect first microphone if available
+      if (audioInputs.length > 0) {
+        micSelect.value = audioInputs[0].deviceId;
+        console.log('Preselected microphone:', audioInputs[0].label || 'Default Microphone');
+      }
+      
+      // Populate speaker dropdown
+      const speakerSelect = document.getElementById('speaker-device-select');
+      speakerSelect.innerHTML = '<option value="">Select speaker...</option>';
+      
+      audioOutputs.forEach((device, index) => {
+        const option = document.createElement('option');
+        option.value = device.deviceId;
+        option.textContent = device.label || `Speaker ${index + 1}`;
+        speakerSelect.appendChild(option);
+      });
+      
+      // Preselect first speaker if available
+      if (audioOutputs.length > 0) {
+        speakerSelect.value = audioOutputs[0].deviceId;
+        console.log('Preselected speaker:', audioOutputs[0].label || 'Default Speaker');
+      }
+      
+      console.log(`Found ${audioInputs.length} audio inputs and ${audioOutputs.length} audio outputs`);
+      
+    } catch (error) {
+      console.error('Error refreshing audio devices:', error);
+    }
+  }
+
+  async selectMicrophoneDevice(deviceId) {
+    if (!deviceId) return;
+    
+    try {
+      console.log('Selecting microphone device:', deviceId);
+      
+      // Stop current microphone if running
+      if (this.microphone && this.microphone.mediaStream) {
+        this.microphone.mediaStream.getTracks().forEach(track => track.stop());
+      }
+      
+      // Request new microphone with specific device
+      const constraints = {
+        audio: {
+          deviceId: { exact: deviceId }
+        }
+      };
+      
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      console.log('New microphone stream obtained with device:', deviceId);
+      
+      // Update audio context and analyser if they exist
+      if (this.audioContext && this.analyser) {
+        this.microphone = this.audioContext.createMediaStreamSource(stream);
+        this.microphone.connect(this.analyser);
+        console.log('Microphone device changed successfully');
+      }
+      
+    } catch (error) {
+      console.error('Error selecting microphone device:', error);
+      alert('Failed to select microphone device. Please try again.');
+    }
+  }
+
+  async selectSpeakerDevice(deviceId) {
+    if (!deviceId) return;
+    
+    try {
+      console.log('Selecting speaker device:', deviceId);
+      
+      // For audio output, we need to use the setSinkId method if available
+      if (this.audioElement && 'setSinkId' in this.audioElement) {
+        await this.audioElement.setSinkId(deviceId);
+        console.log('Speaker device changed successfully');
+      } else {
+        console.warn('setSinkId not supported in this browser');
+        alert('Speaker device selection not supported in this browser.');
+      }
+      
+    } catch (error) {
+      console.error('Error selecting speaker device:', error);
+      alert('Failed to select speaker device. Please try again.');
+    }
+  }
+
+  async applySelectedSpeakerDevice() {
+    const speakerSelect = document.getElementById('speaker-device-select');
+    const selectedSpeakerId = speakerSelect ? speakerSelect.value : null;
+    
+    if (selectedSpeakerId && this.audioElement && 'setSinkId' in this.audioElement) {
+      try {
+        await this.audioElement.setSinkId(selectedSpeakerId);
+        console.log('Applied preselected speaker device:', selectedSpeakerId);
+      } catch (error) {
+        console.warn('Failed to apply preselected speaker device:', error);
+      }
+    }
   }
 }
 
