@@ -1,4 +1,5 @@
 import './style.css'
+import { KNOWN_TRACKS, getTrackById, getTracksByEnergy, getRandomTrack, getTrackStats } from './tracks.js'
 
 class ShadowWarrior {
   constructor() {
@@ -26,12 +27,17 @@ class ShadowWarrior {
     // Audio scaling settings
     this.audioScale = 3.0;  // Multiplier to scale audio level
     
+    // Track caching
+    this.cachedTracks = new Map();
+    this.defaultTrackId = 'war-is-coming';
+    
     this.init();
   }
 
   init() {
     this.createUI();
     this.setupEventListeners();
+    this.preloadDefaultTrack();
   }
 
   createUI() {
@@ -94,8 +100,22 @@ class ShadowWarrior {
         </div>
 
         <div class="audio-controls">
-          <input type="file" id="audio-file" accept="audio/*" />
-          <button id="load-audio" class="btn">Load Audio</button>
+          <h3>🎵 Track Selection</h3>
+          <div id="track-status" class="track-status">Preloading default track...</div>
+          <div class="track-selection">
+            <select id="track-select" class="track-dropdown">
+              <option value="">Select a track...</option>
+              ${KNOWN_TRACKS.map(track => 
+                `<option value="${track.id}">${track.name} - ${track.artist} (${track.genre})</option>`
+              ).join('')}
+            </select>
+            <button id="load-track" class="btn">Load Track</button>
+            <button id="random-track" class="btn">Random Track</button>
+          </div>
+          <div class="custom-audio">
+            <input type="file" id="audio-file" accept="audio/*" />
+            <button id="load-audio" class="btn">Load Custom Audio</button>
+          </div>
         </div>
 
 
@@ -160,6 +180,10 @@ class ShadowWarrior {
     document.getElementById('connect-ble').addEventListener('click', () => this.connectBLE());
     document.getElementById('load-audio').addEventListener('click', () => this.loadAudio());
     document.getElementById('request-permission').addEventListener('click', () => this.requestMotionPermission());
+    
+    // Track selection controls
+    document.getElementById('load-track').addEventListener('click', () => this.loadSelectedTrack());
+    document.getElementById('random-track').addEventListener('click', () => this.loadRandomTrack());
     
     // Audio scale controls
     document.getElementById('audio-minus').addEventListener('click', () => this.adjustAudioScale(-0.5));
@@ -721,7 +745,180 @@ class ShadowWarrior {
       this.audioElement = new Audio(url);
       this.audioElement.loop = true;
       this.audioElement.play();
+      console.log('Custom audio loaded:', file.name);
     }
+  }
+
+  loadSelectedTrack() {
+    const trackSelect = document.getElementById('track-select');
+    const selectedTrackId = trackSelect.value;
+    
+    if (!selectedTrackId) {
+      alert('Please select a track first!');
+      return;
+    }
+    
+    const track = getTrackById(selectedTrackId);
+    if (track) {
+      // Try to use cached track first
+      if (this.loadCachedTrack(selectedTrackId)) {
+        this.updateTrackStatus(track.name);
+        console.log('Loaded cached track:', track.name, 'by', track.artist);
+      } else {
+        // Fallback to loading from URL
+        this.loadTrackFromUrl(track.url, track.name);
+        console.log('Loaded track from URL:', track.name, 'by', track.artist);
+      }
+    }
+  }
+
+  loadRandomTrack() {
+    const randomTrack = getRandomTrack();
+    if (randomTrack) {
+      // Try to use cached track first
+      if (this.loadCachedTrack(randomTrack.id)) {
+        this.updateTrackStatus(randomTrack.name);
+        console.log('Loaded cached random track:', randomTrack.name, 'by', randomTrack.artist);
+      } else {
+        // Fallback to loading from URL
+        this.loadTrackFromUrl(randomTrack.url, randomTrack.name);
+        console.log('Loaded random track from URL:', randomTrack.name, 'by', randomTrack.artist);
+      }
+      
+      // Update the dropdown to show the selected track
+      const trackSelect = document.getElementById('track-select');
+      trackSelect.value = randomTrack.id;
+    }
+  }
+
+  loadTrackFromUrl(url, trackName) {
+    try {
+      // Stop current audio if playing
+      if (this.audioElement) {
+        this.audioElement.pause();
+        this.audioElement = null;
+      }
+      
+      // Create new audio element
+      this.audioElement = new Audio(url);
+      this.audioElement.loop = true;
+      
+      // Add event listeners
+      this.audioElement.addEventListener('canplaythrough', () => {
+        console.log('Track ready to play:', trackName);
+        this.audioElement.play().catch(e => {
+          console.error('Error playing track:', e);
+          alert('Error playing track. Please try again.');
+        });
+      });
+      
+      this.audioElement.addEventListener('error', (e) => {
+        console.error('Error loading track:', e);
+        alert('Error loading track. Please check your connection and try again.');
+      });
+      
+      // Update status
+      this.updateTrackStatus(trackName);
+      
+    } catch (error) {
+      console.error('Error creating audio element:', error);
+      alert('Error loading track. Please try again.');
+    }
+  }
+
+  updateTrackStatus(trackName) {
+    // Update the status display to show current track
+    const statusElement = document.getElementById('mic-status');
+    if (statusElement && trackName) {
+      statusElement.textContent = `Playing: ${trackName}`;
+      statusElement.style.color = '#4ecdc4';
+    }
+  }
+
+  preloadDefaultTrack() {
+    const defaultTrack = getTrackById(this.defaultTrackId);
+    if (defaultTrack) {
+      console.log('Preloading default track:', defaultTrack.name);
+      this.updateTrackStatusIndicator('Preloading default track...');
+      
+      this.cacheTrack(defaultTrack)
+        .then(() => {
+          this.updateTrackStatusIndicator(`Default track ready: ${defaultTrack.name}`);
+          console.log('Default track preloaded successfully');
+          
+          // Set the default track as selected in the dropdown
+          setTimeout(() => {
+            const trackSelect = document.getElementById('track-select');
+            if (trackSelect) {
+              trackSelect.value = this.defaultTrackId;
+            }
+          }, 100);
+        })
+        .catch((error) => {
+          this.updateTrackStatusIndicator('Error preloading default track');
+          console.error('Failed to preload default track:', error);
+        });
+    }
+  }
+
+  updateTrackStatusIndicator(message) {
+    const statusElement = document.getElementById('track-status');
+    if (statusElement) {
+      statusElement.textContent = message;
+    }
+  }
+
+  cacheTrack(track) {
+    return new Promise((resolve, reject) => {
+      if (this.cachedTracks.has(track.id)) {
+        console.log('Track already cached:', track.name);
+        resolve(this.cachedTracks.get(track.id));
+        return;
+      }
+
+      console.log('Caching track:', track.name);
+      const audio = new Audio();
+      audio.crossOrigin = 'anonymous';
+      
+      audio.addEventListener('canplaythrough', () => {
+        console.log('Track cached successfully:', track.name);
+        this.cachedTracks.set(track.id, audio);
+        resolve(audio);
+      });
+      
+      audio.addEventListener('error', (e) => {
+        console.error('Error caching track:', track.name, e);
+        reject(e);
+      });
+      
+      // Start loading the track
+      audio.src = track.url;
+      audio.load();
+    });
+  }
+
+  loadCachedTrack(trackId) {
+    const cachedAudio = this.cachedTracks.get(trackId);
+    if (cachedAudio) {
+      // Stop current audio if playing
+      if (this.audioElement) {
+        this.audioElement.pause();
+        this.audioElement = null;
+      }
+      
+      // Clone the cached audio to avoid conflicts
+      this.audioElement = cachedAudio.cloneNode();
+      this.audioElement.loop = true;
+      
+      // Play the cached track
+      this.audioElement.play().catch(e => {
+        console.error('Error playing cached track:', e);
+        alert('Error playing track. Please try again.');
+      });
+      
+      return true;
+    }
+    return false;
   }
 }
 
