@@ -639,9 +639,13 @@ class ShadowWarrior {
       document.getElementById('audio-level').textContent = this.audioLevel.toFixed(2);
       document.getElementById('combined-energy').textContent = combinedEnergy.toFixed(2);
 
-      // Update audio volume with NaN protection
+      // Update audio volume with NaN protection and base volume
       if (this.audioElement && !isNaN(combinedEnergy) && isFinite(combinedEnergy)) {
-        this.audioElement.volume = Math.max(0, Math.min(1, combinedEnergy));
+        // Base volume of 0.3 + energy boost (0.7 max boost)
+        const baseVolume = 0.3;
+        const energyBoost = combinedEnergy * 0.7;
+        const finalVolume = Math.max(0, Math.min(1, baseVolume + energyBoost));
+        this.audioElement.volume = finalVolume;
       }
 
       // Update loudness meters
