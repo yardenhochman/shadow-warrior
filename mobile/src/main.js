@@ -23,12 +23,8 @@ class ShadowWarrior {
     };
     this.maxDataPoints = 100;
     
-    // Loudness curve settings
-    this.loudnessCurve = {
-      sensitivity: 1.0,  // Multiplier for sensitivity
-      threshold: 0.01,   // Minimum threshold
-      maxLevel: 1.0      // Maximum level
-    };
+    // Audio scaling settings
+    this.audioScale = 3.0;  // Multiplier to scale audio level
     
     this.init();
   }
@@ -42,34 +38,52 @@ class ShadowWarrior {
     document.querySelector('#app').innerHTML = `
       <div class="container">
         <h1>🥋 Shadow Warrior</h1>
-        <div class="status-panel">
-          <div class="status-item">
-            <label>Accelerometer:</label>
-            <span id="accel-status">Not started</span>
-          </div>
-          <div class="status-item">
-            <label>Microphone:</label>
-            <span id="mic-status">Not started</span>
-          </div>
-          <div class="status-item">
-            <label>BLE:</label>
-            <span id="ble-status">Not connected</span>
-          </div>
+        <div class="status-table">
+          <h3>System Status</h3>
+          <table>
+            <tbody>
+              <tr>
+                <th>Microphone</th>
+                <td id="mic-status">Not started</td>
+              </tr>
+              <tr>
+                <th>BLE</th>
+                <td id="ble-status">Not connected</td>
+              </tr>
+              <tr>
+                <th>Audio Level</th>
+                <td id="audio-level">0.00</td>
+              </tr>
+              <tr>
+                <th>Combined Energy</th>
+                <td id="combined-energy">0.00</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
-        
-        <div class="data-panel">
-          <div class="data-item">
-            <label>Accelerometer Energy:</label>
-            <div class="value" id="accel-energy">0.00</div>
-          </div>
-          <div class="data-item">
-            <label>Audio Level:</label>
-            <div class="value" id="audio-level">0.00</div>
-          </div>
-          <div class="data-item">
-            <label>Combined Energy:</label>
-            <div class="value" id="combined-energy">0.00</div>
-          </div>
+
+        <div class="accelerometer-table">
+          <h3>Accelerometer Data</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Status</th>
+                <th>X</th>
+                <th>Y</th>
+                <th>Z</th>
+                <th>Energy</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td id="accel-status">Not started</td>
+                <td id="accel-x-value">0.00</td>
+                <td id="accel-y-value">0.00</td>
+                <td id="accel-z-value">0.00</td>
+                <td id="accel-energy">0.00</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
 
         <div class="controls">
@@ -84,10 +98,6 @@ class ShadowWarrior {
           <button id="load-audio" class="btn">Load Audio</button>
         </div>
 
-        <div class="led-preview">
-          <h3>LED Matrix Preview</h3>
-          <div id="led-grid"></div>
-        </div>
 
         <div class="loudness-meter">
           <h3>Loudness Meter</h3>
@@ -107,21 +117,13 @@ class ShadowWarrior {
               <span>1.0</span>
             </div>
           </div>
-          <div class="loudness-controls">
+          <div class="audio-controls">
             <div class="control-group">
-              <label>Sensitivity:</label>
+              <label>Audio Scale:</label>
               <div class="control-buttons">
-                <button id="sens-minus" class="btn-small">-</button>
-                <span id="sens-value">1.0</span>
-                <button id="sens-plus" class="btn-small">+</button>
-              </div>
-            </div>
-            <div class="control-group">
-              <label>Threshold:</label>
-              <div class="control-buttons">
-                <button id="thresh-minus" class="btn-small">-</button>
-                <span id="thresh-value">0.01</span>
-                <button id="thresh-plus" class="btn-small">+</button>
+                <button id="audio-minus" class="btn-small">-</button>
+                <span id="audio-scale-value">3.0</span>
+                <button id="audio-plus" class="btn-small">+</button>
               </div>
             </div>
           </div>
@@ -130,6 +132,10 @@ class ShadowWarrior {
         <div class="debug-graphs">
           <h3>Debug Graphs</h3>
           <div class="graph-container">
+            <div class="graph">
+              <h4>Audio Level</h4>
+              <canvas id="audio-graph" width="300" height="100"></canvas>
+            </div>
             <div class="graph">
               <h4>Accelerometer X</h4>
               <canvas id="accel-x-graph" width="300" height="100"></canvas>
@@ -141,10 +147,6 @@ class ShadowWarrior {
             <div class="graph">
               <h4>Accelerometer Z</h4>
               <canvas id="accel-z-graph" width="300" height="100"></canvas>
-            </div>
-            <div class="graph">
-              <h4>Audio Level</h4>
-              <canvas id="audio-graph" width="300" height="100"></canvas>
             </div>
           </div>
         </div>
@@ -159,11 +161,9 @@ class ShadowWarrior {
     document.getElementById('load-audio').addEventListener('click', () => this.loadAudio());
     document.getElementById('request-permission').addEventListener('click', () => this.requestMotionPermission());
     
-    // Loudness curve controls
-    document.getElementById('sens-minus').addEventListener('click', () => this.adjustSensitivity(-0.1));
-    document.getElementById('sens-plus').addEventListener('click', () => this.adjustSensitivity(0.1));
-    document.getElementById('thresh-minus').addEventListener('click', () => this.adjustThreshold(-0.005));
-    document.getElementById('thresh-plus').addEventListener('click', () => this.adjustThreshold(0.005));
+    // Audio scale controls
+    document.getElementById('audio-minus').addEventListener('click', () => this.adjustAudioScale(-0.5));
+    document.getElementById('audio-plus').addEventListener('click', () => this.adjustAudioScale(0.5));
     
     // Check if we need to show permission button for iOS
     this.checkPermissionRequirements();
@@ -195,16 +195,46 @@ class ShadowWarrior {
     }
   }
 
-  adjustSensitivity(delta) {
-    this.loudnessCurve.sensitivity = Math.max(0.1, Math.min(3.0, this.loudnessCurve.sensitivity + delta));
-    document.getElementById('sens-value').textContent = this.loudnessCurve.sensitivity.toFixed(1);
-    console.log('Sensitivity adjusted to:', this.loudnessCurve.sensitivity);
+  adjustAudioScale(delta) {
+    this.audioScale = Math.max(0.5, Math.min(10.0, this.audioScale + delta));
+    document.getElementById('audio-scale-value').textContent = this.audioScale.toFixed(1);
+    console.log('Audio scale adjusted to:', this.audioScale);
   }
 
-  adjustThreshold(delta) {
-    this.loudnessCurve.threshold = Math.max(0.001, Math.min(0.1, this.loudnessCurve.threshold + delta));
-    document.getElementById('thresh-value').textContent = this.loudnessCurve.threshold.toFixed(3);
-    console.log('Threshold adjusted to:', this.loudnessCurve.threshold);
+  enableTestMode() {
+    // Simulate accelerometer data for desktop testing
+    this.testMode = true;
+    console.log('Test mode enabled - simulating accelerometer data');
+    
+    // Add test controls
+    const testControls = `
+      <div class="test-mode">
+        <h4>Test Mode (Desktop)</h4>
+        <p>Simulating accelerometer data for testing</p>
+        <button id="simulate-motion" class="btn">Simulate Motion</button>
+      </div>
+    `;
+    
+    const existingTest = document.querySelector('.test-mode');
+    if (!existingTest) {
+      document.querySelector('.controls').insertAdjacentHTML('afterend', testControls);
+      document.getElementById('simulate-motion').addEventListener('click', () => {
+        this.simulateMotion();
+      });
+    }
+  }
+
+  simulateMotion() {
+    if (!this.testMode) return;
+    
+    // Simulate random motion
+    this.accelerometerData = {
+      x: (Math.random() - 0.5) * 20,
+      y: (Math.random() - 0.5) * 20,
+      z: (Math.random() - 0.5) * 20
+    };
+    
+    console.log('Simulated motion:', this.accelerometerData);
   }
 
   async startTraining() {
@@ -267,14 +297,13 @@ class ShadowWarrior {
         const sensor = new Accelerometer({ frequency: 60 });
         console.log('Accelerometer sensor created:', sensor);
         
-        sensor.addEventListener('reading', () => {
-          this.accelerometerData = {
-            x: sensor.x || 0,
-            y: sensor.y || 0,
-            z: sensor.z || 0
-          };
-          console.log('Accelerometer reading:', this.accelerometerData);
-        });
+      sensor.addEventListener('reading', () => {
+        this.accelerometerData = {
+          x: sensor.x || 0,
+          y: sensor.y || 0,
+          z: sensor.z || 0
+        };
+      });
 
         sensor.addEventListener('error', (event) => {
           console.error('Accelerometer error:', event.error);
@@ -313,7 +342,6 @@ class ShadowWarrior {
               y: event.acceleration.y || 0,
               z: event.acceleration.z || 0
             };
-            console.log('DeviceMotion reading:', this.accelerometerData);
           }
         };
         
@@ -330,33 +358,53 @@ class ShadowWarrior {
     }
     
     // If both fail
-    document.getElementById('accel-status').textContent = 'Not supported';
-    console.error('No accelerometer API available');
+    const isDesktop = !/Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    if (isDesktop) {
+      document.getElementById('accel-status').textContent = 'Desktop - no accelerometer';
+      console.log('Running on desktop - accelerometer not available');
+      this.enableTestMode();
+    } else {
+      document.getElementById('accel-status').textContent = 'Not supported';
+      console.error('No accelerometer API available');
+    }
   }
 
   async startMicrophone() {
     try {
+      console.log('Starting microphone...');
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      console.log('Microphone stream obtained:', stream);
+      
       this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      console.log('Audio context created:', this.audioContext.state);
+      
+      // Resume audio context if suspended (required for iOS)
+      if (this.audioContext.state === 'suspended') {
+        await this.audioContext.resume();
+        console.log('Audio context resumed');
+      }
+      
       this.analyser = this.audioContext.createAnalyser();
       this.microphone = this.audioContext.createMediaStreamSource(stream);
       
       this.analyser.fftSize = 256;
+      this.analyser.smoothingTimeConstant = 0.8;
       this.microphone.connect(this.analyser);
       
+      console.log('Microphone connected to analyser');
       document.getElementById('mic-status').textContent = 'Active';
     } catch (error) {
+      console.error('Microphone error:', error);
       document.getElementById('mic-status').textContent = 'Error: ' + error.message;
     }
   }
 
   startDataProcessing() {
+    let lastAccelData = { x: 0, y: 0, z: 0 };
+    let lastAudioLevel = 0;
+    
     const processData = () => {
       if (!this.isRunning) return;
-
-      // Debug logging
-      console.log('Accelerometer data:', this.accelerometerData);
-      console.log('Audio level:', this.audioLevel);
 
       // Store data for graphs
       this.addGraphData('accelX', this.accelerometerData.x);
@@ -371,25 +419,38 @@ class ShadowWarrior {
         this.accelerometerData.z ** 2
       );
 
-      // Calculate audio level with logarithmic scaling
+      // Calculate audio level
       if (this.analyser) {
         const dataArray = new Uint8Array(this.analyser.frequencyBinCount);
         this.analyser.getByteFrequencyData(dataArray);
-        
-        // Calculate RMS (Root Mean Square) for better audio level representation
-        const sum = dataArray.reduce((sum, value) => sum + (value * value), 0);
-        const rms = Math.sqrt(sum / dataArray.length) / 255;
-        
-        // Apply logarithmic scaling and loudness curve
-        const logLevel = Math.log10(Math.max(this.loudnessCurve.threshold, rms * this.loudnessCurve.sensitivity));
-        const maxLog = Math.log10(this.loudnessCurve.maxLevel);
-        this.audioLevel = Math.min(1, Math.max(0, logLevel / maxLog));
+        const rawLevel = dataArray.reduce((sum, value) => sum + value, 0) / dataArray.length / 255;
+        this.audioLevel = Math.min(1, rawLevel * this.audioScale);
       }
 
       // Combined energy (normalized 0-1)
       const combinedEnergy = Math.min(1, (accelEnergy / 20) + this.audioLevel);
 
+      // Log only on significant changes
+      const accelChanged = Math.abs(this.accelerometerData.x - lastAccelData.x) > 0.1 ||
+                          Math.abs(this.accelerometerData.y - lastAccelData.y) > 0.1 ||
+                          Math.abs(this.accelerometerData.z - lastAccelData.z) > 0.1;
+      
+      const audioChanged = Math.abs(this.audioLevel - lastAudioLevel) > 0.05;
+      
+      if (accelChanged) {
+        console.log('Accelerometer data changed:', this.accelerometerData);
+        lastAccelData = { ...this.accelerometerData };
+      }
+      
+      if (audioChanged) {
+        console.log('Audio level changed:', this.audioLevel.toFixed(3));
+        lastAudioLevel = this.audioLevel;
+      }
+
       // Update UI
+      document.getElementById('accel-x-value').textContent = this.accelerometerData.x.toFixed(2);
+      document.getElementById('accel-y-value').textContent = this.accelerometerData.y.toFixed(2);
+      document.getElementById('accel-z-value').textContent = this.accelerometerData.z.toFixed(2);
       document.getElementById('accel-energy').textContent = accelEnergy.toFixed(2);
       document.getElementById('audio-level').textContent = this.audioLevel.toFixed(2);
       document.getElementById('combined-energy').textContent = combinedEnergy.toFixed(2);
@@ -398,9 +459,6 @@ class ShadowWarrior {
       if (this.audioElement) {
         this.audioElement.volume = combinedEnergy;
       }
-
-      // Update LED matrix
-      this.updateLEDMatrix(combinedEnergy);
 
       // Update loudness meter
       this.updateLoudnessMeter(this.audioLevel);
