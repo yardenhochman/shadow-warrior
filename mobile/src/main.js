@@ -97,7 +97,7 @@ class ShadowWarrior {
         </div>
 
         <div class="controls">
-          <button id="start-btn" class="btn primary">Start Training</button>
+          <button id="start-btn" class="btn primary">Start Training (Auto Audio)</button>
           <button id="stop-btn" class="btn secondary" disabled>Stop Training</button>
           <button id="connect-ble" class="btn">Connect BLE</button>
           <button id="request-permission" class="btn" style="display: none;">Request Motion Permission</button>
@@ -306,6 +306,11 @@ class ShadowWarrior {
     document.getElementById('start-btn').disabled = true;
     document.getElementById('stop-btn').disabled = false;
 
+    // Auto-start audio if not already playing
+    if (!this.audioElement || this.audioElement.paused) {
+      await this.autoStartAudio();
+    }
+
     await this.startAccelerometer();
     await this.startMicrophone();
     this.startDataProcessing();
@@ -315,6 +320,12 @@ class ShadowWarrior {
     this.isRunning = false;
     document.getElementById('start-btn').disabled = false;
     document.getElementById('stop-btn').disabled = true;
+
+    // Pause audio
+    if (this.audioElement && !this.audioElement.paused) {
+      this.audioElement.pause();
+      console.log('Audio paused');
+    }
 
     // Stop microphone
     if (this.microphone && this.microphone.mediaStream) {
@@ -833,6 +844,33 @@ class ShadowWarrior {
       // Update the dropdown to show the selected track
       const trackSelect = document.getElementById('track-select');
       trackSelect.value = randomTrack.id;
+    }
+  }
+
+  async autoStartAudio() {
+    const trackSelect = document.getElementById('track-select');
+    const selectedTrackId = trackSelect.value;
+    
+    // If no track is selected, load a random one
+    if (!selectedTrackId) {
+      console.log('No track selected, loading random track...');
+      this.loadRandomTrack();
+    } else {
+      // Load the selected track
+      console.log('Loading selected track:', selectedTrackId);
+      this.loadSelectedTrack();
+    }
+    
+    // Wait a moment for the audio to load, then play
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
+    if (this.audioElement) {
+      try {
+        await this.audioElement.play();
+        console.log('Audio auto-started successfully');
+      } catch (error) {
+        console.error('Failed to auto-start audio:', error);
+      }
     }
   }
 
