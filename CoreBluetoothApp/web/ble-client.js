@@ -6,9 +6,15 @@ class BLEPeripheralClient {
         this.characteristic = null;
         this.isConnected = false;
         
+        // Audio properties
+        this.audioContext = null;
+        this.analyser = null;
+        this.microphoneStream = null;
+        this.loudnessInterval = null;
+        
         // BLE Service and Characteristic UUIDs (matching the macOS app)
-        this.serviceUUID = '12345678-1234-1234-1234-123456789abc';
-        this.characteristicUUID = '87654321-4321-4321-4321-cba987654321';
+        this.serviceUUID = '12345678-1234-1234-1234-123456789ABC';
+        this.characteristicUUID = '87654321-4321-4321-4321-CBA987654321';
         
         this.init();
     }
@@ -20,17 +26,24 @@ class BLEPeripheralClient {
     }
     
     setupEventListeners() {
-        document.getElementById('connect-btn').addEventListener('click', () => this.connect());
-        document.getElementById('disconnect-btn').addEventListener('click', () => this.disconnect());
-        document.getElementById('send-btn').addEventListener('click', () => this.sendMessage());
-        document.getElementById('read-characteristic-btn').addEventListener('click', () => this.readCharacteristic());
+        // Only add event listeners for elements that exist
+        const connectBtn = document.getElementById('connect-btn');
+        const disconnectBtn = document.getElementById('disconnect-btn');
+        const startTrainingBtn = document.getElementById('start-training');
+        const stopTrainingBtn = document.getElementById('stop-training');
         
-        // Send message on Enter key
-        document.getElementById('message-input').addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                this.sendMessage();
-            }
-        });
+        if (connectBtn) {
+            connectBtn.addEventListener('click', () => this.connect());
+        }
+        if (disconnectBtn) {
+            disconnectBtn.addEventListener('click', () => this.disconnect());
+        }
+        if (startTrainingBtn) {
+            startTrainingBtn.addEventListener('click', () => this.startTraining());
+        }
+        if (stopTrainingBtn) {
+            stopTrainingBtn.addEventListener('click', () => this.stopTraining());
+        }
     }
     
     checkWebBluetoothSupport() {
@@ -227,6 +240,10 @@ class BLEPeripheralClient {
     onDisconnected() {
         this.log('Device disconnected', 'warning');
         this.isConnected = false;
+        
+        // Stop microphone if running
+        this.stopMicrophone();
+        
         this.device = null;
         this.server = null;
         this.service = null;
@@ -237,27 +254,29 @@ class BLEPeripheralClient {
         this.updateStatus('device-name', '-', 'disconnected');
         this.updateStatus('service-uuid', '-', 'disconnected');
         this.updateStatus('connection-state', '-', 'disconnected');
+        this.updateStatus('sending-status', 'No', 'disconnected');
         
-        document.getElementById('device-info').style.display = 'none';
+        const deviceInfo = document.getElementById('device-info');
+        if (deviceInfo) deviceInfo.style.display = 'none';
         this.showNotification('Device disconnected', 'warning');
     }
     
     updateUI() {
         const connectBtn = document.getElementById('connect-btn');
         const disconnectBtn = document.getElementById('disconnect-btn');
-        const sendBtn = document.getElementById('send-btn');
-        const readBtn = document.getElementById('read-characteristic-btn');
+        const startBtn = document.getElementById('start-training');
+        const stopBtn = document.getElementById('stop-training');
         
         if (this.isConnected) {
-            connectBtn.disabled = true;
-            disconnectBtn.disabled = false;
-            sendBtn.disabled = false;
-            readBtn.disabled = false;
+            if (connectBtn) connectBtn.disabled = true;
+            if (disconnectBtn) disconnectBtn.disabled = false;
+            if (startBtn) startBtn.disabled = false;
+            if (stopBtn) stopBtn.disabled = true;
         } else {
-            connectBtn.disabled = false;
-            disconnectBtn.disabled = true;
-            sendBtn.disabled = true;
-            readBtn.disabled = true;
+            if (connectBtn) connectBtn.disabled = false;
+            if (disconnectBtn) disconnectBtn.disabled = true;
+            if (startBtn) startBtn.disabled = true;
+            if (stopBtn) stopBtn.disabled = true;
         }
     }
     
@@ -308,6 +327,123 @@ class BLEPeripheralClient {
                 notification.remove();
             }
         }, 3000);
+    }
+    
+    startTraining() {
+        if (!this.isConnected) {
+            this.showNotification('Please connect to BLE device first', 'error');
+            return;
+        }
+        
+        this.log('Starting training mode...', 'info');
+        this.updateStatus('sending-status', 'Yes', 'connected');
+        
+        // Enable/disable buttons
+        const startBtn = document.getElementById('start-training');
+        const stopBtn = document.getElementById('stop-training');
+        if (startBtn) startBtn.disabled = true;
+        if (stopBtn) stopBtn.disabled = false;
+        
+        // Start microphone and send loudness data
+        this.startMicrophone();
+    }
+    
+    stopTraining() {
+        this.log('Stopping training mode...', 'info');
+        this.updateStatus('sending-status', 'No', 'disconnected');
+        
+        // Enable/disable buttons
+        const startBtn = document.getElementById('start-training');
+        const stopBtn = document.getElementById('stop-training');
+        if (startBtn) startBtn.disabled = false;
+        if (stopBtn) stopBtn.disabled = true;
+        
+        // Stop microphone
+        this.stopMicrophone();
+    }
+    
+    async startMicrophone() {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            const analyser = audioContext.createAnalyser();
+            const microphone = audioContext.createMediaStreamSource(stream);
+            
+            analyser.fftSize = 256;
+            analyser.smoothingTimeConstant = 0.8;
+            microphone.connect(analyser);
+            
+            this.audioContext = audioContext;
+            this.analyser = analyser;
+            this.microphoneStream = stream;
+            
+            this.log('Microphone started', 'info');
+            this.startLoudnessMonitoring();
+            
+        } catch (error) {
+            this.log('Failed to start microphone: ' + error.message, 'error');
+            this.showNotification('Microphone access denied', 'error');
+        }
+    }
+    
+    stopMicrophone() {
+        if (this.microphoneStream) {
+            this.microphoneStream.getTracks().forEach(track => track.stop());
+            this.microphoneStream = null;
+        }
+        if (this.audioContext) {
+            this.audioContext.close();
+            this.audioContext = null;
+        }
+        if (this.loudnessInterval) {
+            clearInterval(this.loudnessInterval);
+            this.loudnessInterval = null;
+        }
+        
+        this.log('Microphone stopped', 'info');
+    }
+    
+    startLoudnessMonitoring() {
+        this.loudnessInterval = setInterval(() => {
+            if (!this.analyser || !this.isConnected) return;
+            
+            const dataArray = new Uint8Array(this.analyser.frequencyBinCount);
+            this.analyser.getByteFrequencyData(dataArray);
+            
+            // Calculate loudness level
+            const sum = dataArray.reduce((acc, value) => acc + value, 0);
+            const loudness = (sum / dataArray.length) / 255;
+            
+            // Update UI
+            this.updateLoudnessMeter(loudness);
+            
+            // Send to BLE device
+            this.sendLoudnessLevel(loudness);
+            
+        }, 100); // Update every 100ms
+    }
+    
+    updateLoudnessMeter(level) {
+        const micLevelDisplay = document.getElementById('mic-level-display');
+        const micMeterFill = document.getElementById('mic-meter-fill');
+        const combinedLevelDisplay = document.getElementById('combined-level-display');
+        const combinedMeterFill = document.getElementById('combined-meter-fill');
+        
+        if (micLevelDisplay) {
+            micLevelDisplay.textContent = level.toFixed(2);
+        }
+        if (micMeterFill) {
+            micMeterFill.style.width = `${Math.min(100, level * 100)}%`;
+        }
+        if (combinedLevelDisplay) {
+            combinedLevelDisplay.textContent = level.toFixed(2);
+        }
+        if (combinedMeterFill) {
+            combinedMeterFill.style.width = `${Math.min(100, level * 100)}%`;
+        }
+        
+        // Update audio level status
+        this.updateStatus('audio-level', level.toFixed(2), 'connected');
     }
 }
 

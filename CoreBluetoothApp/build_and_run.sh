@@ -45,8 +45,8 @@ fi
 echo ""
 echo "🎯 Opening built app..."
 
-# Open the built app
-open build/Debug/CoreBluetoothApp.app
+# Open the built app (using DerivedData path)
+open "/Users/ishay/Library/Developer/Xcode/DerivedData/CoreBluetoothApp-dlfntcybyqgrfmeflvbmldznaeio/Build/Products/Debug/CoreBluetoothApp.app"
 
 echo "✅ macOS app launched"
 echo ""

@@ -1,6 +1,28 @@
 {
   "rules": {
     ".read": true,
-    ".write": false
+    ".write": false,
+    "mobile_logs": {
+      "$user_id": {
+        ".read": "auth != null && auth.uid == $user_id",
+        ".write": "auth != null && auth.uid == $user_id",
+        "$session_id": {
+          ".read": "auth != null && auth.uid == $user_id",
+          ".write": "auth != null && auth.uid == $user_id",
+          "errors": {
+            "$event_key": {
+              ".read": "auth != null && auth.uid == $user_id",
+              ".write": "auth != null && auth.uid == $user_id"
+            }
+          },
+          "events": {
+            "$event_key": {
+              ".read": "auth != null && auth.uid == $user_id",
+              ".write": "auth != null && auth.uid == $user_id"
+            }
+          }
+        }
+      }
+    }
   }
 }

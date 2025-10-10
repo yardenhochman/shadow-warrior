@@ -14,6 +14,9 @@
     "deploy:hosting": "firebase deploy --only hosting",
     "deploy:database": "firebase deploy --only database"
   },
+  "dependencies": {
+    "firebase": "^10.12.2"
+  },
   "devDependencies": {
     "vite": "^6.3.5"
   }

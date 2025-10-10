@@ -1,5 +1,6 @@
 import './style.css'
 import { KNOWN_TRACKS, getTrackById, getTracksByEnergy, getRandomTrack, getTrackStats } from './tracks.js'
+import firebaseManager from './firebase.js'
 
 class ShadowWarrior {
   constructor() {
@@ -46,11 +47,35 @@ class ShadowWarrior {
     this.init();
   }
 
+  async initFirebase() {
+    try {
+      await firebaseManager.initialize();
+      console.log('Firebase initialized successfully');
+      await firebaseManager.logEvent('app_started', { 
+        timestamp: new Date().toISOString(),
+        userAgent: navigator.userAgent 
+      });
+    } catch (error) {
+      console.error('Firebase initialization failed:', error);
+      // Don't throw here, just log the error
+    }
+  }
+
+  async logError(error, context = '') {
+    console.error('Error:', error, 'Context:', context);
+    await firebaseManager.logError(error, context);
+  }
+
+  async logEvent(eventType, data = {}) {
+    await firebaseManager.logEvent(eventType, data);
+  }
+
   init() {
     this.createUI();
     this.setupEventListeners();
     this.preloadDefaultTrack();
     this.refreshAudioDevices();
+    this.initFirebase();
   }
 
   createUI() {
@@ -315,6 +340,7 @@ class ShadowWarrior {
       console.error('Microphone permission denied:', error);
       document.getElementById('mic-status').textContent = 'Permission denied';
       alert('Microphone permission denied. Please allow microphone access to use this feature.');
+      this.logError(error, 'microphone_permission_request');
     }
   }
 
@@ -337,6 +363,7 @@ class ShadowWarrior {
       console.error('Permission request error:', error);
       document.getElementById('accel-status').textContent = 'Permission error: ' + error.message;
       alert('Error requesting accelerometer permission: ' + error.message);
+      this.logError(error, 'motion_permission_request');
     }
   }
 
@@ -350,6 +377,7 @@ class ShadowWarrior {
       return true;
     } catch (error) {
       console.log('Microphone permission denied or not available:', error.message);
+      this.logError(error, 'microphone_permission_check');
       return false;
     }
   }
@@ -383,6 +411,7 @@ class ShadowWarrior {
       return false;
     } catch (error) {
       console.log('Accelerometer permission check failed:', error.message);
+      this.logError(error, 'accelerometer_permission_check');
       return false;
     }
   }
@@ -631,6 +660,7 @@ class ShadowWarrior {
         sensor.addEventListener('error', (event) => {
           console.error('Accelerometer error:', event.error);
           document.getElementById('accel-status').textContent = 'Error: ' + event.error.message;
+          this.logError(event.error, 'accelerometer_sensor_error');
           
           // If accelerometer fails, enable test mode for desktop testing
           const isDesktop = !/Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
@@ -647,6 +677,7 @@ class ShadowWarrior {
         return;
       } catch (error) {
         console.error('Accelerometer start error:', error);
+        this.logError(error, 'accelerometer_start_error');
         // Fall through to DeviceMotionEvent
       }
     }
@@ -685,6 +716,7 @@ class ShadowWarrior {
       } catch (error) {
         console.error('DeviceMotionEvent error:', error);
         document.getElementById('accel-status').textContent = 'Error: ' + error.message;
+        this.logError(error, 'devicemotion_event_error');
         
         // If DeviceMotionEvent fails, enable test mode for desktop testing
         const isDesktop = !/Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
@@ -744,6 +776,7 @@ class ShadowWarrior {
     } catch (error) {
       console.error('Microphone error:', error);
       document.getElementById('mic-status').textContent = 'Error: ' + error.message;
+      this.logError(error, 'microphone_start_error');
     }
   }
 
@@ -810,6 +843,7 @@ class ShadowWarrior {
         } catch (error) {
           console.error('Audio processing error:', error);
           this.audioLevel = this.audioMinLevel;
+          this.logError(error, 'audio_processing_error');
         }
       }
 
@@ -1071,27 +1105,33 @@ class ShadowWarrior {
     console.log('Attempting BLE connection...');
     console.log('Web Bluetooth available:', 'bluetooth' in navigator);
     
-    // Check if Web Bluetooth is supported (Android Chrome)
+    // Check if Web Bluetooth is supported (Android Chrome or Bluefy on iOS)
     if ('bluetooth' in navigator) {
       try {
         console.log('Using Web Bluetooth API');
         this.bleDevice = await navigator.bluetooth.requestDevice({
-          filters: [{ namePrefix: 'Shadow Warrior' }],
-          optionalServices: ['12345678-1234-1234-1234-123456789abc']
+          filters: [{ namePrefix: 'ShadowWarrior-BLE' }],
+          optionalServices: ['12345678-1234-1234-1234-123456789ABC']
         });
 
         this.bleService = await this.bleDevice.gatt.connect();
-        this.bleCharacteristic = await this.bleService.getCharacteristic('12345678-1234-1234-1234-123456789abd');
+        this.bleCharacteristic = await this.bleService.getCharacteristic('87654321-4321-4321-4321-CBA987654321');
         
         document.getElementById('ble-status').textContent = 'Connected (Web Bluetooth)';
         console.log('Web Bluetooth connected successfully');
+        
+        // Show success notification
+        this.showNotification('BLE Connected! Ready to send audio levels.', 'success');
+        
       } catch (error) {
         console.error('Web Bluetooth error:', error);
         document.getElementById('ble-status').textContent = 'Error: ' + error.message;
+        this.showNotification('BLE Connection Failed: ' + error.message, 'error');
+        this.logError(error, 'web_bluetooth_connection_error');
       }
     } else {
-      // iOS/Safari fallback - show instructions or use alternative method
-      console.log('Web Bluetooth not supported, using iOS fallback');
+      // iOS/Safari fallback - show instructions for Bluefy
+      console.log('Web Bluetooth not supported, showing Bluefy instructions');
       this.showIOSBLEInstructions();
     }
   }
@@ -1105,40 +1145,41 @@ class ShadowWarrior {
       // Show iOS-specific instructions with Bluefy recommendation
       const instructions = `
         <div class="ios-ble-instructions">
-          <h4>iOS Limitations</h4>
-          <p>iOS browsers have limited Web API support:</p>
-          <div class="limitation-list">
-            <div class="limitation-item">
-              <span class="limitation-icon">❌</span>
-              <span>No Web Bluetooth in Safari/Chrome</span>
+          <h4>📱 iOS BLE Setup Instructions</h4>
+          <div class="setup-steps">
+            <div class="step">
+              <span class="step-number">1</span>
+              <div class="step-content">
+                <h5>Download Bluefy Browser</h5>
+                <p>Free browser with Web Bluetooth support for iOS</p>
+                <a href="https://apps.apple.com/app/bluefy/id1492822056" target="_blank" class="btn">Download Bluefy</a>
+              </div>
             </div>
-            <div class="limitation-item">
-              <span class="limitation-icon">❌</span>
-              <span>No accelerometer access in any iOS browser</span>
+            <div class="step">
+              <span class="step-number">2</span>
+              <div class="step-content">
+                <h5>Open This App in Bluefy</h5>
+                <p>Copy this URL and open it in Bluefy browser:</p>
+                <div class="url-copy">
+                  <input type="text" id="app-url" value="${window.location.href}" readonly>
+                  <button id="copy-url" class="btn-small">Copy</button>
+                </div>
+              </div>
             </div>
-            <div class="limitation-item">
-              <span class="limitation-icon">❌</span>
-              <span>No microphone access in any iOS browser</span>
+            <div class="step">
+              <span class="step-number">3</span>
+              <div class="step-content">
+                <h5>Connect to macOS BLE Device</h5>
+                <p>Make sure your macOS BLE Loudness Meter is running and advertising, then click "Connect BLE" in Bluefy</p>
+              </div>
             </div>
           </div>
-          <div class="ble-browser-options">
-            <div class="browser-option">
-              <h5>📱 Bluefy Browser (BLE Only)</h5>
-              <p>Free browser with Web Bluetooth support<br><small>⚠️ Still no accelerometer/microphone</small></p>
-              <a href="https://apps.apple.com/app/bluefy/id1492822056" target="_blank" class="btn">Download Bluefy</a>
-            </div>
-            <div class="browser-option">
-              <h5>💼 WebBLE Browser (BLE Only)</h5>
-              <p>Paid browser ($2.29) with Web Bluetooth support<br><small>⚠️ Still no accelerometer/microphone</small></p>
-              <a href="https://apps.apple.com/app/webble/id1193531073" target="_blank" class="btn">Download WebBLE</a>
-            </div>
-          </div>
-          <div class="ios-recommendation">
-            <h5>🎯 For Full Functionality on iOS:</h5>
-            <p>Consider developing a native iOS app for complete access to accelerometer, microphone, and BLE.</p>
+          <div class="limitation-note">
+            <h5>⚠️ iOS Limitations</h5>
+            <p>iOS browsers cannot access accelerometer or microphone. This app will work with BLE connection only.</p>
           </div>
           <div class="connection-options">
-            <button id="connect-websocket" class="btn primary">Connect via WebSocket (Recommended)</button>
+            <button id="connect-websocket" class="btn primary">Connect via WebSocket (Alternative)</button>
             <button id="simulate-ble" class="btn">Simulate BLE Connection</button>
           </div>
         </div>
@@ -1155,6 +1196,12 @@ class ShadowWarrior {
         });
         document.getElementById('connect-websocket').addEventListener('click', () => {
           this.connectWebSocket();
+        });
+        document.getElementById('copy-url').addEventListener('click', () => {
+          const urlInput = document.getElementById('app-url');
+          urlInput.select();
+          document.execCommand('copy');
+          this.showNotification('URL copied to clipboard!', 'success');
         });
       }
     } else {
@@ -1240,6 +1287,7 @@ class ShadowWarrior {
         document.getElementById('ble-status').textContent = 'WebSocket connection failed ❌';
         document.getElementById('ble-status').style.color = '#ff6b6b';
         this.showNotification('WebSocket connection failed', 'error');
+        this.logError(error, 'websocket_connection_error');
       };
       
       this.websocket.onclose = (event) => {
@@ -1254,6 +1302,7 @@ class ShadowWarrior {
       document.getElementById('ble-status').textContent = 'WebSocket error: ' + error.message;
       document.getElementById('ble-status').style.color = '#ff6b6b';
       this.showNotification('WebSocket error: ' + error.message, 'error');
+      this.logError(error, 'websocket_connection_setup_error');
     }
   }
 
@@ -1318,6 +1367,7 @@ class ShadowWarrior {
       await this.bleCharacteristic.writeValue(command);
     } catch (error) {
       console.error('BLE write error:', error);
+      this.logError(error, 'ble_write_error');
     }
   }
 
@@ -1430,6 +1480,7 @@ class ShadowWarrior {
       this.audioElement.addEventListener('error', (e) => {
         console.error('Error loading track:', e);
         alert('Error loading track. Please check your connection and try again.');
+        this.logError(e, 'audio_track_loading_error');
       });
       
       // Update status
@@ -1438,6 +1489,7 @@ class ShadowWarrior {
     } catch (error) {
       console.error('Error creating audio element:', error);
       alert('Error loading track. Please try again.');
+      this.logError(error, 'audio_element_creation_error');
     }
   }
 
@@ -1472,6 +1524,7 @@ class ShadowWarrior {
         .catch((error) => {
           this.updateTrackStatusIndicator('Error preloading default track');
           console.error('Failed to preload default track:', error);
+          this.logError(error, 'default_track_preload_error');
         });
     }
   }
@@ -1503,6 +1556,7 @@ class ShadowWarrior {
       
       audio.addEventListener('error', (e) => {
         console.error('Error caching track:', track.name, e);
+        this.logError(e, 'track_caching_error');
         reject(e);
       });
       
@@ -1532,6 +1586,7 @@ class ShadowWarrior {
       this.audioElement.play().catch(e => {
         console.error('Error playing cached track:', e);
         alert('Error playing track. Please try again.');
+        this.logError(e, 'cached_track_play_error');
       });
       
       return true;
@@ -1586,6 +1641,7 @@ class ShadowWarrior {
       
     } catch (error) {
       console.error('Error refreshing audio devices:', error);
+      this.logError(error, 'audio_device_refresh_error');
     }
   }
 
@@ -1620,6 +1676,7 @@ class ShadowWarrior {
     } catch (error) {
       console.error('Error selecting microphone device:', error);
       alert('Failed to select microphone device. Please try again.');
+      this.logError(error, 'microphone_device_selection_error');
     }
   }
 
@@ -1641,6 +1698,7 @@ class ShadowWarrior {
     } catch (error) {
       console.error('Error selecting speaker device:', error);
       alert('Failed to select speaker device. Please try again.');
+      this.logError(error, 'speaker_device_selection_error');
     }
   }
 
@@ -1654,6 +1712,7 @@ class ShadowWarrior {
         console.log('Applied preselected speaker device:', selectedSpeakerId);
       } catch (error) {
         console.warn('Failed to apply preselected speaker device:', error);
+        this.logError(error, 'preselected_speaker_device_error');
       }
     }
   }
