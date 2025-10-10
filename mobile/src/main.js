@@ -315,28 +315,57 @@ class ShadowWarrior {
   }
 
   applyEnergySmoothing(rawValue, currentSmoothed, isIncreasing) {
-    // Fast attack when going up (0.9*state + 0.1*input)
-    // Slow release when going down (0.99*state + 0.01*input)
-    const attackFactor = isIncreasing ? 0.1 : 0.01;
-    const stateFactor = isIncreasing ? 0.9 : 0.99;
+    // Fast attack when going up (0.8*state + 0.2*input)
+    // Slow release when going down (0.95*state + 0.05*input)
+    const attackFactor = isIncreasing ? 0.2 : 0.05;
+    const stateFactor = isIncreasing ? 0.8 : 0.95;
     
     return stateFactor * currentSmoothed + attackFactor * rawValue;
   }
 
   simulateZMove() {
-    // Simulate a strong Z-axis movement for testing
+    // Simulate a realistic Z-axis movement for testing with gradual attack and release
     const originalZ = this.accelerometerData.z;
+    const targetZ = 20.0; // Strong upward movement
+    const duration = 1000; // 1 second total duration
+    const steps = 20; // Number of steps for smooth animation
+    const stepDuration = duration / steps;
     
-    // Create a strong Z movement
-    this.accelerometerData.z = 15.0; // Strong upward movement
+    console.log('Simulated Z move - Starting gradual movement from', originalZ.toFixed(2), 'to', targetZ.toFixed(2));
     
-    console.log('Simulated Z move - Z changed from', originalZ.toFixed(2), 'to', this.accelerometerData.z.toFixed(2));
+    let currentStep = 0;
     
-    // Reset after a short delay to simulate the movement ending
-    setTimeout(() => {
-      this.accelerometerData.z = originalZ;
-      console.log('Z move simulation ended - Z reset to', this.accelerometerData.z.toFixed(2));
-    }, 500);
+    const animateZ = () => {
+      if (currentStep <= steps) {
+        // Calculate position in the animation (0 to 1)
+        const progress = currentStep / steps;
+        
+        // Create a smooth curve: fast attack, slow release
+        let zValue;
+        if (progress <= 0.3) {
+          // Fast attack phase (0-30% of animation)
+          const attackProgress = progress / 0.3;
+          zValue = originalZ + (targetZ - originalZ) * attackProgress;
+        } else {
+          // Slow release phase (30-100% of animation)
+          const releaseProgress = (progress - 0.3) / 0.7;
+          // Use exponential decay for smooth release
+          const decayFactor = Math.pow(1 - releaseProgress, 2);
+          zValue = originalZ + (targetZ - originalZ) * decayFactor;
+        }
+        
+        this.accelerometerData.z = zValue;
+        currentStep++;
+        
+        setTimeout(animateZ, stepDuration);
+      } else {
+        // Ensure we end at the original value
+        this.accelerometerData.z = originalZ;
+        console.log('Z move simulation ended - Z reset to', this.accelerometerData.z.toFixed(2));
+      }
+    };
+    
+    animateZ();
   }
 
   enableTestMode() {
@@ -385,8 +414,21 @@ class ShadowWarrior {
       await this.autoStartAudio();
     }
 
-    await this.startAccelerometer();
-    await this.startMicrophone();
+    // Start accelerometer (may fail on desktop, but that's OK)
+    try {
+      await this.startAccelerometer();
+    } catch (error) {
+      console.log('Accelerometer failed to start, continuing with test mode');
+    }
+
+    // Start microphone (may fail, but that's OK)
+    try {
+      await this.startMicrophone();
+    } catch (error) {
+      console.log('Microphone failed to start, continuing without audio input');
+    }
+
+    // Always start data processing loop, regardless of sensor success
     this.startDataProcessing();
   }
 
@@ -457,6 +499,14 @@ class ShadowWarrior {
         sensor.addEventListener('error', (event) => {
           console.error('Accelerometer error:', event.error);
           document.getElementById('accel-status').textContent = 'Error: ' + event.error.message;
+          
+          // If accelerometer fails, enable test mode for desktop testing
+          const isDesktop = !/Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+          if (isDesktop) {
+            console.log('Accelerometer failed on desktop, enabling test mode');
+            this.enableTestMode();
+            document.getElementById('accel-status').textContent = 'Desktop - Test Mode';
+          }
         });
 
         await sensor.start();
@@ -503,14 +553,22 @@ class ShadowWarrior {
       } catch (error) {
         console.error('DeviceMotionEvent error:', error);
         document.getElementById('accel-status').textContent = 'Error: ' + error.message;
+        
+        // If DeviceMotionEvent fails, enable test mode for desktop testing
+        const isDesktop = !/Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+        if (isDesktop) {
+          console.log('DeviceMotionEvent failed on desktop, enabling test mode');
+          this.enableTestMode();
+          document.getElementById('accel-status').textContent = 'Desktop - Test Mode';
+        }
       }
     }
     
     // If both fail
     const isDesktop = !/Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
     if (isDesktop) {
-      document.getElementById('accel-status').textContent = 'Desktop - no accelerometer';
-      console.log('Running on desktop - accelerometer not available');
+      document.getElementById('accel-status').textContent = 'Desktop - Test Mode';
+      console.log('Running on desktop - accelerometer not available, enabling test mode');
       this.enableTestMode();
     } else {
       document.getElementById('accel-status').textContent = 'Not supported';
@@ -615,7 +673,7 @@ class ShadowWarrior {
       }
 
       // Combined energy with better balance between audio and accelerometer
-      const normalizedAccel = Math.min(1, accelEnergy / 2); // Scale accelerometer to 0-1 (reduced from /5)
+      const normalizedAccel = Math.min(1, accelEnergy / 200); // Scale accelerometer to 0-1 (increased divisor for proper scaling)
       let combinedEnergy = Math.min(1, (normalizedAccel + this.audioLevel) / 2);
       
       // Validate combined energy to prevent NaN
@@ -1171,5 +1229,5 @@ class ShadowWarrior {
   }
 }
 
-// Initialize the app
-new ShadowWarrior();
+// Initialize the app and make it globally accessible for testing
+window.shadowWarrior = new ShadowWarrior();
