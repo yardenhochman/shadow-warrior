@@ -175,7 +175,9 @@ class ShadowWarrior {
           <button id="start-btn" class="btn primary">Start Training (Auto Audio)</button>
           <button id="stop-btn" class="btn secondary" disabled>Stop Training</button>
           <button id="connect-ble" class="btn">Connect BLE</button>
-          <button id="request-permission" class="btn" style="display: none;">Request Motion Permission</button>
+          <button id="connect-websocket" class="btn">Connect WebSocket</button>
+          <button id="request-mic-permission" class="btn">Request Microphone Permission</button>
+          <button id="request-accel-permission" class="btn" style="display: none;">Request Motion Permission</button>
         </div>
 
         <div class="audio-controls">
@@ -260,8 +262,10 @@ class ShadowWarrior {
     document.getElementById('start-btn').addEventListener('click', () => this.startTraining());
     document.getElementById('stop-btn').addEventListener('click', () => this.stopTraining());
     document.getElementById('connect-ble').addEventListener('click', () => this.connectBLE());
+    document.getElementById('connect-websocket').addEventListener('click', () => this.connectWebSocket());
     document.getElementById('load-audio').addEventListener('click', () => this.loadAudio());
-    document.getElementById('request-permission').addEventListener('click', () => this.requestMotionPermission());
+    document.getElementById('request-mic-permission').addEventListener('click', () => this.requestMicrophonePermission());
+    document.getElementById('request-accel-permission').addEventListener('click', () => this.requestMotionPermission());
     
     // Track selection controls
     document.getElementById('load-track').addEventListener('click', () => this.loadSelectedTrack());
@@ -295,7 +299,22 @@ class ShadowWarrior {
   async checkPermissionRequirements() {
     // Show permission button for iOS devices
     if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
-      document.getElementById('request-permission').style.display = 'block';
+      document.getElementById('request-accel-permission').style.display = 'block';
+    }
+  }
+
+  async requestMicrophonePermission() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // Stop the stream immediately as we just wanted to check permission
+      stream.getTracks().forEach(track => track.stop());
+      console.log('Microphone permission granted');
+      document.getElementById('mic-status').textContent = 'Permission granted - ready to start';
+      alert('Microphone permission granted!');
+    } catch (error) {
+      console.error('Microphone permission denied:', error);
+      document.getElementById('mic-status').textContent = 'Permission denied';
+      alert('Microphone permission denied. Please allow microphone access to use this feature.');
     }
   }
 
@@ -306,15 +325,65 @@ class ShadowWarrior {
         console.log('Motion permission result:', permission);
         
         if (permission === 'granted') {
-          document.getElementById('request-permission').style.display = 'none';
+          document.getElementById('request-accel-permission').style.display = 'none';
           document.getElementById('accel-status').textContent = 'Permission granted - ready to start';
+          alert('Accelerometer permission granted!');
         } else {
           document.getElementById('accel-status').textContent = 'Permission denied';
+          alert('Accelerometer permission denied. Please allow motion access to use this feature.');
         }
       }
     } catch (error) {
       console.error('Permission request error:', error);
       document.getElementById('accel-status').textContent = 'Permission error: ' + error.message;
+      alert('Error requesting accelerometer permission: ' + error.message);
+    }
+  }
+
+  async checkMicrophonePermission() {
+    try {
+      // Try to get microphone permission
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // If successful, stop the stream immediately as we just wanted to check permission
+      stream.getTracks().forEach(track => track.stop());
+      console.log('Microphone permission granted');
+      return true;
+    } catch (error) {
+      console.log('Microphone permission denied or not available:', error.message);
+      return false;
+    }
+  }
+
+  async checkAccelerometerPermission() {
+    try {
+      // Check if we're on iOS and need to request permission
+      if (typeof DeviceMotionEvent.requestPermission === 'function') {
+        const permission = await DeviceMotionEvent.requestPermission();
+        console.log('Accelerometer permission result:', permission);
+        return permission === 'granted';
+      }
+      
+      // For other platforms, check if accelerometer is available
+      if ('Accelerometer' in window) {
+        // Try to create an accelerometer instance to test availability
+        const sensor = new Accelerometer({ frequency: 1 });
+        await sensor.start();
+        sensor.stop();
+        console.log('Accelerometer available');
+        return true;
+      }
+      
+      // Check if DeviceMotionEvent is available
+      if ('DeviceMotionEvent' in window) {
+        console.log('DeviceMotionEvent available');
+        return true;
+      }
+      
+      console.log('No accelerometer API available');
+      return false;
+    } catch (error) {
+      console.log('Accelerometer permission check failed:', error.message);
+      return false;
     }
   }
 
@@ -454,6 +523,15 @@ class ShadowWarrior {
   }
 
   async startTraining() {
+    // Check permissions first before starting
+    const hasMicPermission = await this.checkMicrophonePermission();
+    const hasAccelPermission = await this.checkAccelerometerPermission();
+    
+    if (!hasMicPermission || !hasAccelPermission) {
+      alert('Please grant microphone and accelerometer permissions to start training.');
+      return;
+    }
+
     this.isRunning = true;
     document.getElementById('start-btn').disabled = true;
     document.getElementById('stop-btn').disabled = false;
@@ -998,12 +1076,12 @@ class ShadowWarrior {
       try {
         console.log('Using Web Bluetooth API');
         this.bleDevice = await navigator.bluetooth.requestDevice({
-          filters: [{ namePrefix: 'LED' }],
-          optionalServices: ['0000180f-0000-1000-8000-00805f9b34fb']
+          filters: [{ namePrefix: 'Shadow Warrior' }],
+          optionalServices: ['12345678-1234-1234-1234-123456789abc']
         });
 
         this.bleService = await this.bleDevice.gatt.connect();
-        this.bleCharacteristic = await this.bleService.getCharacteristic('00002a19-0000-1000-8000-00805f9b34fb');
+        this.bleCharacteristic = await this.bleService.getCharacteristic('12345678-1234-1234-1234-123456789abd');
         
         document.getElementById('ble-status').textContent = 'Connected (Web Bluetooth)';
         console.log('Web Bluetooth connected successfully');
@@ -1022,21 +1100,46 @@ class ShadowWarrior {
     const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
     
     if (isIOS) {
-      document.getElementById('ble-status').textContent = 'iOS detected - use companion app';
+      document.getElementById('ble-status').textContent = 'iOS detected - use Bluefy browser';
       
-      // Show iOS-specific instructions
+      // Show iOS-specific instructions with Bluefy recommendation
       const instructions = `
         <div class="ios-ble-instructions">
-          <h4>iOS BLE Connection</h4>
-          <p>Web Bluetooth is not supported on iOS Safari. Use one of these options:</p>
-          <ul>
-            <li>Use a companion iOS app</li>
-            <li>Connect via WebSocket to a bridge app</li>
-            <li>Use a different browser (Chrome on Android)</li>
-          </ul>
+          <h4>iOS Limitations</h4>
+          <p>iOS browsers have limited Web API support:</p>
+          <div class="limitation-list">
+            <div class="limitation-item">
+              <span class="limitation-icon">❌</span>
+              <span>No Web Bluetooth in Safari/Chrome</span>
+            </div>
+            <div class="limitation-item">
+              <span class="limitation-icon">❌</span>
+              <span>No accelerometer access in any iOS browser</span>
+            </div>
+            <div class="limitation-item">
+              <span class="limitation-icon">❌</span>
+              <span>No microphone access in any iOS browser</span>
+            </div>
+          </div>
+          <div class="ble-browser-options">
+            <div class="browser-option">
+              <h5>📱 Bluefy Browser (BLE Only)</h5>
+              <p>Free browser with Web Bluetooth support<br><small>⚠️ Still no accelerometer/microphone</small></p>
+              <a href="https://apps.apple.com/app/bluefy/id1492822056" target="_blank" class="btn">Download Bluefy</a>
+            </div>
+            <div class="browser-option">
+              <h5>💼 WebBLE Browser (BLE Only)</h5>
+              <p>Paid browser ($2.29) with Web Bluetooth support<br><small>⚠️ Still no accelerometer/microphone</small></p>
+              <a href="https://apps.apple.com/app/webble/id1193531073" target="_blank" class="btn">Download WebBLE</a>
+            </div>
+          </div>
+          <div class="ios-recommendation">
+            <h5>🎯 For Full Functionality on iOS:</h5>
+            <p>Consider developing a native iOS app for complete access to accelerometer, microphone, and BLE.</p>
+          </div>
           <div class="connection-options">
+            <button id="connect-websocket" class="btn primary">Connect via WebSocket (Recommended)</button>
             <button id="simulate-ble" class="btn">Simulate BLE Connection</button>
-            <button id="connect-websocket" class="btn">Connect via WebSocket</button>
           </div>
         </div>
       `;
@@ -1074,14 +1177,35 @@ class ShadowWarrior {
 
   connectWebSocket() {
     try {
-      // Try to connect to a WebSocket bridge (you'll need to implement this)
-      const wsUrl = 'ws://localhost:8080/ble-bridge'; // Change this to your bridge server
+      // For deployed app, we need to connect to your Mac's IP address
+      // You'll need to update this with your actual Mac's IP address
+      const hostname = window.location.hostname;
+      let wsUrl;
+      
+      if (hostname === 'localhost' || hostname === '127.0.0.1') {
+        wsUrl = 'ws://localhost:8080';
+      } else {
+        // For deployed app, prompt user for Mac's IP address
+        const macIP = prompt('Enter your Mac\'s IP address (find it in System Preferences > Network):', '192.168.1.166');
+        if (macIP) {
+          wsUrl = `ws://${macIP}:8080`;
+        } else {
+          throw new Error('Mac IP address required for WebSocket connection');
+        }
+      }
+      
+      console.log('🔌 Attempting WebSocket connection to:', wsUrl);
+      document.getElementById('ble-status').textContent = 'Connecting to WebSocket...';
       
       this.websocket = new WebSocket(wsUrl);
       
       this.websocket.onopen = () => {
-        console.log('WebSocket connected');
-        document.getElementById('ble-status').textContent = 'Connected via WebSocket';
+        console.log('✅ WebSocket connected to simulator');
+        document.getElementById('ble-status').textContent = 'Connected via WebSocket ✅';
+        document.getElementById('ble-status').style.color = '#4ecdc4';
+        
+        // Show success notification
+        this.showNotification('WebSocket Connected!', 'success');
         
         // Create a mock BLE characteristic that sends via WebSocket
         this.bleCharacteristic = {
@@ -1091,26 +1215,97 @@ class ShadowWarrior {
                 type: 'ble_write',
                 data: Array.from(data)
               }));
-              console.log('Sent BLE data via WebSocket:', data);
+              console.log('📤 Sent BLE data via WebSocket:', data);
+            } else {
+              console.warn('⚠️ WebSocket not ready, cannot send data');
             }
           }
         };
       };
       
-      this.websocket.onerror = (error) => {
-        console.error('WebSocket error:', error);
-        document.getElementById('ble-status').textContent = 'WebSocket connection failed';
+      this.websocket.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === 'ble_ack') {
+            console.log('📥 Received BLE acknowledgment:', data);
+            this.showNotification(`Energy: ${data.energy}/255`, 'info');
+          }
+        } catch (error) {
+          console.error('❌ Error parsing WebSocket message:', error);
+        }
       };
       
-      this.websocket.onclose = () => {
-        console.log('WebSocket disconnected');
+      this.websocket.onerror = (error) => {
+        console.error('❌ WebSocket error:', error);
+        document.getElementById('ble-status').textContent = 'WebSocket connection failed ❌';
+        document.getElementById('ble-status').style.color = '#ff6b6b';
+        this.showNotification('WebSocket connection failed', 'error');
+      };
+      
+      this.websocket.onclose = (event) => {
+        console.log('🔌 WebSocket disconnected:', event.code, event.reason);
         document.getElementById('ble-status').textContent = 'WebSocket disconnected';
+        document.getElementById('ble-status').style.color = '#ffc107';
+        this.showNotification('WebSocket disconnected', 'warning');
       };
       
     } catch (error) {
-      console.error('WebSocket connection error:', error);
+      console.error('❌ WebSocket connection error:', error);
       document.getElementById('ble-status').textContent = 'WebSocket error: ' + error.message;
+      document.getElementById('ble-status').style.color = '#ff6b6b';
+      this.showNotification('WebSocket error: ' + error.message, 'error');
     }
+  }
+
+  showNotification(message, type = 'info') {
+    // Create notification element
+    const notification = document.createElement('div');
+    notification.className = `notification notification-${type}`;
+    notification.textContent = message;
+    
+    // Style the notification
+    notification.style.cssText = `
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      padding: 12px 20px;
+      border-radius: 8px;
+      color: white;
+      font-weight: bold;
+      z-index: 1000;
+      max-width: 300px;
+      word-wrap: break-word;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      animation: slideIn 0.3s ease-out;
+    `;
+    
+    // Set colors based on type
+    switch (type) {
+      case 'success':
+        notification.style.background = 'linear-gradient(45deg, #4ecdc4, #44a08d)';
+        break;
+      case 'error':
+        notification.style.background = 'linear-gradient(45deg, #ff6b6b, #ee5a24)';
+        break;
+      case 'warning':
+        notification.style.background = 'linear-gradient(45deg, #ffc107, #f39c12)';
+        break;
+      default:
+        notification.style.background = 'linear-gradient(45deg, #3498db, #2980b9)';
+    }
+    
+    // Add to page
+    document.body.appendChild(notification);
+    
+    // Remove after 3 seconds
+    setTimeout(() => {
+      notification.style.animation = 'slideOut 0.3s ease-in';
+      setTimeout(() => {
+        if (notification.parentNode) {
+          notification.parentNode.removeChild(notification);
+        }
+      }, 300);
+    }, 3000);
   }
 
   async sendBLECommand(energy) {

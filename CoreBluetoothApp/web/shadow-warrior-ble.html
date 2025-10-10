@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shadow Warrior - BLE Loudness Meter</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+        }
+
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 30px;
+            font-size: 2.5em;
+            font-weight: 300;
+        }
+
+        .status-section {
+            background: #f8f9fa;
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        .status-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 0;
+            border-bottom: 1px solid #e9ecef;
+        }
+
+        .status-item:last-child {
+            border-bottom: none;
+        }
+
+        .status-label {
+            font-weight: 600;
+            color: #495057;
+        }
+
+        .status-value {
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            font-weight: 500;
+        }
+
+        .status-connected {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .status-disconnected {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .status-connecting {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .controls {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 25px;
+            font-size: 1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-block;
+            text-align: center;
+        }
+
+        .btn-primary {
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+        }
+
+        .btn-secondary {
+            background: linear-gradient(45deg, #f093fb, #f5576c);
+            color: white;
+        }
+
+        .btn-secondary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(240, 147, 251, 0.3);
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .audio-section {
+            background: #f8f9fa;
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        .audio-meter {
+            background: #2d3748;
+            border-radius: 10px;
+            padding: 15px;
+            margin: 10px 0;
+            color: #e2e8f0;
+        }
+
+        .meter-label {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 10px;
+        }
+
+        .meter-bar {
+            background: #4a5568;
+            height: 20px;
+            border-radius: 10px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .meter-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #4ecdc4, #44a08d);
+            border-radius: 10px;
+            transition: width 0.1s ease;
+            width: 0%;
+        }
+
+        .meter-fill.medium {
+            background: linear-gradient(90deg, #f7b731, #f39c12);
+        }
+
+        .meter-fill.high {
+            background: linear-gradient(90deg, #ff6b6b, #ee5a24);
+        }
+
+        .log-section {
+            background: #2d3748;
+            border-radius: 15px;
+            padding: 20px;
+            color: #e2e8f0;
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            font-size: 0.9em;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        .log-entry {
+            margin-bottom: 5px;
+            padding: 2px 0;
+        }
+
+        .log-timestamp {
+            color: #a0aec0;
+        }
+
+        .log-info {
+            color: #68d391;
+        }
+
+        .log-error {
+            color: #fc8181;
+        }
+
+        .log-warning {
+            color: #f6e05e;
+        }
+
+        .notification {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 15px 20px;
+            border-radius: 10px;
+            color: white;
+            font-weight: 600;
+            z-index: 1000;
+            animation: slideIn 0.3s ease-out;
+            max-width: 300px;
+        }
+
+        .notification-success {
+            background: linear-gradient(45deg, #4ecdc4, #44a08d);
+        }
+
+        .notification-error {
+            background: linear-gradient(45deg, #ff6b6b, #ee5a24);
+        }
+
+        .notification-warning {
+            background: linear-gradient(45deg, #ffc107, #f39c12);
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+
+        .instructions {
+            background: #fff3cd;
+            border: 2px solid #ffc107;
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        .instructions h3 {
+            color: #856404;
+            margin-bottom: 15px;
+        }
+
+        .instructions ol {
+            color: #856404;
+            padding-left: 20px;
+        }
+
+        .instructions li {
+            margin-bottom: 8px;
+        }
+
+        @media (max-width: 600px) {
+            .container {
+                padding: 20px;
+            }
+            
+            .controls {
+                flex-direction: column;
+            }
+            
+            .btn {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🥋 Shadow Warrior - BLE Loudness Meter</h1>
+        
+        <div class="instructions">
+            <h3>📱 How to Connect to Loudness Meter</h3>
+            <ol>
+                <li>Make sure your macOS BLE Loudness Meter app is running and advertising</li>
+                <li>Click "Connect to BLE Device" below</li>
+                <li>Select "ShadowWarrior-BLE" from the device list</li>
+                <li>Start training to send live audio levels to the meter!</li>
+            </ol>
+        </div>
+
+        <div class="status-section">
+            <h3>Connection Status</h3>
+            <div class="status-item">
+                <span class="status-label">BLE Status:</span>
+                <span id="ble-status" class="status-value status-disconnected">Not Connected</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">Audio Level:</span>
+                <span id="audio-level" class="status-value">0.00</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">Sending to Meter:</span>
+                <span id="sending-status" class="status-value status-disconnected">No</span>
+            </div>
+        </div>
+
+        <div class="controls">
+            <button id="connect-btn" class="btn btn-primary">Connect to BLE Device</button>
+            <button id="disconnect-btn" class="btn btn-secondary" disabled>Disconnect</button>
+            <button id="start-training" class="btn btn-primary">Start Training</button>
+            <button id="stop-training" class="btn btn-secondary" disabled>Stop Training</button>
+        </div>
+
+        <div class="audio-section">
+            <h3>🎵 Live Audio Levels</h3>
+            <div class="audio-meter">
+                <div class="meter-label">
+                    <span>Microphone Level</span>
+                    <span id="mic-level-display">0.00</span>
+                </div>
+                <div class="meter-bar">
+                    <div id="mic-meter-fill" class="meter-fill"></div>
+                </div>
+            </div>
+            
+            <div class="audio-meter">
+                <div class="meter-label">
+                    <span>Combined Energy (Sent to Meter)</span>
+                    <span id="combined-level-display">0.00</span>
+                </div>
+                <div class="meter-bar">
+                    <div id="combined-meter-fill" class="meter-fill"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="log-section">
+            <h3>Activity Log</h3>
+            <div id="log-container"></div>
+        </div>
+    </div>
+
+    <script src="ble-client.js"></script>
+    <script>
+        class ShadowWarriorBLE {
+            constructor() {
+                this.bleClient = new BLEPeripheralClient();
+                this.audioContext = null;
+                this.analyser = null;
+                this.microphone = null;
+                this.isTraining = false;
+                this.audioLevel = 0;
+                this.combinedEnergy = 0;
+                
+                this.init();
+            }
+            
+            init() {
+                this.setupEventListeners();
+                this.log('Shadow Warrior BLE initialized', 'info');
+            }
+            
+            setupEventListeners() {
+                document.getElementById('connect-btn').addEventListener('click', () => this.connectBLE());
+                document.getElementById('disconnect-btn').addEventListener('click', () => this.disconnectBLE());
+                document.getElementById('start-training').addEventListener('click', () => this.startTraining());
+                document.getElementById('stop-training').addEventListener('click', () => this.stopTraining());
+            }
+            
+            async connectBLE() {
+                try {
+                    await this.bleClient.connect();
+                    this.updateBLEStatus('Connected', 'connected');
+                    this.log('Connected to BLE loudness meter', 'info');
+                } catch (error) {
+                    this.log(`BLE connection failed: ${error.message}`, 'error');
+                }
+            }
+            
+            async disconnectBLE() {
+                try {
+                    await this.bleClient.disconnect();
+                    this.updateBLEStatus('Disconnected', 'disconnected');
+                    this.log('Disconnected from BLE loudness meter', 'info');
+                } catch (error) {
+                    this.log(`BLE disconnection failed: ${error.message}`, 'error');
+                }
+            }
+            
+            async startTraining() {
+                try {
+                    await this.startMicrophone();
+                    this.isTraining = true;
+                    this.updateTrainingStatus(true);
+                    this.startDataProcessing();
+                    this.log('Training started - sending audio levels to meter', 'info');
+                } catch (error) {
+                    this.log(`Failed to start training: ${error.message}`, 'error');
+                }
+            }
+            
+            stopTraining() {
+                this.isTraining = false;
+                this.updateTrainingStatus(false);
+                
+                if (this.microphone && this.microphone.mediaStream) {
+                    this.microphone.mediaStream.getTracks().forEach(track => track.stop());
+                }
+                if (this.audioContext) {
+                    this.audioContext.close();
+                }
+                
+                this.log('Training stopped', 'info');
+            }
+            
+            async startMicrophone() {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                    
+                    if (this.audioContext.state === 'suspended') {
+                        await this.audioContext.resume();
+                    }
+                    
+                    this.analyser = this.audioContext.createAnalyser();
+                    this.microphone = this.audioContext.createMediaStreamSource(stream);
+                    
+                    this.analyser.fftSize = 256;
+                    this.analyser.smoothingTimeConstant = 0.8;
+                    this.microphone.connect(this.analyser);
+                    
+                    this.log('Microphone started', 'info');
+                } catch (error) {
+                    throw new Error(`Microphone access failed: ${error.message}`);
+                }
+            }
+            
+            startDataProcessing() {
+                const processData = () => {
+                    if (!this.isTraining) return;
+                    
+                    // Calculate audio level
+                    if (this.analyser) {
+                        const dataArray = new Uint8Array(this.analyser.frequencyBinCount);
+                        this.analyser.getByteFrequencyData(dataArray);
+                        
+                        const sum = dataArray.reduce((acc, value) => acc + value, 0);
+                        const rawLevel = (sum / dataArray.length) / 255;
+                        
+                        // Apply scaling for more dramatic response
+                        this.audioLevel = Math.pow(Math.max(0, rawLevel) * 5.0, 1.5);
+                        this.audioLevel = Math.max(0.1, Math.min(1, this.audioLevel));
+                        
+                        // Use audio level as combined energy for simplicity
+                        this.combinedEnergy = this.audioLevel;
+                        
+                        // Update UI
+                        this.updateAudioMeters();
+                        
+                        // Send to BLE loudness meter
+                        this.bleClient.sendLoudnessLevel(this.combinedEnergy);
+                    }
+                    
+                    requestAnimationFrame(processData);
+                };
+                
+                processData();
+            }
+            
+            updateAudioMeters() {
+                // Update microphone meter
+                const micPercentage = Math.min(100, this.audioLevel * 100);
+                const micMeterFill = document.getElementById('mic-meter-fill');
+                micMeterFill.style.width = `${micPercentage}%`;
+                document.getElementById('mic-level-display').textContent = this.audioLevel.toFixed(2);
+                
+                // Update combined energy meter
+                const combinedPercentage = Math.min(100, this.combinedEnergy * 100);
+                const combinedMeterFill = document.getElementById('combined-meter-fill');
+                combinedMeterFill.style.width = `${combinedPercentage}%`;
+                document.getElementById('combined-level-display').textContent = this.combinedEnergy.toFixed(2);
+                
+                // Update status displays
+                document.getElementById('audio-level').textContent = this.audioLevel.toFixed(2);
+                
+                // Change meter colors based on level
+                this.updateMeterColors(micMeterFill, this.audioLevel);
+                this.updateMeterColors(combinedMeterFill, this.combinedEnergy);
+            }
+            
+            updateMeterColors(meterFill, level) {
+                meterFill.classList.remove('medium', 'high');
+                if (level > 0.7) {
+                    meterFill.classList.add('high');
+                } else if (level > 0.3) {
+                    meterFill.classList.add('medium');
+                }
+            }
+            
+            updateBLEStatus(status, className) {
+                const statusElement = document.getElementById('ble-status');
+                statusElement.textContent = status;
+                statusElement.className = `status-value status-${className}`;
+                
+                document.getElementById('connect-btn').disabled = className === 'connected';
+                document.getElementById('disconnect-btn').disabled = className !== 'connected';
+            }
+            
+            updateTrainingStatus(isTraining) {
+                document.getElementById('start-training').disabled = isTraining;
+                document.getElementById('stop-training').disabled = !isTraining;
+                
+                const sendingStatus = document.getElementById('sending-status');
+                if (isTraining) {
+                    sendingStatus.textContent = 'Yes';
+                    sendingStatus.className = 'status-value status-connected';
+                } else {
+                    sendingStatus.textContent = 'No';
+                    sendingStatus.className = 'status-value status-disconnected';
+                }
+            }
+            
+            log(message, type = 'info') {
+                const timestamp = new Date().toLocaleTimeString();
+                const logContainer = document.getElementById('log-container');
+                const logEntry = document.createElement('div');
+                logEntry.className = `log-entry log-${type}`;
+                logEntry.innerHTML = `<span class="log-timestamp">[${timestamp}]</span> ${message}`;
+                logContainer.appendChild(logEntry);
+                logContainer.scrollTop = logContainer.scrollHeight;
+            }
+        }
+        
+        // Initialize the app
+        const shadowWarrior = new ShadowWarriorBLE();
+    </script>
+</body>
+</html>
