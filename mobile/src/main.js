@@ -26,6 +26,7 @@ class ShadowWarrior {
     
     // Audio scaling settings
     this.audioScale = 5.0;  // Multiplier to scale audio level
+    this.audioMinLevel = 0.1;  // Minimum audio level to ensure responsiveness
     
     // Accelerometer scaling settings
     this.accelScale = 2.0;  // Multiplier to scale accelerometer energy
@@ -166,6 +167,14 @@ class ShadowWarrior {
                 <button id="threshold-plus" class="btn-small">+</button>
               </div>
             </div>
+            <div class="control-group">
+              <label>Audio Min Level:</label>
+              <div class="control-buttons">
+                <button id="audio-min-minus" class="btn-small">-</button>
+                <span id="audio-min-value">0.1</span>
+                <button id="audio-min-plus" class="btn-small">+</button>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -217,6 +226,10 @@ class ShadowWarrior {
     document.getElementById('threshold-minus').addEventListener('click', () => this.adjustAccelThreshold(-0.1));
     document.getElementById('threshold-plus').addEventListener('click', () => this.adjustAccelThreshold(0.1));
     
+    // Audio minimum level controls
+    document.getElementById('audio-min-minus').addEventListener('click', () => this.adjustAudioMinLevel(-0.05));
+    document.getElementById('audio-min-plus').addEventListener('click', () => this.adjustAudioMinLevel(0.05));
+    
     // Check if we need to show permission button for iOS
     this.checkPermissionRequirements();
   }
@@ -263,6 +276,12 @@ class ShadowWarrior {
     this.accelThreshold = Math.max(0.0, Math.min(3.0, this.accelThreshold + delta));
     document.getElementById('threshold-value').textContent = this.accelThreshold.toFixed(1);
     console.log('Accelerometer threshold adjusted to:', this.accelThreshold);
+  }
+
+  adjustAudioMinLevel(delta) {
+    this.audioMinLevel = Math.max(0.0, Math.min(0.5, this.audioMinLevel + delta));
+    document.getElementById('audio-min-value').textContent = this.audioMinLevel.toFixed(2);
+    console.log('Audio minimum level adjusted to:', this.audioMinLevel);
   }
 
   enableTestMode() {
@@ -503,7 +522,9 @@ class ShadowWarrior {
         this.analyser.getByteFrequencyData(dataArray);
         const rawLevel = dataArray.reduce((sum, value) => sum + value, 0) / dataArray.length / 255;
         // Apply exponential scaling for more dramatic response to louder sounds
-        this.audioLevel = Math.min(1, Math.pow(rawLevel * this.audioScale, 1.5));
+        const scaledLevel = Math.pow(rawLevel * this.audioScale, 1.5);
+        // Ensure minimum audio level for better responsiveness
+        this.audioLevel = Math.max(this.audioMinLevel, Math.min(1, scaledLevel));
       }
 
       // Combined energy with better balance between audio and accelerometer
