@@ -1,0 +1,8 @@
+bleak>=1.1.0
+fastapi>=0.116.1
+uvicorn>=0.35.0
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+pyaudio>=0.2.14
+numpy>=1.24.0
+matplotlib>=3.5.0
