@@ -5,6 +5,7 @@ class ShadowWarrior {
   constructor() {
     this.accelerometerData = { x: 0, y: 0, z: 0 };
     this.audioLevel = 0;
+    this.trackLevel = 0;  // Audio track volume level
     this.audioContext = null;
     this.analyser = null;
     this.microphone = null;
@@ -20,7 +21,8 @@ class ShadowWarrior {
       accelX: [],
       accelY: [],
       accelZ: [],
-      audio: []
+      audio: [],
+      track: []
     };
     this.maxDataPoints = 100;
     
@@ -125,10 +127,30 @@ class ShadowWarrior {
 
 
         <div class="loudness-meter">
-          <h3>Loudness Meter</h3>
+          <h3>Microphone Level</h3>
           <div class="meter-container">
             <div class="meter-bar">
               <div class="meter-fill" id="meter-fill"></div>
+              <div class="meter-zones">
+                <div class="zone green"></div>
+                <div class="zone yellow"></div>
+                <div class="zone red"></div>
+              </div>
+            </div>
+            <div class="meter-labels">
+              <span>0</span>
+              <span>0.3</span>
+              <span>0.7</span>
+              <span>1.0</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="loudness-meter">
+          <h3>Audio Track Level</h3>
+          <div class="meter-container">
+            <div class="meter-bar">
+              <div class="meter-fill" id="track-meter-fill"></div>
               <div class="meter-zones">
                 <div class="zone green"></div>
                 <div class="zone yellow"></div>
@@ -500,11 +522,19 @@ class ShadowWarrior {
     const processData = () => {
       if (!this.isRunning) return;
 
+      // Calculate track level from audio element volume
+      if (this.audioElement) {
+        this.trackLevel = this.audioElement.volume || 0;
+      } else {
+        this.trackLevel = 0;
+      }
+
       // Store data for graphs
       this.addGraphData('accelX', this.accelerometerData.x);
       this.addGraphData('accelY', this.accelerometerData.y);
       this.addGraphData('accelZ', this.accelerometerData.z);
       this.addGraphData('audio', this.audioLevel);
+      this.addGraphData('track', this.trackLevel);
 
       // Calculate accelerometer energy with enhanced sensitivity
       const rawAccelEnergy = Math.sqrt(
@@ -589,8 +619,9 @@ class ShadowWarrior {
         this.audioElement.volume = Math.max(0, Math.min(1, combinedEnergy));
       }
 
-      // Update loudness meter
+      // Update loudness meters
       this.updateLoudnessMeter(this.audioLevel);
+      this.updateTrackMeter(this.trackLevel);
 
       // Update graphs
       this.updateGraphs();
@@ -633,6 +664,30 @@ class ShadowWarrior {
       meterFill.style.background = 'linear-gradient(90deg, #f7b731, #f39c12)';
     } else {
       meterFill.style.background = 'linear-gradient(90deg, #ff6b6b, #ee5a24)';
+    }
+  }
+
+  updateTrackMeter(level) {
+    const meterFill = document.getElementById('track-meter-fill');
+    
+    // Validate level to prevent NaN
+    if (isNaN(level) || !isFinite(level)) {
+      console.warn('Invalid track level for meter, using fallback');
+      level = 0;
+    }
+    
+    const percentage = Math.min(100, Math.max(0, level * 100));
+    
+    // Set the fill width
+    meterFill.style.width = `${percentage}%`;
+    
+    // Change color based on level (different colors for track)
+    if (level <= 0.3) {
+      meterFill.style.background = 'linear-gradient(90deg, #3498db, #2980b9)';
+    } else if (level <= 0.7) {
+      meterFill.style.background = 'linear-gradient(90deg, #9b59b6, #8e44ad)';
+    } else {
+      meterFill.style.background = 'linear-gradient(90deg, #e67e22, #d35400)';
     }
   }
 
