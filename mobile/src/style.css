@@ -394,6 +394,7 @@ h1 {
   background: rgba(0, 0, 0, 0.2);
   border-radius: 10px;
   overflow: hidden;
+  table-layout: fixed;
 }
 
 .accelerometer-table th,
@@ -414,6 +415,8 @@ h1 {
   color: #e0e0e0;
   font-family: 'Courier New', monospace;
   font-size: 0.9em;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
 }
 
 .accelerometer-table td:first-child {
@@ -573,6 +576,35 @@ h1 {
   .accelerometer-table td {
     padding: 8px 4px;
     font-size: 0.8em;
+  }
+  
+  /* Fix meter overflow on mobile */
+  .energy-meter-row,
+  .microphone-meter-row,
+  .audio-track-meter-row {
+    flex-direction: column;
+    gap: 8px;
+    padding: 8px 0;
+  }
+  
+  .energy-meter-row label,
+  .microphone-meter-row label,
+  .audio-track-meter-row label {
+    width: 100%;
+    text-align: center;
+    font-size: 0.8em;
+  }
+  
+  .energy-meter,
+  .microphone-meter,
+  .audio-track-meter {
+    min-width: unset;
+    width: 100%;
+    height: 20px;
+  }
+  
+  .meter-value {
+    font-size: 0.6em;
   }
 }
 
