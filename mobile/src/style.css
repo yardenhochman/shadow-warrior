@@ -257,64 +257,121 @@ h1 {
   margin-top: 5px;
 }
 
-.loudness-controls {
-  margin-top: 15px;
-  display: flex;
-  gap: 20px;
-  justify-content: center;
-  flex-wrap: wrap;
-}
-
-.control-group {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-}
-
-.control-group label {
-  font-size: 0.9em;
-  color: #e0e0e0;
-  font-weight: 500;
-}
-
-.control-buttons {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.status-table {
   background: rgba(255, 255, 255, 0.1);
-  border-radius: 20px;
-  padding: 5px;
+  border-radius: 15px;
+  padding: 20px;
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
 }
 
-.btn-small {
-  width: 30px;
-  height: 30px;
-  border-radius: 50%;
-  border: 1px solid rgba(255, 255, 255, 0.3);
-  background: rgba(255, 255, 255, 0.1);
-  color: white;
-  font-size: 16px;
-  font-weight: bold;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.btn-small:hover {
-  background: rgba(255, 255, 255, 0.2);
-  transform: scale(1.1);
-}
-
-.control-buttons span {
-  min-width: 40px;
+.status-table h3 {
+  margin: 0 0 15px 0;
+  color: #4ecdc4;
   text-align: center;
+}
+
+.status-table table {
+  width: 100%;
+  border-collapse: collapse;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.status-table th,
+.status-table td {
+  padding: 12px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.status-table th {
+  background: rgba(0, 0, 0, 0.3);
+  color: #4ecdc4;
+  font-weight: 600;
+  font-size: 0.9em;
+  text-align: left;
+  width: 40%;
+}
+
+.status-table td {
+  color: #e0e0e0;
+  font-size: 0.9em;
+  text-align: right;
+  width: 60%;
+}
+
+.status-table tr:nth-child(1) td,
+.status-table tr:nth-child(2) td {
+  color: #4ecdc4;
+}
+
+.status-table tr:nth-child(3) td {
+  color: #f7b731;
+  font-weight: 600;
+  font-family: 'Courier New', monospace;
+}
+
+.status-table tr:nth-child(4) td {
+  color: #ff6b6b;
+  font-weight: 600;
+  font-family: 'Courier New', monospace;
+}
+
+.accelerometer-table {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 15px;
+  padding: 20px;
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+}
+
+.accelerometer-table h3 {
+  margin: 0 0 15px 0;
+  color: #4ecdc4;
+  text-align: center;
+}
+
+.accelerometer-table table {
+  width: 100%;
+  border-collapse: collapse;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.accelerometer-table th,
+.accelerometer-table td {
+  padding: 12px 8px;
+  text-align: center;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.accelerometer-table th {
+  background: rgba(0, 0, 0, 0.3);
   color: #4ecdc4;
   font-weight: 600;
   font-size: 0.9em;
 }
+
+.accelerometer-table td {
+  color: #e0e0e0;
+  font-family: 'Courier New', monospace;
+  font-size: 0.9em;
+}
+
+.accelerometer-table td:first-child {
+  color: #4ecdc4;
+  font-family: inherit;
+}
+
+.accelerometer-table td:last-child {
+  color: #ff6b6b;
+  font-weight: 600;
+}
+
 
 .debug-graphs {
   background: rgba(0, 0, 0, 0.3);
@@ -404,6 +461,26 @@ h1 {
   min-width: 150px;
 }
 
+.test-mode {
+  background: rgba(0, 255, 0, 0.1);
+  border: 2px solid rgba(0, 255, 0, 0.3);
+  border-radius: 15px;
+  padding: 20px;
+  margin: 20px 0;
+  text-align: center;
+}
+
+.test-mode h4 {
+  margin: 0 0 10px 0;
+  color: #00ff00;
+}
+
+.test-mode p {
+  margin: 0 0 15px 0;
+  color: #e0e0e0;
+  font-size: 0.9em;
+}
+
 @media (max-width: 768px) {
   .container {
     padding: 15px;
@@ -430,5 +507,17 @@ h1 {
   
   .graph-container {
     grid-template-columns: 1fr;
+  }
+  
+  .status-table th,
+  .status-table td {
+    padding: 8px 4px;
+    font-size: 0.8em;
+  }
+  
+  .accelerometer-table th,
+  .accelerometer-table td {
+    padding: 8px 4px;
+    font-size: 0.8em;
   }
 }
