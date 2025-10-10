@@ -34,6 +34,10 @@ class ShadowWarrior {
     this.accelScale = 2.0;  // Multiplier to scale accelerometer energy
     this.accelThreshold = 1.0;  // Minimum threshold for accelerometer
     
+    // Energy smoothing state
+    this.smoothedAudioLevel = 0;
+    this.smoothedAccelEnergy = 0;
+    
     // Track caching
     this.cachedTracks = new Map();
     this.defaultTrackId = 'war-is-coming';
@@ -306,6 +310,15 @@ class ShadowWarrior {
     console.log('Audio minimum level adjusted to:', this.audioMinLevel);
   }
 
+  applyEnergySmoothing(rawValue, currentSmoothed, isIncreasing) {
+    // Fast attack when going up (0.9*state + 0.1*input)
+    // Slow release when going down (0.99*state + 0.01*input)
+    const attackFactor = isIncreasing ? 0.1 : 0.01;
+    const stateFactor = isIncreasing ? 0.9 : 0.99;
+    
+    return stateFactor * currentSmoothed + attackFactor * rawValue;
+  }
+
   enableTestMode() {
     // Simulate accelerometer data for desktop testing
     this.testMode = true;
@@ -544,7 +557,12 @@ class ShadowWarrior {
       );
       
       // Apply scaling and threshold for more responsive shaking detection
-      const accelEnergy = Math.max(0, (rawAccelEnergy - this.accelThreshold) * this.accelScale);
+      const scaledAccelEnergy = Math.max(0, (rawAccelEnergy - this.accelThreshold) * this.accelScale);
+      
+      // Apply energy smoothing to accelerometer
+      const isAccelIncreasing = scaledAccelEnergy > this.smoothedAccelEnergy;
+      this.smoothedAccelEnergy = this.applyEnergySmoothing(scaledAccelEnergy, this.smoothedAccelEnergy, isAccelIncreasing);
+      const accelEnergy = this.smoothedAccelEnergy;
 
       // Calculate audio level with enhanced sensitivity and NaN protection
       if (this.analyser) {
@@ -570,7 +588,12 @@ class ShadowWarrior {
               this.audioLevel = this.audioMinLevel;
             } else {
               // Ensure minimum audio level for better responsiveness
-              this.audioLevel = Math.max(this.audioMinLevel, Math.min(1, scaledLevel));
+              const rawAudioLevel = Math.max(this.audioMinLevel, Math.min(1, scaledLevel));
+              
+              // Apply energy smoothing to audio
+              const isAudioIncreasing = rawAudioLevel > this.smoothedAudioLevel;
+              this.smoothedAudioLevel = this.applyEnergySmoothing(rawAudioLevel, this.smoothedAudioLevel, isAudioIncreasing);
+              this.audioLevel = this.smoothedAudioLevel;
             }
           }
         } catch (error) {
