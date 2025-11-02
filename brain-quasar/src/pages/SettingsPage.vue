@@ -77,6 +77,90 @@
               @update:model-value="updateFightTimeout"
             />
           </div>
+
+          <div class="q-mt-md">
+            <div class="text-subtitle2">Warming Decay Rate (power/second)</div>
+            <q-slider
+              v-model="config.warmingDecayRate"
+              :min="0"
+              :max="20"
+              :step="1"
+              label
+              label-always
+              color="orange"
+              @update:model-value="updateConfig"
+            />
+          </div>
+
+          <div class="q-mt-md">
+            <div class="text-subtitle2">Fight Decay Rate (power/second)</div>
+            <q-slider
+              v-model="config.fightDecayRate"
+              :min="0"
+              :max="10"
+              :step="1"
+              label
+              label-always
+              color="red"
+              @update:model-value="updateConfig"
+            />
+          </div>
+
+          <div class="q-mt-md">
+            <div class="text-subtitle2">Warming Shout Scale Factor</div>
+            <q-slider
+              v-model="config.warmingShoutScale"
+              :min="0"
+              :max="30"
+              :step="1"
+              label
+              label-always
+              color="orange"
+              @update:model-value="updateConfig"
+            />
+          </div>
+
+          <div class="q-mt-md">
+            <div class="text-subtitle2">Fight Punch Scale Factor</div>
+            <q-slider
+              v-model="config.fightPunchScale"
+              :min="0"
+              :max="30"
+              :step="1"
+              label
+              label-always
+              color="red"
+              @update:model-value="updateConfig"
+            />
+          </div>
+
+          <div class="q-mt-md">
+            <div class="text-subtitle2">Fight Shout Scale Factor</div>
+            <q-slider
+              v-model="config.fightShoutScale"
+              :min="0"
+              :max="15"
+              :step="0.5"
+              label
+              label-always
+              color="orange"
+              @update:model-value="updateConfig"
+            />
+          </div>
+
+          <div class="q-mt-md">
+            <div class="text-subtitle2">Presence Detection Threshold</div>
+            <q-slider
+              v-model="config.presenceDetectionThreshold"
+              :min="0.1"
+              :max="1.0"
+              :step="0.05"
+              label
+              label-always
+              color="primary"
+              @update:model-value="updateConfig"
+            />
+          </div>
         </q-card-section>
       </q-card>
 
@@ -249,6 +333,12 @@ const config = ref({
   cooldownDuration: 300000,
   warmingTimeout: 60000,
   fightTimeout: 180000,
+  warmingDecayRate: 5,
+  fightDecayRate: 3,
+  warmingShoutScale: 10,
+  fightPunchScale: 10,
+  fightShoutScale: 2,
+  presenceDetectionThreshold: 0.3,
 });
 
 const accelConfig = ref({
@@ -277,6 +367,12 @@ function updateConfig() {
   stateMachine.updateConfig({
     warmingThreshold: config.value.warmingThreshold,
     fightThreshold: config.value.fightThreshold,
+    warmingDecayRate: config.value.warmingDecayRate,
+    fightDecayRate: config.value.fightDecayRate,
+    warmingShoutScale: config.value.warmingShoutScale,
+    fightPunchScale: config.value.fightPunchScale,
+    fightShoutScale: config.value.fightShoutScale,
+    presenceDetectionThreshold: config.value.presenceDetectionThreshold,
   });
 }
 
@@ -338,6 +434,12 @@ function resetSettings() {
     cooldownDuration: 300000,
     warmingTimeout: 60000,
     fightTimeout: 180000,
+    warmingDecayRate: 5,
+    fightDecayRate: 5,
+    warmingShoutScale: 4,
+    fightPunchScale: 4,
+    fightShoutScale: 0.5,
+    presenceDetectionThreshold: 0.3,
   };
 
   accelConfig.value = {
@@ -405,6 +507,22 @@ function loadSettings() {
     } catch (error) {
       console.error('Failed to load settings:', error);
     }
+  } else {
+    // Load from state machine store if no saved settings
+    config.value.warmingThreshold = stateMachine.config.warmingThreshold;
+    config.value.fightThreshold = stateMachine.config.fightThreshold;
+    config.value.cooldownDuration = stateMachine.config.cooldownDuration;
+    config.value.warmingTimeout = stateMachine.config.warmingTimeout;
+    config.value.fightTimeout = stateMachine.config.fightTimeout;
+    config.value.warmingDecayRate = stateMachine.config.warmingDecayRate;
+    config.value.fightDecayRate = stateMachine.config.fightDecayRate;
+    config.value.warmingShoutScale = stateMachine.config.warmingShoutScale;
+    config.value.fightPunchScale = stateMachine.config.fightPunchScale;
+    config.value.fightShoutScale = stateMachine.config.fightShoutScale;
+    config.value.presenceDetectionThreshold = stateMachine.config.presenceDetectionThreshold;
+    cooldownMinutes.value = stateMachine.config.cooldownDuration / 60000;
+    warmingSeconds.value = stateMachine.config.warmingTimeout / 1000;
+    fightMinutes.value = stateMachine.config.fightTimeout / 60000;
   }
 }
 
