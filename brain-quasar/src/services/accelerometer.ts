@@ -29,7 +29,10 @@ class AccelerometerService {
       // Request DeviceMotion permission on platforms that require it
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const DeviceMotionEventWithPermission = DeviceMotionEvent as any;
-      if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEventWithPermission.requestPermission === 'function') {
+      if (
+        typeof DeviceMotionEvent !== 'undefined' &&
+        typeof DeviceMotionEventWithPermission.requestPermission === 'function'
+      ) {
         console.log('Requesting DeviceMotion permission...');
         try {
           const permission = await DeviceMotionEventWithPermission.requestPermission();
@@ -61,7 +64,7 @@ class AccelerometerService {
     }
 
     if (this.listenerId) {
-      await Motion.removeAllListeners();
+      await this.listenerId.remove();
       this.listenerId = null;
     }
 
