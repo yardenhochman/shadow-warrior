@@ -265,24 +265,25 @@ async function startSensors() {
     await microphoneService.ensureAudioContextResumed();
 
     // Start both sensors in parallel
-    await Promise.allSettled([
-      microphoneService.start(),
-      accelerometerService.start(),
-    ]).then(([micro, accel]) => {
-      if (micro.status === 'fulfilled') {
-        microphoneStarted = true;
-      } else {
-        microphoneError = micro.reason instanceof Error ? micro.reason.message : String(micro.reason);
-        console.warn('Microphone failed to start:', microphoneError);
-      }
+    await Promise.allSettled([microphoneService.start(), accelerometerService.start()]).then(
+      ([micro, accel]) => {
+        if (micro.status === 'fulfilled') {
+          microphoneStarted = true;
+        } else {
+          microphoneError =
+            micro.reason instanceof Error ? micro.reason.message : String(micro.reason);
+          console.warn('Microphone failed to start:', microphoneError);
+        }
 
-      if (accel.status === 'fulfilled') {
-        accelerometerStarted = true;
-      } else {
-        accelerometerError = accel.reason instanceof Error ? accel.reason.message : String(accel.reason);
-        console.warn('Accelerometer failed to start:', accelerometerError);
-      }
-    });
+        if (accel.status === 'fulfilled') {
+          accelerometerStarted = true;
+        } else {
+          accelerometerError =
+            accel.reason instanceof Error ? accel.reason.message : String(accel.reason);
+          console.warn('Accelerometer failed to start:', accelerometerError);
+        }
+      },
+    );
 
     // Mark as running if at least one sensor started
     if (microphoneStarted || accelerometerStarted) {
@@ -290,9 +291,13 @@ async function startSensors() {
 
       // Show warnings if one sensor failed
       if (!microphoneStarted && accelerometerStarted) {
-        alert('Microphone access failed. Accelerometer started successfully, but shout detection will not work. Please check microphone permissions.');
+        alert(
+          'Microphone access failed. Accelerometer started successfully, but shout detection will not work. Please check microphone permissions.',
+        );
       } else if (microphoneStarted && !accelerometerStarted) {
-        alert('Accelerometer access failed. Microphone started successfully, but punch detection will not work. Please check motion/accelerometer permissions.');
+        alert(
+          'Accelerometer access failed. Microphone started successfully, but punch detection will not work. Please check motion/accelerometer permissions.',
+        );
       }
     } else {
       // Both failed
