@@ -10,7 +10,14 @@ npx quasar build
 npx cap sync
 
 # Build the Android app
-(cd android && ./gradlew assembleDebug)
+if [[ -r ".android-target" ]]; then
+	ANDROID_TARGET=$(<.android-target)
+	echo "Using Android target: $ANDROID_TARGET"
+	npx cap run android --target "$ANDROID_TARGET"
+else
+	echo "No .android-target file found. Building with default target."
+	npx cap run android
+fi
 
 # Optional: Deploy to an Android device
 # (cd android && ./gradlew installDebug)
