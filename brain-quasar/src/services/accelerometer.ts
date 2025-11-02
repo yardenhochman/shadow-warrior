@@ -26,11 +26,26 @@ class AccelerometerService {
     }
 
     try {
+      // Request DeviceMotion permission on platforms that require it
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const DeviceMotionEventWithPermission = DeviceMotionEvent as any;
+      if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEventWithPermission.requestPermission === 'function') {
+        console.log('Requesting DeviceMotion permission...');
+        try {
+          const permission = await DeviceMotionEventWithPermission.requestPermission();
+          console.log('DeviceMotion permission result:', permission);
+          if (permission !== 'granted') {
+            console.warn('DeviceMotion permission denied');
+            throw new Error('DeviceMotion permission denied by user');
+          }
+        } catch (permissionError) {
+          console.error('Failed to request DeviceMotion permission:', permissionError);
+          throw permissionError;
+        }
+      }
+
       // Start listening to accelerometer
-      this.listenerId = await Motion.addListener(
-        'accel',
-        this.handleAcceleration.bind(this)
-      );
+      this.listenerId = await Motion.addListener('accel', this.handleAcceleration.bind(this));
 
       this.config.enabled = true;
       console.log('Accelerometer service started');
@@ -63,9 +78,7 @@ class AccelerometerService {
     const deltaY = y - this.baselineAccel.y;
     const deltaZ = z - this.baselineAccel.z;
 
-    const magnitude = Math.sqrt(
-      deltaX * deltaX + deltaY * deltaY + deltaZ * deltaZ
-    );
+    const magnitude = Math.sqrt(deltaX * deltaX + deltaY * deltaY + deltaZ * deltaZ);
 
     // Detect punch based on threshold
     if (magnitude > this.config.threshold) {

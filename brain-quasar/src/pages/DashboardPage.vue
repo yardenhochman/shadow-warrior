@@ -4,9 +4,7 @@
       <!-- Current State Display -->
       <q-card class="q-mb-md">
         <q-card-section>
-          <div class="text-h4 text-center">
-            Shadow Warrior Arena
-          </div>
+          <div class="text-h4 text-center">Shadow Warrior Arena</div>
           <div class="text-h2 text-center q-mt-md" :class="stateColorClass">
             {{ currentStateDisplay }}
           </div>
@@ -20,16 +18,10 @@
 
           <div class="row q-col-gutter-md">
             <div class="col-12 col-sm-6">
-              <EnergyBar
-                label="Microphone (Shout)"
-                :value="energyViz.shoutAmplitude.value"
-              />
+              <EnergyBar label="Microphone (Shout)" :value="energyViz.shoutAmplitude.value" />
             </div>
             <div class="col-12 col-sm-6">
-              <EnergyBar
-                label="Accelerometer (Punch)"
-                :value="energyViz.punchForce.value"
-              />
+              <EnergyBar label="Accelerometer (Punch)" :value="energyViz.punchForce.value" />
             </div>
           </div>
         </q-card-section>
@@ -191,12 +183,7 @@
                 </q-item-label>
               </q-item-section>
               <q-item-section side v-if="!ledConnected">
-                <q-btn
-                  label="Connect"
-                  color="primary"
-                  size="sm"
-                  @click="connectLED"
-                />
+                <q-btn label="Connect" color="primary" size="sm" @click="connectLED" />
               </q-item-section>
             </q-item>
 
@@ -205,14 +192,14 @@
             <q-item>
               <q-item-section avatar>
                 <q-icon
-                  :name="sensorsRunning ? 'check_circle' : 'cancel'"
-                  :color="sensorsRunning ? 'positive' : 'negative'"
+                  :name="microphoneService.isEnabled() ? 'check_circle' : 'cancel'"
+                  :color="microphoneService.isEnabled() ? 'positive' : 'negative'"
                 />
               </q-item-section>
               <q-item-section>
-                <q-item-label>Sensors</q-item-label>
+                <q-item-label>Microphone</q-item-label>
                 <q-item-label caption>
-                  {{ sensorsRunning ? 'Active' : 'Inactive' }}
+                  {{ microphoneService.isEnabled() ? 'Active' : 'Inactive' }}
                 </q-item-label>
               </q-item-section>
             </q-item>
@@ -268,12 +255,54 @@ const cooldownTimeDisplay = computed(() => {
 });
 
 async function startSensors() {
+  let microphoneStarted = false;
+  let accelerometerStarted = false;
+  let microphoneError: string | null = null;
+  let accelerometerError: string | null = null;
+
   try {
-    await accelerometerService.start();
-    await microphoneService.start();
-    sensorsRunning.value = true;
+    // Ensure audio context is resumed on mobile platforms
+    await microphoneService.ensureAudioContextResumed();
+
+    // Start both sensors in parallel
+    await Promise.allSettled([
+      microphoneService.start(),
+      accelerometerService.start(),
+    ]).then(([micro, accel]) => {
+      if (micro.status === 'fulfilled') {
+        microphoneStarted = true;
+      } else {
+        microphoneError = micro.reason instanceof Error ? micro.reason.message : String(micro.reason);
+        console.warn('Microphone failed to start:', microphoneError);
+      }
+
+      if (accel.status === 'fulfilled') {
+        accelerometerStarted = true;
+      } else {
+        accelerometerError = accel.reason instanceof Error ? accel.reason.message : String(accel.reason);
+        console.warn('Accelerometer failed to start:', accelerometerError);
+      }
+    });
+
+    // Mark as running if at least one sensor started
+    if (microphoneStarted || accelerometerStarted) {
+      sensorsRunning.value = true;
+
+      // Show warnings if one sensor failed
+      if (!microphoneStarted && accelerometerStarted) {
+        alert('Microphone access failed. Accelerometer started successfully, but shout detection will not work. Please check microphone permissions.');
+      } else if (microphoneStarted && !accelerometerStarted) {
+        alert('Accelerometer access failed. Microphone started successfully, but punch detection will not work. Please check motion/accelerometer permissions.');
+      }
+    } else {
+      // Both failed
+      const errorMsg = microphoneError || accelerometerError || 'Unknown error';
+      alert(`Failed to start sensors: ${errorMsg}`);
+      throw new Error(errorMsg);
+    }
   } catch (error) {
-    console.error('Failed to start sensors:', error);
+    console.error('Error starting sensors:', error);
+    sensorsRunning.value = false;
   }
 }
 
