@@ -21,6 +21,7 @@ interface StateMachineState {
     cooldown: number | null;
     warming: number | null;
     fight: number | null;
+    decay: number | null;
   };
 }
 
@@ -40,6 +41,12 @@ export const useStateMachineStore = defineStore('stateMachine', {
       cooldownDuration: 5 * 60 * 1000, // 5 minutes
       warmingTimeout: 60 * 1000, // 1 minute
       fightTimeout: 3 * 60 * 1000, // 3 minutes
+      warmingDecayRate: 5, // Points per second
+      fightDecayRate: 3, // Points per second
+      warmingShoutScale: 10, // Power multiplier for warming shouts
+      fightPunchScale: 10, // Power multiplier for fight punches
+      fightShoutScale: 2, // Power multiplier for fight shouts (0.2x of punches)
+      presenceDetectionThreshold: 0.3, // Shout amplitude threshold for IDLE -> WARMING
     },
     history: [],
     cooldownStartTime: null,
@@ -49,6 +56,7 @@ export const useStateMachineStore = defineStore('stateMachine', {
       cooldown: null,
       warming: null,
       fight: null,
+      decay: null,
     },
   }),
 
@@ -153,6 +161,9 @@ export const useStateMachineStore = defineStore('stateMachine', {
       this.warmingStartTime = Date.now();
       this.metrics.warmingPower = 0;
 
+      // Start the power decay loop
+      this.startDecayLoop();
+
       // Set timeout to revert to idle if threshold not reached
       this.timers.warming = window.setTimeout(() => {
         if (this.currentState === ArenaState.WARMING) {
@@ -167,6 +178,9 @@ export const useStateMachineStore = defineStore('stateMachine', {
     onEnterFight(): void {
       this.fightStartTime = Date.now();
       this.metrics.fightPower = 0;
+
+      // Start the power decay loop
+      this.startDecayLoop();
 
       // Set timeout to revert to idle if threshold not reached
       this.timers.fight = window.setTimeout(() => {
@@ -222,14 +236,14 @@ export const useStateMachineStore = defineStore('stateMachine', {
     onShoutDetected(amplitude: number): void {
       this.metrics.shoutAmplitude = amplitude;
 
-      if (this.currentState === ArenaState.IDLE && amplitude > 0.3) {
+      if (this.currentState === ArenaState.IDLE && amplitude > this.config.presenceDetectionThreshold) {
         // Significant shout detected in idle, transition to warming
         this.transition(ArenaState.WARMING);
       } else if (this.currentState === ArenaState.WARMING) {
-        // Accumulate warming power based on shout amplitude
+        // Accumulate warming power based on shout amplitude and scale factor
         this.metrics.warmingPower = Math.min(
           100,
-          this.metrics.warmingPower + amplitude * 10
+          this.metrics.warmingPower + amplitude * this.config.warmingShoutScale
         );
 
         // Update LED pulse intensity
@@ -243,10 +257,10 @@ export const useStateMachineStore = defineStore('stateMachine', {
           this.transition(ArenaState.FIGHT);
         }
       } else if (this.currentState === ArenaState.FIGHT) {
-        // Shouts during fight contribute to fight power
+        // Shouts during fight contribute to fight power using scale factor
         this.metrics.fightPower = Math.min(
           100,
-          this.metrics.fightPower + amplitude * 5
+          this.metrics.fightPower + amplitude * this.config.fightShoutScale
         );
 
         // Update LED intensity
@@ -270,10 +284,10 @@ export const useStateMachineStore = defineStore('stateMachine', {
       this.metrics.punchForce = force;
 
       if (this.currentState === ArenaState.FIGHT) {
-        // Punches contribute to fight power
+        // Punches contribute to fight power using scale factor
         this.metrics.fightPower = Math.min(
           100,
-          this.metrics.fightPower + force * 10
+          this.metrics.fightPower + force * this.config.fightPunchScale
         );
 
         // Update LED intensity based on punch
@@ -298,17 +312,53 @@ export const useStateMachineStore = defineStore('stateMachine', {
       eventBus.emit(Events.CONFIG_UPDATED, this.config);
     },
 
+    // Start the decay loop for power degradation
+    startDecayLoop(): void {
+      // Clear any existing decay loop
+      if (this.timers.decay !== null) {
+        clearInterval(this.timers.decay as unknown as number);
+      }
+
+      // Run decay every 100ms (10 times per second for smooth decay)
+      this.timers.decay = window.setInterval(() => {
+        const decayInterval = 0.1; // 100ms in seconds
+
+        if (this.currentState === ArenaState.WARMING) {
+          const decayAmount = this.config.warmingDecayRate * decayInterval;
+          this.metrics.warmingPower = Math.max(0, this.metrics.warmingPower - decayAmount);
+          eventBus.emit(Events.METRICS_UPDATED, this.metrics);
+        } else if (this.currentState === ArenaState.FIGHT) {
+          const decayAmount = this.config.fightDecayRate * decayInterval;
+          this.metrics.fightPower = Math.max(0, this.metrics.fightPower - decayAmount);
+          eventBus.emit(Events.METRICS_UPDATED, this.metrics);
+        }
+      }, 100) as unknown as number;
+    },
+
+    // Stop the decay loop
+    stopDecayLoop(): void {
+      if (this.timers.decay !== null) {
+        clearInterval(this.timers.decay as unknown as number);
+        this.timers.decay = null;
+      }
+    },
+
     // Clear all timers
     clearTimers(): void {
       Object.values(this.timers).forEach((timer) => {
         if (timer !== null) {
-          clearTimeout(timer);
+          if (timer === this.timers.decay) {
+            clearInterval(timer as unknown as number);
+          } else {
+            clearTimeout(timer);
+          }
         }
       });
       this.timers = {
         cooldown: null,
         warming: null,
         fight: null,
+        decay: null,
       };
     },
 
