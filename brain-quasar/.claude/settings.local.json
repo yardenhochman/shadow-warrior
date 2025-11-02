@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(quasar build:*)",
+      "Bash(npx cap run android)",
+      "Bash(npx cap sync:*)",
+      "Bash($ANDROID_HOME/platform-tools/adb devices)",
+      "Bash(/Users/avishai/Library/Android/sdk/platform-tools/adb devices)",
+      "Bash(/Users/avishai/Library/Android/sdk/platform-tools/adb install:*)",
+      "Bash(/Users/avishai/Library/Android/sdk/platform-tools/adb shell am start:*)",
+      "Bash(/Users/avishai/Library/Android/sdk/platform-tools/adb logcat -s \"Capacitor\" \"Console\" \"chromium\")"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
