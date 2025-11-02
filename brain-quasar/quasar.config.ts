@@ -57,7 +57,7 @@ export default defineConfig((/* ctx */) => {
       // ignorePublicFolder: true,
       // minify: false,
       // polyfillModulePreload: true,
-      // distDir
+      distDir: 'dist/capacitor',
 
       // extendViteConf (viteConf) {},
       // viteVuePluginOptions: {},

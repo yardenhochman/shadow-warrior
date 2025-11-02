@@ -4,7 +4,7 @@
       <q-toolbar>
         <q-btn flat dense round icon="menu" aria-label="Menu" @click="toggleLeftDrawer" />
 
-        <q-toolbar-title> Shadow Warrior </q-toolbar-title>
+        <q-toolbar-title> Shadow Warrior Brain</q-toolbar-title>
 
         <q-btn flat dense round icon="settings" aria-label="Settings" to="/settings" />
       </q-toolbar>
