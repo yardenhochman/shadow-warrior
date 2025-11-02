@@ -1,5 +1,6 @@
 // Microphone service for shout detection using Web Audio API
 import { eventBus, Events } from './event-bus';
+import { Capacitor } from '@capacitor/core';
 
 interface ShoutDetectionConfig {
   threshold: number; // Amplitude threshold for shout detection (0-1)
@@ -32,7 +33,8 @@ class MicrophoneService {
     }
 
     try {
-      // Request microphone access
+      console.log('Requesting microphone access via getUserMedia...');
+      // Request microphone access - this will prompt for permission if needed
       this.mediaStream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
@@ -40,16 +42,28 @@ class MicrophoneService {
           autoGainControl: false,
         },
       });
+      console.log('getUserMedia successful, tracks:', this.mediaStream.getAudioTracks().length);
 
-      // Create audio context and analyser
+      // Create audio context AFTER getUserMedia succeeds (important for mobile)
+      console.log('Creating AudioContext...');
       this.audioContext = new AudioContext();
+      console.log('AudioContext created, state:', this.audioContext.state);
+
+      // Resume audio context on mobile (required after user interaction)
+      if (Capacitor.isNativePlatform() && this.audioContext.state === 'suspended') {
+        console.log('Resuming audio context...');
+        await this.audioContext.resume();
+        console.log('AudioContext state after resume:', this.audioContext.state);
+      }
+
+      console.log('Creating analyser...');
       this.analyser = this.audioContext.createAnalyser();
       this.analyser.fftSize = this.config.fftSize;
       this.analyser.smoothingTimeConstant = this.config.smoothingFactor;
 
+      console.log('Connecting microphone to analyser...');
       // Connect microphone to analyser
-      this.microphone =
-        this.audioContext.createMediaStreamSource(this.mediaStream);
+      this.microphone = this.audioContext.createMediaStreamSource(this.mediaStream);
       this.microphone.connect(this.analyser);
 
       // Create data array for amplitude analysis
@@ -59,14 +73,35 @@ class MicrophoneService {
       // Start monitoring
       this.intervalId = window.setInterval(
         this.analyzeAudio.bind(this),
-        this.config.updateIntervalMs
+        this.config.updateIntervalMs,
       );
 
       this.config.enabled = true;
-      console.log('Microphone service started');
+      console.log('Microphone service started successfully');
     } catch (error) {
       console.error('Failed to start microphone:', error);
-      throw error;
+      if (error instanceof Error) {
+        console.error('Error name:', error.name);
+        console.error('Error message:', error.message);
+
+        // Provide user-friendly error messages
+        if (error.name === 'NotAllowedError') {
+          console.warn('MICROPHONE PERMISSION DENIED: Microphone will not work, but app continues with accelerometer');
+          // Don't throw - let the app continue without microphone
+          return;
+        } else if (error.name === 'NotFoundError') {
+          console.warn('No microphone found on this device');
+          return;
+        } else if (error.name === 'NotReadableError') {
+          console.warn('Microphone is already in use by another app');
+          return;
+        } else {
+          throw new Error(`Microphone error: ${error.message}`);
+        }
+      } else {
+        console.error('Non-Error object thrown:', typeof error, error);
+        throw new Error('Unknown microphone error occurred');
+      }
     }
   }
 
@@ -108,6 +143,7 @@ class MicrophoneService {
 
   private analyzeAudio(): void {
     if (!this.analyser || !this.dataArray) {
+      console.log('Microphone: analyser or dataArray not ready');
       return;
     }
 
@@ -127,6 +163,11 @@ class MicrophoneService {
 
     // Normalize amplitude to 0-1 range
     const amplitude = Math.min(rms * 2, 1.0); // Scale RMS
+
+    // Debug logging - only log occasionally to avoid spam
+    if (Math.random() < 0.01) { // Log ~1% of the time
+      console.log('Microphone amplitude:', amplitude, 'RMS:', rms);
+    }
 
     // Emit shout event if above threshold
     if (amplitude > this.config.threshold) {
@@ -168,6 +209,21 @@ class MicrophoneService {
 
   isEnabled(): boolean {
     return this.config.enabled;
+  }
+
+  private async requestMicrophonePermission(): Promise<void> {
+    // Removed - getUserMedia handles permission requests directly
+  }
+
+  async ensureAudioContextResumed(): Promise<void> {
+    if (this.audioContext && this.audioContext.state === 'suspended') {
+      try {
+        await this.audioContext.resume();
+        console.log('Audio context resumed');
+      } catch (error) {
+        console.error('Failed to resume audio context:', error);
+      }
+    }
   }
 
   getCurrentAmplitude(): number {
