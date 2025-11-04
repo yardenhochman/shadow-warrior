@@ -245,6 +245,57 @@
               @update:model-value="updateMicConfig"
             />
           </div>
+
+          <div class="q-mt-md">
+            <div class="row items-center">
+              <div class="text-subtitle2">Enable Band-pass Filter (150-800 Hz)</div>
+              <q-icon name="help_outline" class="q-ml-sm cursor-help">
+                <q-tooltip anchor="top middle">
+                  Higher low-cut removes more wind rumble but may attenuate low-pitched voices.
+                  Increase low cutoff to reduce wind; lower it to preserve deeper shouts.
+                </q-tooltip>
+              </q-icon>
+            </div>
+
+            <q-toggle
+              v-model="micConfig.filterEnabled"
+              label="Enable 150-800 Hz filter"
+              color="primary"
+              @update:model-value="updateMicConfig"
+            />
+            <div class="text-caption text-grey q-mt-sm">
+              Higher low-cut removes more wind rumble but may attenuate low-pitched voices. Increase
+              low cutoff to reduce wind; lower it to preserve deeper shouts.
+            </div>
+          </div>
+
+          <div v-if="micConfig.filterEnabled" class="q-mt-md">
+            <div class="text-subtitle2">Filter Low Cutoff (Hz)</div>
+            <q-slider
+              v-model="micConfig.filterLowHz"
+              :min="20"
+              :max="400"
+              :step="1"
+              label
+              label-always
+              color="primary"
+              @update:model-value="updateMicConfig"
+            />
+
+            <div class="q-mt-md">
+              <div class="text-subtitle2">Filter High Cutoff (Hz)</div>
+              <q-slider
+                v-model="micConfig.filterHighHz"
+                :min="300"
+                :max="2000"
+                :step="5"
+                label
+                label-always
+                color="primary"
+                @update:model-value="updateMicConfig"
+              />
+            </div>
+          </div>
         </q-card-section>
       </q-card>
 
@@ -350,6 +401,9 @@ const micConfig = ref({
   threshold: 0.3,
   smoothingFactor: 0.8,
   updateIntervalMs: 50,
+  filterEnabled: true,
+  filterLowHz: 150,
+  filterHighHz: 800,
 });
 
 const uvConfig = ref({
@@ -451,6 +505,9 @@ function resetSettings() {
     threshold: 0.3,
     smoothingFactor: 0.8,
     updateIntervalMs: 50,
+    filterEnabled: true,
+    filterLowHz: 150,
+    filterHighHz: 800,
   };
 
   uvConfig.value = {
