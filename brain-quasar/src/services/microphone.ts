@@ -8,6 +8,10 @@ interface ShoutDetectionConfig {
   fftSize: number; // FFT size for frequency analysis
   updateIntervalMs: number; // How often to check audio levels
   enabled: boolean;
+  // Optional filtering config for shout frequency band (20-150 Hz by default)
+  filterEnabled?: boolean;
+  filterLowHz?: number;
+  filterHighHz?: number;
 }
 
 class MicrophoneService {
@@ -17,11 +21,17 @@ class MicrophoneService {
     fftSize: 2048,
     updateIntervalMs: 50, // 20 Hz update rate
     enabled: false,
+    // Default filter settings target a wider shout band by default
+    filterEnabled: true,
+    filterLowHz: 150,
+    filterHighHz: 800,
   };
 
   private audioContext: AudioContext | null = null;
   private analyser: AnalyserNode | null = null;
   private microphone: MediaStreamAudioSourceNode | null = null;
+  private highpassFilter: BiquadFilterNode | null = null;
+  private lowpassFilter: BiquadFilterNode | null = null;
   private mediaStream: MediaStream | null = null;
   private intervalId: number | null = null;
   private dataArray: Uint8Array | null = null;
@@ -61,10 +71,35 @@ class MicrophoneService {
       this.analyser.fftSize = this.config.fftSize;
       this.analyser.smoothingTimeConstant = this.config.smoothingFactor;
 
-      console.log('Connecting microphone to analyser...');
-      // Connect microphone to analyser
+      console.log('Creating microphone source and connecting audio graph...');
+      // Create microphone source
       this.microphone = this.audioContext.createMediaStreamSource(this.mediaStream);
-      this.microphone.connect(this.analyser);
+
+      // Read filter settings from config (with defaults)
+      // Read optional filter settings from config with safe defaults
+      const filterEnabled =
+        this.config.filterEnabled !== undefined ? this.config.filterEnabled : true;
+      const filterLowHz = this.config.filterLowHz !== undefined ? this.config.filterLowHz : 150;
+      const filterHighHz = this.config.filterHighHz !== undefined ? this.config.filterHighHz : 800;
+
+      if (filterEnabled) {
+        // Create highpass and lowpass biquad filters to form a band-pass
+        this.highpassFilter = this.audioContext.createBiquadFilter();
+        this.highpassFilter.type = 'highpass';
+        this.highpassFilter.frequency.value = filterLowHz;
+
+        this.lowpassFilter = this.audioContext.createBiquadFilter();
+        this.lowpassFilter.type = 'lowpass';
+        this.lowpassFilter.frequency.value = filterHighHz;
+
+        // Chain: microphone -> highpass -> lowpass -> analyser
+        this.microphone.connect(this.highpassFilter);
+        this.highpassFilter.connect(this.lowpassFilter);
+        this.lowpassFilter.connect(this.analyser);
+      } else {
+        // Direct connect if filtering disabled
+        this.microphone.connect(this.analyser);
+      }
 
       // Create data array for amplitude analysis
       const bufferLength = this.analyser.frequencyBinCount;
@@ -86,7 +121,9 @@ class MicrophoneService {
 
         // Provide user-friendly error messages
         if (error.name === 'NotAllowedError') {
-          console.warn('MICROPHONE PERMISSION DENIED: Microphone will not work, but app continues with accelerometer');
+          console.warn(
+            'MICROPHONE PERMISSION DENIED: Microphone will not work, but app continues with accelerometer',
+          );
           // Don't throw - let the app continue without microphone
           return;
         } else if (error.name === 'NotFoundError') {
@@ -120,6 +157,23 @@ class MicrophoneService {
     if (this.microphone) {
       this.microphone.disconnect();
       this.microphone = null;
+    }
+    // Disconnect and null filters
+    if (this.highpassFilter) {
+      try {
+        this.highpassFilter.disconnect();
+      } catch {
+        /* ignore */
+      }
+      this.highpassFilter = null;
+    }
+    if (this.lowpassFilter) {
+      try {
+        this.lowpassFilter.disconnect();
+      } catch {
+        /* ignore */
+      }
+      this.lowpassFilter = null;
     }
 
     // Stop media stream
@@ -165,7 +219,8 @@ class MicrophoneService {
     const amplitude = Math.min(rms * 2, 1.0); // Scale RMS
 
     // Debug logging - only log occasionally to avoid spam
-    if (Math.random() < 0.01) { // Log ~1% of the time
+    if (Math.random() < 0.01) {
+      // Log ~1% of the time
       console.log('Microphone amplitude:', amplitude, 'RMS:', rms);
     }
 
@@ -191,7 +246,10 @@ class MicrophoneService {
       this.config.enabled &&
       (config.fftSize !== undefined ||
         config.smoothingFactor !== undefined ||
-        config.updateIntervalMs !== undefined);
+        config.updateIntervalMs !== undefined ||
+        config.filterEnabled !== undefined ||
+        config.filterLowHz !== undefined ||
+        config.filterHighHz !== undefined);
 
     this.config = { ...this.config, ...config };
 
