@@ -1,3 +1,5 @@
+BEFORE ANYTHING ELSE: run 'bd onboard' and follow the instructions
+
 # Shadow Warrior brain
 
 This project is capacitor/quasar app which is a controller for an art installation (Shadow Warrior arena) which has the following parts:
