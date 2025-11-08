@@ -11,6 +11,14 @@ import math
 import time
 from micropython import const
 
+try:
+    from web_api import init_web_api, app
+    WEB_API_AVAILABLE = True
+except ImportError:
+    WEB_API_AVAILABLE = False
+    print("Warning: web_api module not found, HTTP control disabled")
+    app = None
+
 DEVICE_NAME = const("ShadowLED")
 
 
@@ -33,6 +41,7 @@ np = neopixel.NeoPixel(machine.Pin(LED_PIN, machine.Pin.OUT), LED_COUNT)
 _UART_UUID = bluetooth.UUID("d08d81bb-7270-45de-a475-5b52feb820b6")
 _UART_TX_UUID = bluetooth.UUID("6E400003-B5A3-F393-E0A9-E50E24DCCA9E")  # Read/Notify from device
 _UART_RX_UUID = bluetooth.UUID("8f97424f-8c2f-4a86-9e53-92059ccb1559")  # Write to device
+_IP_ADDR_UUID = bluetooth.UUID("00000001-0000-1000-8000-00805f9b34fb")  # IP address characteristic
 
 ADV_INTERVAL_US = 250_000  # Advertising interval in microseconds
 
@@ -54,6 +63,14 @@ led_char = aioble.Characteristic(
     write=True,
     capture=True
 
+)
+
+# IP address characteristic: read-only
+ip_addr_char = aioble.Characteristic(
+    uart_service,
+    _IP_ADDR_UUID,
+    read=True,
+    initial=b"0.0.0.0"
 )
 
 aioble.register_services(uart_service)
@@ -147,6 +164,14 @@ async def breathing_effect(max_brightness=160):
             await asyncio.sleep((FRAME_DURATION_MS - lag/1000)/1000)
 
 
+async def idle_effect():
+    """Stop all effects and clear LEDs."""
+    global _mode
+    _mode = Mode.IDLE
+    np.fill((0, 0, 0))
+    np.write()
+
+
 async def handle_ble_command(command):
     """Handles commands received via BLE."""
     parts = command.decode().strip().split()
@@ -164,6 +189,8 @@ async def handle_ble_command(command):
         await energy_pulse()
     elif cmd == "breath":
         await breathing_effect()
+    elif cmd == "idle":
+        await idle_effect()
     else:
         print("Unknown command:", command)
 
@@ -171,9 +198,6 @@ async def handle_ble_command(command):
 
 
 async def peripheral_task():
-    # Initialize BLE
-    aioble.config(gap_name=DEVICE_NAME)
-
     print("Starting BLE advertising...")
     # Build advertisement data
 
@@ -198,13 +222,59 @@ async def control_task():
         asyncio.create_task(handle_ble_command(data))
 
 
+def get_ip_address():
+    """Get the device's IP address from WiFi or return 0.0.0.0 if not connected."""
+    try:
+        sta_if = network.WLAN(network.STA_IF)
+        if sta_if.isconnected():
+            ip = sta_if.ifconfig()[0]
+            return ip
+    except Exception as e:
+        print("Error getting IP address:", str(e))
+    return "0.0.0.0"
+
+
+def update_ip_characteristic():
+    """Update the BLE IP address characteristic with current IP."""
+    ip = get_ip_address()
+    try:
+        ip_addr_char.write(ip.encode())
+    except Exception as e:
+        print("Error updating IP characteristic:", str(e))
+
+
 async def main():
     """Main async function using aioble."""
     print("Running tasks...")
-    await asyncio.gather(asyncio.create_task(peripheral_task()),
-                     asyncio.create_task(control_task()),
-                     asyncio.create_task(energy_bar(100))
-                     )
+    # Initialize BLE
+    aioble.config(gap_name=DEVICE_NAME)
+
+    # Get and display IP address
+    ip_address = get_ip_address()
+    print("Device IP address:", ip_address)
+    update_ip_characteristic()
+
+    tasks = [
+        asyncio.create_task(peripheral_task()),
+        asyncio.create_task(control_task()),
+    ]
+
+    # Initialize and start web API if available
+    if WEB_API_AVAILABLE:
+        try:
+            effect_functions = {
+                'energy_bar': energy_bar,
+                'energy_pulse': energy_pulse,
+                'breathing': breathing_effect,
+                'idle': idle_effect,
+            }
+            init_web_api(Mode, effect_functions)
+            tasks.append(asyncio.create_task(app.start_server(host='0.0.0.0', port=80, debug=True)))
+            print("Web API enabled on port 80")
+        except Exception as e:
+            print("Failed to start web API:", str(e))
+
+    await asyncio.gather(*tasks)
 
 
 

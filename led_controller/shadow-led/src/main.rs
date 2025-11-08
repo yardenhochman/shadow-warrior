@@ -3,6 +3,7 @@ mod led_effects;
 mod command_handler;
 mod effect_state;
 mod transitions;
+mod http_server;
 
 use esp_idf_hal::delay::FreeRtos;
 use esp_idf_hal::gpio::*;
@@ -48,8 +49,14 @@ fn main() -> anyhow::Result<()> {
     let mut wifi = EspWifi::new(peripherals.modem, sys_loop.clone(), Some(nvs.clone()))?;
     connect_wifi(&mut wifi)?;
 
-    // Get IP address
-    let ip_address = get_ip_address(&wifi);
+    // Get IP address — wait a short while for IP assignment (avoid logging 0.0.0.0)
+    let mut ip_address = get_ip_address(&wifi);
+    let mut waited_ms = 0u32;
+    while ip_address == "0.0.0.0" && waited_ms < 10_000 {
+        FreeRtos::delay_ms(500);
+        waited_ms += 500;
+        ip_address = get_ip_address(&wifi);
+    }
     log::info!("Device IP address: {}", ip_address);
 
     // Initialize LED strip on GPIO 26
@@ -67,11 +74,15 @@ fn main() -> anyhow::Result<()> {
     // Initialize BLE service
     let _ble_service = ble::BleService::new(
         DEVICE_NAME,
-        Arc::new(CommandHandler::create_ble_callback(command_tx)),
+        Arc::new(CommandHandler::create_ble_callback(command_tx.clone())),
     )?;
+
+    // Initialize HTTP server
+    let _http_server = http_server::HttpServer::new(command_tx)?;
 
     log::info!("ShadowLED Controller initialized successfully!");
     log::info!("BLE advertising as: {}", DEVICE_NAME);
+    log::info!("HTTP server running on port 80");
 
     // Initialize effect state machine
     let mut effect_state = EffectState::new(LED_COUNT);
