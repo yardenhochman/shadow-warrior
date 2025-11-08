@@ -1,6 +1,8 @@
 mod ble;
 mod led_effects;
 mod command_handler;
+mod effect_state;
+mod transitions;
 
 use esp_idf_hal::delay::FreeRtos;
 use esp_idf_hal::gpio::*;
@@ -12,9 +14,10 @@ use heapless::String;
 use ws2812_esp32_rmt_driver::Ws2812Esp32Rmt;
 use smart_leds_trait::{SmartLedsWrite, RGB8};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::command_handler::{CommandHandler, LedCommand};
+use crate::effect_state::{EffectState, EffectMode};
+use crate::led_effects::FRAME_DURATION_MS;
 
 const WIFI_SSID: &str = "super_skunk"; // Replace with your WiFi SSID
 const WIFI_PASSWORD: &str = "0547407479"; // Replace with your WiFi password
@@ -70,53 +73,53 @@ fn main() -> anyhow::Result<()> {
     log::info!("ShadowLED Controller initialized successfully!");
     log::info!("BLE advertising as: {}", DEVICE_NAME);
 
-    // Shared flag to stop running effects
-    let stop_effect = Arc::new(AtomicBool::new(false));
+    // Initialize effect state machine
+    let mut effect_state = EffectState::new(LED_COUNT);
+    let mut frame_counter: u64 = 0;
 
-    // Main control loop
+    // Main render loop (60 FPS)
     loop {
-        // Check for new commands
-        if let Some(command) = command_handler.try_recv() {
-            log::info!("Executing command: {:?}", command);
+        let current_time = frame_counter;
 
-            // Signal any running effect to stop
-            stop_effect.store(true, Ordering::Relaxed);
-            FreeRtos::delay_ms(100); // Give time for effect to stop
-            stop_effect.store(false, Ordering::Relaxed);
+        // 1. Process commands → trigger state transitions
+        while let Some(command) = command_handler.try_recv() {
+            log::info!("Processing command: {:?}", command);
 
             match command {
                 LedCommand::EnergyBar(percentage) => {
-                    if let Err(e) = led_effects::energy_bar(&mut ws2812, LED_COUNT, percentage, 500) {
-                        log::error!("Energy bar effect failed: {}", e);
-                    }
+                    // For backward compatibility, set power and transition to EnergyBar
+                    effect_state.set_power(percentage);
+                    effect_state.transition_to(EffectMode::EnergyBar, current_time);
                 }
                 LedCommand::EnergyPulse => {
-                    if let Err(e) = led_effects::energy_pulse(&mut ws2812, LED_COUNT) {
-                        log::error!("Energy pulse effect failed: {}", e);
-                    }
+                    effect_state.transition_to(EffectMode::EnergyPulse, current_time);
                 }
                 LedCommand::Breathing => {
-                    log::info!("Starting breathing effect. Send 'idle' to stop.");
-                    let stop_flag = stop_effect.clone();
-                    let result = led_effects::breathing_cycle(
-                        &mut ws2812,
-                        LED_COUNT,
-                        160,
-                        move || stop_flag.load(Ordering::Relaxed),
-                    );
-                    if let Err(e) = result {
-                        log::error!("Breathing effect failed: {}", e);
-                    }
+                    effect_state.transition_to(EffectMode::Breathing, current_time);
                 }
                 LedCommand::Idle => {
-                    if let Err(e) = led_effects::idle_effect(&mut ws2812, LED_COUNT) {
-                        log::error!("Idle effect failed: {}", e);
-                    }
+                    effect_state.set_mode_instant(EffectMode::Idle, current_time);
+                }
+                LedCommand::SetPower(power) => {
+                    effect_state.set_power(power);
+                }
+                LedCommand::Electricity => {
+                    effect_state.transition_to(EffectMode::Electricity, current_time);
                 }
             }
         }
 
-        FreeRtos::delay_ms(50); // Small delay to prevent busy-waiting
+        // 2. Update animation state for current frame
+        effect_state.update_frame(current_time, LED_COUNT);
+
+        // 3. Render current state (handles transitions internally)
+        let pixels = effect_state.render(LED_COUNT, current_time);
+        ws2812.write(pixels.iter().cloned())?;
+
+        // 4. Sync to 60 FPS
+        FreeRtos::delay_ms(FRAME_DURATION_MS);
+
+        frame_counter += 1;
     }
 }
 
