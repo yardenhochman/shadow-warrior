@@ -7,6 +7,8 @@ pub enum LedCommand {
     EnergyPulse,
     Breathing,
     Idle,
+    SetPower(u8),       // Update energy bar power (0-100)
+    Electricity,        // Start electricity effect
 }
 
 pub struct CommandHandler {
@@ -56,8 +58,22 @@ impl CommandHandler {
                     None
                 }
             }
+            "set_power" => {
+                if parts.len() > 1 {
+                    parts[1].parse::<u8>().ok().and_then(|p| {
+                        if p <= 100 {
+                            Some(LedCommand::SetPower(p))
+                        } else {
+                            None
+                        }
+                    })
+                } else {
+                    None
+                }
+            }
             "energy_pulse" => Some(LedCommand::EnergyPulse),
             "breath" | "breathing" => Some(LedCommand::Breathing),
+            "electricity" => Some(LedCommand::Electricity),
             "idle" => Some(LedCommand::Idle),
             _ => {
                 log::warn!("Unknown command: {}", command_str);
@@ -106,9 +122,15 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_idle() {
-        let cmd = CommandHandler::parse_ble_command(b"idle");
-        assert!(matches!(cmd, Some(LedCommand::Idle)));
+    fn test_parse_set_power() {
+        let cmd = CommandHandler::parse_ble_command(b"set_power 75");
+        assert!(matches!(cmd, Some(LedCommand::SetPower(75))));
+    }
+
+    #[test]
+    fn test_parse_electricity() {
+        let cmd = CommandHandler::parse_ble_command(b"electricity");
+        assert!(matches!(cmd, Some(LedCommand::Electricity)));
     }
 
     #[test]
