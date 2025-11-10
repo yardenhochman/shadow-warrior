@@ -29,53 +29,27 @@ impl<'a> HttpServer<'a> {
             Ok(())
         })?;
 
-        // POST /energy_bar?percentage=X
+        // POST /energy_bar?level=X
         let tx_energy_bar = command_tx.clone();
         server.fn_handler("/energy_bar", Method::Post, move |request| -> anyhow::Result<()> {
-            match Self::get_query_param(&request, "percentage")
+            match Self::get_query_param(&request, "level")
                 .and_then(|p| p.parse::<u8>().ok())
                 .filter(|&p| p <= 100)
             {
-                Some(percentage) => {
-                    log::info!("HTTP: energy_bar {}%", percentage);
-                    if let Err(err) = tx_energy_bar.send(LedCommand::EnergyBar(percentage)) {
+                Some(level) => {
+                    log::info!("HTTP: energy_bar {}%", level);
+                    if let Err(err) = tx_energy_bar.send(LedCommand::EnergyBar(level)) {
                         log::error!("Failed to enqueue energy_bar command: {}", err);
                         let mut response = request.into_status_response(500)?;
                         response.write_all(b"Internal server error")?;
                     } else {
                         let mut response = request.into_ok_response()?;
-                        response.write_all(format!("Energy bar set to {}%", percentage).as_bytes())?;
+                        response.write_all(format!("Energy bar set to {}%", level).as_bytes())?;
                     }
                 }
                 None => {
                     let mut response = request.into_status_response(400)?;
-                    response.write_all(b"Invalid percentage. Must be 0-100")?;
-                }
-            }
-            Ok(())
-        })?;
-
-        // POST /set_power?power=X
-        let tx_set_power = command_tx.clone();
-        server.fn_handler("/set_power", Method::Post, move |request| -> anyhow::Result<()> {
-            match Self::get_query_param(&request, "power")
-                .and_then(|p| p.parse::<u8>().ok())
-                .filter(|&p| p <= 100)
-            {
-                Some(power) => {
-                    log::info!("HTTP: set_power {}%", power);
-                    if let Err(err) = tx_set_power.send(LedCommand::EnergyBar(power)) {
-                        log::error!("Failed to enqueue set_power command: {}", err);
-                        let mut response = request.into_status_response(500)?;
-                        response.write_all(b"Internal server error")?;
-                    } else {
-                        let mut response = request.into_ok_response()?;
-                        response.write_all(format!("Power set to {}%", power).as_bytes())?;
-                    }
-                }
-                None => {
-                    let mut response = request.into_status_response(400)?;
-                    response.write_all(b"Invalid power. Must be 0-100")?;
+                    response.write_all(b"Invalid level. Must be 0-100")?;
                 }
             }
             Ok(())
