@@ -56,19 +56,6 @@ impl CommandHandler {
                     None
                 }
             }
-            "set_power" => {
-                if parts.len() > 1 {
-                    parts[1].parse::<u8>().ok().and_then(|p| {
-                        if p <= 100 {
-                            Some(LedCommand::EnergyBar(p))
-                        } else {
-                            None
-                        }
-                    })
-                } else {
-                    None
-                }
-            }
             "energy_pulse" => Some(LedCommand::EnergyPulse),
             "breath" | "breathing" => Some(LedCommand::Breathing),
             "electricity" => Some(LedCommand::Electricity),
