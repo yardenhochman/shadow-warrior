@@ -1,4 +1,3 @@
-use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{channel, Sender, Receiver};
 
 #[derive(Debug, Clone)]
@@ -12,7 +11,7 @@ pub enum LedCommand {
 
 pub struct CommandHandler {
     tx: Sender<LedCommand>,
-    rx: Arc<Mutex<Receiver<LedCommand>>>,
+    rx: Receiver<LedCommand>,
 }
 
 impl CommandHandler {
@@ -20,7 +19,7 @@ impl CommandHandler {
         let (tx, rx) = channel();
         Self {
             tx,
-            rx: Arc::new(Mutex::new(rx)),
+            rx,
         }
     }
 
@@ -31,7 +30,7 @@ impl CommandHandler {
 
     /// Try to receive a command (non-blocking)
     pub fn try_recv(&self) -> Option<LedCommand> {
-        self.rx.lock().ok()?.try_recv().ok()
+        self.rx.try_recv().ok()
     }
 
     /// Parse a BLE command string into a LedCommand
@@ -123,7 +122,7 @@ mod tests {
     #[test]
     fn test_parse_set_power() {
         let cmd = CommandHandler::parse_ble_command(b"set_power 75");
-        assert!(matches!(cmd, Some(LedCommand::SetPower(75))));
+        assert!(matches!(cmd, Some(LedCommand::EnergyBar(75))));
     }
 
     #[test]

@@ -64,7 +64,7 @@ impl<'a> HttpServer<'a> {
             {
                 Some(power) => {
                     log::info!("HTTP: set_power {}%", power);
-                    if let Err(err) = tx_set_power.send(LedCommand::SetPower(power)) {
+                    if let Err(err) = tx_set_power.send(LedCommand::EnergyBar(power)) {
                         log::error!("Failed to enqueue set_power command: {}", err);
                         let mut response = request.into_status_response(500)?;
                         response.write_all(b"Internal server error")?;

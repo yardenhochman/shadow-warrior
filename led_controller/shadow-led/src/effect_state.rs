@@ -1,9 +1,11 @@
+use std::fmt::Display;
+
 use crate::command_handler::LedCommand;
-use crate::led_effects::EnergyBar;
 use crate::led_effects::EmptyEffect;
+use crate::led_effects::EnergyBar;
 use palette::named;
 use smart_led_effects::{
-    strip::{Breathe, Meteor, Strobe, EffectIterator},
+    strip::{Breathe, EffectIterator, Meteor, Strobe},
     Srgb,
 };
 
@@ -16,13 +18,22 @@ pub enum EffectMode {
     EnergyPulse(Strobe),
 }
 
+impl Display for EffectMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EffectMode::Idle(_) => write!(f, "Idle"),
+            EffectMode::Breathing(_) => write!(f, "Breathing"),
+            EffectMode::EnergyBar(_) => write!(f, "EnergyBar"),
+            EffectMode::Electricity(_) => write!(f, "Electricity"),
+            EffectMode::EnergyPulse(_) => write!(f, "EnergyPulse"),
+        }
+    }
+}
+
 /// Core state machine for LED effects
 pub struct EffectState {
     pub mode: EffectMode,
     pub last_frame: Vec<Srgb<u8>>, // Last rendered frame for transition capture
-
-    // Optimization: track if state has changed since last render
-    state_changed: bool,
 }
 
 impl EffectState {
@@ -30,7 +41,6 @@ impl EffectState {
         Self {
             mode: EffectMode::Idle(EmptyEffect {}),
             last_frame: vec![palette::named::BLACK; led_count],
-            state_changed: false,
         }
     }
 
@@ -82,7 +92,6 @@ impl EffectState {
                 None,
             )),
         };
-        self.state_changed = true;
         // Create new effect iterator for the mode        // Set the transition effect as the current effect iterator
     }
 }

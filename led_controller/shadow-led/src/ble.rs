@@ -1,6 +1,7 @@
-use esp32_nimble::utilities::BleUuid;
 use esp32_nimble::{BLEDevice, BLEServer, NimbleProperties};
-use std::sync::{Arc, Mutex};
+use esp32_nimble::utilities::{BleUuid};
+use std::sync::Arc;
+use std::sync::Mutex;
 
 // BLE UUIDs matching the MicroPython implementation
 pub const SERVICE_UUID: &str = "d08d81bb-7270-45de-a475-5b52feb820b6";
@@ -12,6 +13,8 @@ pub type CommandCallback = Arc<dyn Fn(&[u8]) + Send + Sync>;
 
 pub struct BleService {
     _server: &'static mut BLEServer,
+    tx_characteristic: Arc<esp32_nimble::utilities::mutex::Mutex<esp32_nimble::BLECharacteristic>>,
+    ip_characteristic: Arc<esp32_nimble::utilities::mutex::Mutex<esp32_nimble::BLECharacteristic>>,
 }
 
 impl BleService {
@@ -98,6 +101,18 @@ impl BleService {
 
         Ok(Self {
             _server: server,
+            tx_characteristic: _tx_characteristic,
+            ip_characteristic
         })
+    }
+    
+    pub fn update_ip_address(&self, ip_address: &str) -> anyhow::Result<()> {
+        self.ip_characteristic.lock().set_value(ip_address.as_bytes());
+        Ok(())
+    }
+
+    pub fn update_status(&self, status: &str) -> anyhow::Result<()> {
+        self.tx_characteristic.lock().set_value(status.as_bytes());
+        Ok(())
     }
 }

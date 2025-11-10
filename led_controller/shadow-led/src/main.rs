@@ -1,9 +1,9 @@
 mod ble;
-mod led_effects;
 mod command_handler;
 mod effect_state;
-mod transitions;
 mod http_server;
+mod led_effects;
+mod transitions;
 
 use esp_idf_hal::delay::FreeRtos;
 use esp_idf_hal::gpio::*;
@@ -12,12 +12,12 @@ use esp_idf_hal::rmt::*;
 use esp_idf_svc::wifi::{AuthMethod, ClientConfiguration, Configuration, EspWifi};
 use esp_idf_svc::{eventloop::EspSystemEventLoop, nvs::EspDefaultNvsPartition};
 use heapless::String;
-use ws2812_esp32_rmt_driver::Ws2812Esp32Rmt;
 use smart_leds::{SmartLedsWrite, RGB8};
 use std::sync::Arc;
+use ws2812_esp32_rmt_driver::Ws2812Esp32Rmt;
 
-use crate::command_handler::{CommandHandler, LedCommand};
-use crate::effect_state::{EffectState, EffectMode};
+use crate::command_handler::CommandHandler;
+use crate::effect_state::EffectState;
 use crate::led_effects::{FRAME_DURATION_MS, FRAME_RATE};
 
 const WIFI_SSID: &str = "super_skunk"; // Replace with your WiFi SSID
@@ -64,20 +64,21 @@ fn main() -> anyhow::Result<()> {
     let rmt_channel = peripherals.rmt.channel0;
     let mut ws2812 = initialize_ws2812(led_pin, rmt_channel)?;
 
-    
     // Initialize command handler
     let command_handler = CommandHandler::new();
     let command_tx = command_handler.get_sender();
-    
+
     // Initialize BLE service
     let _ble_service = ble::BleService::new(
         DEVICE_NAME,
         Arc::new(CommandHandler::create_ble_callback(command_tx.clone())),
     )?;
-    
+    _ble_service.update_ip_address(&ip_address)?;
+    _ble_service.update_status("Ready")?;
+
     // Initialize HTTP server
     let _http_server = http_server::HttpServer::new(command_tx)?;
-    
+
     // Blink LEDs on boot
     blink_leds_on_boot(&mut ws2812)?;
 
@@ -94,7 +95,7 @@ fn main() -> anyhow::Result<()> {
         while let Some(command) = command_handler.try_recv() {
             log::info!("Processing command: {:?}", command);
             effect_state.transition_to(command);
-            
+            _ble_service.update_status(&format!("Mode {}", effect_state.mode))?;
         }
 
         if let Some(pixels) = &effect_state.next_frame() {
@@ -109,8 +110,12 @@ fn main() -> anyhow::Result<()> {
 fn connect_wifi(wifi: &mut EspWifi) -> anyhow::Result<()> {
     log::info!("Connecting to WiFi...");
 
-    let ssid: String<32> = WIFI_SSID.try_into().map_err(|_| anyhow::anyhow!("SSID too long"))?;
-    let password: String<64> = WIFI_PASSWORD.try_into().map_err(|_| anyhow::anyhow!("Password too long"))?;
+    let ssid: String<32> = WIFI_SSID
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("SSID too long"))?;
+    let password: String<64> = WIFI_PASSWORD
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("Password too long"))?;
 
     let wifi_configuration = Configuration::Client(ClientConfiguration {
         ssid,
@@ -127,7 +132,10 @@ fn connect_wifi(wifi: &mut EspWifi) -> anyhow::Result<()> {
     // Wait for connection
     while !wifi.is_connected()? {
         let config = wifi.get_configuration()?;
-        log::info!("Waiting for WiFi connection... Current config: {:?}", config);
+        log::info!(
+            "Waiting for WiFi connection... Current config: {:?}",
+            config
+        );
         FreeRtos::delay_ms(500);
     }
 
@@ -142,14 +150,14 @@ fn get_ip_address(wifi: &EspWifi) -> std::string::String {
     }
 }
 
-fn initialize_ws2812<'a>(
-    pin: Gpio26,
-    channel: CHANNEL0,
-) -> anyhow::Result<Ws2812Esp32Rmt<'a>> {
-    log::info!("Initializing WS2812B LED strip with {} LEDs on GPIO 26", LED_COUNT);
-    
+fn initialize_ws2812<'a>(pin: Gpio26, channel: CHANNEL0) -> anyhow::Result<Ws2812Esp32Rmt<'a>> {
+    log::info!(
+        "Initializing WS2812B LED strip with {} LEDs on GPIO 26",
+        LED_COUNT
+    );
+
     let ws2812 = Ws2812Esp32Rmt::new(channel, pin)?;
-    
+
     log::info!("WS2812B LED strip initialized successfully");
     Ok(ws2812)
 }
@@ -161,8 +169,12 @@ fn blink_leds_on_boot(ws2812: &mut Ws2812Esp32Rmt) -> anyhow::Result<()> {
     let mut pixels = vec![RGB8::default(); LED_COUNT];
 
     for i in 0..3 {
-        log::info!("LED blink {}: ON - Setting all {} LEDs to white", i + 1, LED_COUNT);
-        
+        log::info!(
+            "LED blink {}: ON - Setting all {} LEDs to white",
+            i + 1,
+            LED_COUNT
+        );
+
         // Set all LEDs to white (RGB: 255, 255, 255)
         for pixel in pixels.iter_mut() {
             *pixel = RGB8::new(255, 255, 255);
@@ -170,8 +182,12 @@ fn blink_leds_on_boot(ws2812: &mut Ws2812Esp32Rmt) -> anyhow::Result<()> {
         ws2812.write(pixels.iter().cloned())?;
         FreeRtos::delay_ms(500);
 
-        log::info!("LED blink {}: OFF - Setting all {} LEDs to black", i + 1, LED_COUNT);
-        
+        log::info!(
+            "LED blink {}: OFF - Setting all {} LEDs to black",
+            i + 1,
+            LED_COUNT
+        );
+
         // Set all LEDs to black (off)
         for pixel in pixels.iter_mut() {
             *pixel = RGB8::default();
