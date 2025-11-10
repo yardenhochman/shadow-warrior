@@ -4,7 +4,7 @@ use smart_leds::RGB8;
 pub const FRAME_RATE: u32 = 30; // 30 FPS
 pub const FRAME_DURATION_MS: u32 = 1000 / FRAME_RATE;
 
-pub fn srgbu8_to_rgb8(input: Srgb<u8>) -> RGB8 {
+pub fn srgbu8_to_rgb8(input: &Srgb<u8>) -> RGB8 {
     RGB8::new(input.red, input.green, input.blue)
 }
 
@@ -12,7 +12,7 @@ pub fn rgb8_to_srgbu8(input: RGB8) -> Srgb<u8> {
     Srgb::new(input.r, input.g, input.b)
 }
 
-pub fn vec_srgbu8_to_vec_rgb8(input: Vec<Srgb<u8>>) -> Vec<RGB8> {
+pub fn vec_srgbu8_to_vec_rgb8(input: &Vec<Srgb<u8>>) -> Vec<RGB8> {
     input.into_iter().map(srgbu8_to_rgb8).collect()
 }
 
@@ -20,8 +20,69 @@ pub fn vec_rgb8_to_vec_srgbu8(input: Vec<RGB8>) -> Vec<Srgb<u8>> {
     input.into_iter().map(rgb8_to_srgbu8).collect()
 }
 
+
+/// Simple effect that returns a static frame
+pub struct StaticFrameEffect{
+    frame: Vec<Srgb<u8>>,
+}
+
+impl StaticFrameEffect {
+    pub fn new(frame: Vec<Srgb<u8>>) -> Self {
+        Self { frame }
+    }
+}
+
+impl EffectIterator for StaticFrameEffect {
+    fn name(&self) -> &'static str {
+        "static_frame"
+    }
+
+    fn next(&mut self) -> Option<Vec<Srgb<u8>>> {
+        Some(self.frame.clone())
+    }
+}
+
+pub struct EmptyEffect;
+
+impl EffectIterator for EmptyEffect {
+    fn name(&self) -> &'static str {
+        "empty"
+    }
+
+    fn next(&mut self) -> Option<Vec<Srgb<u8>>> {
+        None
+    }
+}
+
+pub struct PerpetuateEffect{
+    perpetuated: Box<dyn EffectIterator>,
+    last_frame: Vec<Srgb<u8>>,
+}
+
+impl PerpetuateEffect {
+    pub fn new(perpetuated: Box<dyn EffectIterator>) -> Self {
+        Self { perpetuated, last_frame: vec![] }
+    }
+}
+
+impl EffectIterator for PerpetuateEffect {
+    fn name(&self) -> &'static str {
+        "perpetuate"
+    }
+
+    fn next(&mut self) -> Option<Vec<Srgb<u8>>> {
+        match self.perpetuated.next() {
+            Some(frame) => {
+                self.last_frame = frame;
+                Some(self.last_frame.clone())
+            },
+            None => Some(self.last_frame.clone()),
+        }
+    }
+}
+
 pub struct EnergyBar {
-    level: f32,
+    pub level: f32,
     level_pixels: u8,
     start_color: Srgb,
     end_color: Srgb,

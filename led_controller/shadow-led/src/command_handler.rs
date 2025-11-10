@@ -7,7 +7,6 @@ pub enum LedCommand {
     EnergyPulse,
     Breathing,
     Idle,
-    SetPower(u8),       // Update energy bar power (0-100)
     Electricity,        // Start electricity effect
 }
 
@@ -62,7 +61,7 @@ impl CommandHandler {
                 if parts.len() > 1 {
                     parts[1].parse::<u8>().ok().and_then(|p| {
                         if p <= 100 {
-                            Some(LedCommand::SetPower(p))
+                            Some(LedCommand::EnergyBar(p))
                         } else {
                             None
                         }
