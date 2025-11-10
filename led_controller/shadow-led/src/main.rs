@@ -13,12 +13,12 @@ use esp_idf_svc::wifi::{AuthMethod, ClientConfiguration, Configuration, EspWifi}
 use esp_idf_svc::{eventloop::EspSystemEventLoop, nvs::EspDefaultNvsPartition};
 use heapless::String;
 use ws2812_esp32_rmt_driver::Ws2812Esp32Rmt;
-use smart_leds_trait::{SmartLedsWrite, RGB8};
+use smart_leds::{SmartLedsWrite, RGB8};
 use std::sync::Arc;
 
 use crate::command_handler::{CommandHandler, LedCommand};
 use crate::effect_state::{EffectState, EffectMode};
-use crate::led_effects::FRAME_DURATION_MS;
+use crate::led_effects::{FRAME_DURATION_MS, FRAME_RATE};
 
 const WIFI_SSID: &str = "super_skunk"; // Replace with your WiFi SSID
 const WIFI_PASSWORD: &str = "0547407479"; // Replace with your WiFi password
@@ -64,25 +64,27 @@ fn main() -> anyhow::Result<()> {
     let rmt_channel = peripherals.rmt.channel0;
     let mut ws2812 = initialize_ws2812(led_pin, rmt_channel)?;
 
-    // Blink LEDs on boot
-    blink_leds_on_boot(&mut ws2812)?;
-
+    
     // Initialize command handler
     let command_handler = CommandHandler::new();
     let command_tx = command_handler.get_sender();
-
+    
     // Initialize BLE service
     let _ble_service = ble::BleService::new(
         DEVICE_NAME,
         Arc::new(CommandHandler::create_ble_callback(command_tx.clone())),
     )?;
-
+    
     // Initialize HTTP server
     let _http_server = http_server::HttpServer::new(command_tx)?;
+    
+    // Blink LEDs on boot
+    blink_leds_on_boot(&mut ws2812)?;
 
     log::info!("ShadowLED Controller initialized successfully!");
     log::info!("BLE advertising as: {}", DEVICE_NAME);
     log::info!("HTTP server running on port 80");
+    log::info!("Frame rate set to {} FPS", FRAME_RATE);
 
     // Initialize effect state machine
     let mut effect_state = EffectState::new(LED_COUNT);
@@ -120,14 +122,14 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
-        // 2. Update animation state for current frame
-        effect_state.update_frame(current_time, LED_COUNT);
-
+        // 2. Update effect state (handle transitions)
         // 3. Render current state (handles transitions internally)
-        let pixels = effect_state.render(LED_COUNT, current_time);
-        ws2812.write(pixels.iter().cloned())?;
-
-        // 4. Sync to 60 FPS
+        let pixels = effect_state.render();
+        if let Some(pixels) = pixels {
+            let frame_buffer = led_effects::vec_srgbu8_to_vec_rgb8(pixels);
+            ws2812.write(frame_buffer.into_iter())?;
+        }
+        // 4. Sync to desired frame rate
         FreeRtos::delay_ms(FRAME_DURATION_MS);
 
         frame_counter += 1;

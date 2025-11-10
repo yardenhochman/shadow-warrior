@@ -12,7 +12,6 @@ pub type CommandCallback = Arc<dyn Fn(&[u8]) + Send + Sync>;
 
 pub struct BleService {
     _server: &'static mut BLEServer,
-    command_buffer: Arc<Mutex<Option<Vec<u8>>>>,
 }
 
 impl BleService {
@@ -99,19 +98,6 @@ impl BleService {
 
         Ok(Self {
             _server: server,
-            command_buffer,
         })
-    }
-
-    pub fn get_last_command(&self) -> Option<Vec<u8>> {
-        self.command_buffer.lock().ok()?.take()
-    }
-
-    pub fn update_ip_address(&self, ip: &str) -> anyhow::Result<()> {
-        // Find the IP characteristic and update it
-        log::info!("Updating IP address characteristic to: {}", ip);
-        // Note: In a real implementation, we'd need to store a reference to the characteristic
-        // This is a simplified version
-        Ok(())
     }
 }

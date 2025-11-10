@@ -1,75 +1,45 @@
-use smart_leds_trait::RGB8;
+use smart_led_effects::strip::EffectIterator;
+use palette::Srgb;
 
-/// Type alias for transition functions that blend between two frames
-pub type TransitionFn = fn(&[RGB8], &[RGB8], f32) -> Vec<RGB8>;
 
-/// Linear crossfade transition between two frames
-pub fn crossfade(from_frame: &[RGB8], to_frame: &[RGB8], progress: f32) -> Vec<RGB8> {
-    assert_eq!(from_frame.len(), to_frame.len(), "Frame lengths must match");
+pub struct EffectTransition {
+    from: Box<dyn EffectIterator>,
+    to: Box<dyn EffectIterator>,
+    duration_frames: u8,
+    position: u8,
+}
 
-    from_frame.iter().zip(to_frame.iter()).map(|(from, to)| {
-        RGB8 {
-            r: lerp(from.r, to.r, progress),
-            g: lerp(from.g, to.g, progress),
-            b: lerp(from.b, to.b, progress),
+impl EffectTransition {
+    pub fn new(from: Box<dyn EffectIterator>, to: Box<dyn EffectIterator>, duration_frames: u8) -> Self {
+        Self { from, to, duration_frames, position: 0 }
+    }
+}
+
+impl EffectIterator for EffectTransition {
+    fn name(&self) -> &'static str {
+        "effect_transition"
+    }
+
+    fn next(&mut self) -> Option<Vec<Srgb<u8>>> {
+        if self.position >= self.duration_frames {
+            // Transition complete
+            return None;
         }
-    }).collect()
-}
-
-/// Linear interpolation between two u8 values
-fn lerp(a: u8, b: u8, t: f32) -> u8 {
-    ((a as f32) * (1.0 - t) + (b as f32) * t) as u8
-}
-
-/// Calculate transition progress (0.0 to 1.0) based on elapsed time
-pub fn calculate_progress(elapsed_ms: u32, duration_ms: u32) -> f32 {
-    if duration_ms == 0 {
-        1.0
-    } else {
-        (elapsed_ms as f32 / duration_ms as f32).min(1.0)
-    }
-}
-
-/// Check if transition is complete
-pub fn is_transition_complete(elapsed_ms: u32, duration_ms: u32) -> bool {
-    elapsed_ms >= duration_ms
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_lerp() {
-        assert_eq!(lerp(0, 255, 0.0), 0);
-        assert_eq!(lerp(0, 255, 1.0), 255);
-        assert_eq!(lerp(0, 255, 0.5), 127);
-    }
-
-    #[test]
-    fn test_crossfade() {
-        let from = vec![RGB8::new(255, 0, 0), RGB8::new(0, 255, 0)];
-        let to = vec![RGB8::new(0, 255, 0), RGB8::new(0, 0, 255)];
-
-        let result = crossfade(&from, &to, 0.5);
-
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0], RGB8::new(127, 127, 0)); // Halfway between red and green
-        assert_eq!(result[1], RGB8::new(0, 127, 127)); // Halfway between green and blue
-    }
-
-    #[test]
-    fn test_calculate_progress() {
-        assert_eq!(calculate_progress(0, 1000), 0.0);
-        assert_eq!(calculate_progress(500, 1000), 0.5);
-        assert_eq!(calculate_progress(1000, 1000), 1.0);
-        assert_eq!(calculate_progress(1500, 1000), 1.0); // Clamped
-    }
-
-    #[test]
-    fn test_is_transition_complete() {
-        assert!(!is_transition_complete(500, 1000));
-        assert!(is_transition_complete(1000, 1000));
-        assert!(is_transition_complete(1500, 1000));
+        
+        let from_frame = self.from.next()?;
+        let to_frame = self.to.next()?;
+        if to_frame.is_empty() && from_frame.is_empty() {
+            return None;
+        }
+        let t = self.position as f32 / self.duration_frames as f32;
+        self.position += 1;
+        
+        Some(from_frame.iter().zip(to_frame.iter()).map(|(from_pixel, to_pixel)| {
+            let r = (from_pixel.red as f32 * (1.0 - t) + to_pixel.red as f32 * t) as u8;
+            let g = (from_pixel.green as f32 * (1.0 - t) + to_pixel.green as f32 * t) as u8;
+            let b = (from_pixel.blue as f32 * (1.0 - t) + to_pixel.blue as f32 * t) as u8;
+            Srgb::new(r, g, b)
+        })
+        .collect())
     }
 }
