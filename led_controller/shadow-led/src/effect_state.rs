@@ -1,5 +1,50 @@
-use smart_leds_trait::RGB8;
-use crate::transitions::{TransitionFn, crossfade, calculate_progress, is_transition_complete};
+use smart_leds::RGB8;
+use smart_led_effects::{strip::{EffectIterator, Breathe, Strobe, Meteor}, Srgb};
+use palette::named;
+use crate::transitions::EffectTransition;
+use crate::led_effects::EnergyBar;
+
+/// Simple idle effect that returns black LEDs
+struct IdleEffect {
+    led_count: usize,
+}
+
+impl IdleEffect {
+    fn new(led_count: usize) -> Self {
+        Self { led_count }
+    }
+}
+
+impl EffectIterator for IdleEffect {
+    fn name(&self) -> &'static str {
+        "idle"
+    }
+
+    fn next(&mut self) -> Option<Vec<Srgb<u8>>> {
+        Some(vec![Srgb::new(0, 0, 0); self.led_count])
+    }
+}
+
+/// Simple effect that returns a static frame
+struct StaticFrameEffect {
+    frame: Vec<Srgb<u8>>,
+}
+
+impl StaticFrameEffect {
+    fn new(frame: Vec<Srgb<u8>>) -> Self {
+        Self { frame }
+    }
+}
+
+impl EffectIterator for StaticFrameEffect {
+    fn name(&self) -> &'static str {
+        "static_frame"
+    }
+
+    fn next(&mut self) -> Option<Vec<Srgb<u8>>> {
+        Some(self.frame.clone())
+    }
+}
 
 /// Available LED effect modes
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -12,14 +57,10 @@ pub enum EffectMode {
 }
 
 /// State for active transitions
-#[derive(Debug, Clone)]
 pub enum TransitionState {
     None,
     Active {
-        from_frame: Vec<RGB8>,
-        start_time: u64,
-        duration_ms: u32,
-        transition_fn: TransitionFn,
+        transition_effect: Box<dyn EffectIterator>,
     },
 }
 
@@ -31,12 +72,11 @@ pub struct EffectState {
     pub transition_state: TransitionState,
     pub last_frame: Vec<RGB8>,     // Last rendered frame for transition capture
 
-    // Animation state
-    pub frame_counter: u64,
-    pub breathing_phase: f32,
-    pub energy_bar_fill: f32,      // Current animated fill level (0.0-1.0)
-    pub electricity_start_time: Option<u64>,
-    pub energy_pulse_position: Option<usize>,
+    // Effect iterator for current mode
+    pub current_effect: Option<Box<dyn EffectIterator>>,
+
+    // Optimization: track if state has changed since last render
+    state_changed: bool,
 }
 
 impl EffectState {
@@ -47,52 +87,43 @@ impl EffectState {
             target_power: 0,
             transition_state: TransitionState::None,
             last_frame: vec![RGB8::default(); led_count],
-            frame_counter: 0,
-            breathing_phase: 0.0,
-            energy_bar_fill: 0.0,
-            electricity_start_time: None,
-            energy_pulse_position: None,
+            current_effect: None,
+            state_changed: false,
         }
     }
 
     /// Initiate a crossfade transition to a new mode
-    pub fn transition_to(&mut self, new_mode: EffectMode, current_time: u64) {
-        // Capture current frame for transition
-        let from_frame = self.last_frame.clone();
+    pub fn transition_to(&mut self, new_mode: EffectMode, _current_time: u64) {
+        self.mode = new_mode;
+        self.state_changed = true;
+
+        // Create new effect iterator for the mode
+        let new_effect = self.create_effect_iterator(new_mode);
+
+        // Create static frame effect from last frame
+        let from_frame_srgb = crate::led_effects::vec_rgb8_to_vec_srgbu8(self.last_frame.clone());
+        let from_effect = Box::new(StaticFrameEffect::new(from_frame_srgb));
+
+        // Create crossfade transition (500ms at 30 FPS = 15 frames)
+        let transition_frames = 15;
+        let transition_effect = Box::new(EffectTransition::new(
+            from_effect,
+            new_effect,
+            transition_frames,
+        ));
 
         self.transition_state = TransitionState::Active {
-            from_frame,
-            start_time: current_time,
-            duration_ms: 500, // Configurable transition duration
-            transition_fn: crossfade,
+            transition_effect,
         };
 
-        self.mode = new_mode;
-
-        // Reset mode-specific state
-        match new_mode {
-            EffectMode::Idle => {
-                // No special state
-            }
-            EffectMode::Breathing => {
-                self.breathing_phase = 0.0;
-            }
-            EffectMode::EnergyBar => {
-                // Keep current power level, but sync animated fill
-                self.energy_bar_fill = self.power_level as f32 / 100.0;
-            }
-            EffectMode::Electricity => {
-                self.electricity_start_time = Some(current_time);
-            }
-            EffectMode::EnergyPulse => {
-                self.energy_pulse_position = Some(0);
-            }
-        }
+        // Set current_effect to the new effect (will be used after transition completes)
+        self.current_effect = Some(self.create_effect_iterator(new_mode));
     }
 
     /// Set power level for energy bar (triggers smooth animation, not mode transition)
     pub fn set_power(&mut self, power: u8) {
         self.target_power = power.min(100);
+        self.state_changed = true;
         // Note: Animation happens in update_frame()
     }
 
@@ -100,197 +131,77 @@ impl EffectState {
     pub fn set_mode_instant(&mut self, mode: EffectMode, _current_time: u64) {
         self.mode = mode;
         self.transition_state = TransitionState::None;
+        self.state_changed = true;
 
-        // Reset mode-specific state
-        match mode {
-            EffectMode::Idle => {
-                // Clear any running effects
-                self.electricity_start_time = None;
-                self.energy_pulse_position = None;
-            }
-            _ => {} // Other modes should use transition_to
-        }
+        // Create new effect iterator for the mode
+        self.current_effect = Some(self.create_effect_iterator(mode));
     }
 
-    /// Update animation state for current frame
-    pub fn update_frame(&mut self, current_time: u64, led_count: usize) {
-        self.frame_counter += 1;
-
-        // Update transition state
-        if let TransitionState::Active { start_time, duration_ms, .. } = self.transition_state {
-            if is_transition_complete((current_time - start_time) as u32, duration_ms) {
-                self.transition_state = TransitionState::None;
+    /// Create an effect iterator for the given mode
+    fn create_effect_iterator(&self, mode: EffectMode) -> Box<dyn EffectIterator> {
+        let led_count = self.last_frame.len();
+        match mode {
+            EffectMode::Idle => {
+                // For idle, create a static black effect
+                Box::new(IdleEffect::new(led_count))
             }
-        }
-
-        // Update mode-specific animation state
-        match self.mode {
             EffectMode::Breathing => {
-                // 5-second breathing cycle
-                let cycle_frames = 5 * 60; // 60 FPS
-                self.breathing_phase = (self.frame_counter % cycle_frames) as f32 / cycle_frames as f32;
+                // Use explicit u8 Srgb so component type satisfies numeric trait bounds
+                Box::new(Breathe::new(led_count, Some(named::RED.into()), None))
             }
             EffectMode::EnergyBar => {
-                // Smooth power level animation
-                let target_fill = self.target_power as f32 / 100.0;
-                let diff = target_fill - self.energy_bar_fill;
-                if diff.abs() > 0.001 {
-                    // Animate towards target over ~300ms (18 frames at 60 FPS)
-                    let animation_speed = 0.055; // Adjust for smooth feel
-                    self.energy_bar_fill += diff * animation_speed;
-                    // Clamp to prevent overshoot
-                    if (self.energy_bar_fill - target_fill).abs() < 0.01 {
-                        self.energy_bar_fill = target_fill;
-                        self.power_level = self.target_power;
-                    }
-                }
+                Box::new(
+                    EnergyBar::new(
+                        led_count as u8,
+                        named::WHITE.into(),
+                        named::RED.into(),
+                        self.power_level as f32 / 100.0,
+                        self.power_level as f32 / 100.0,
+                        15.0,
+                    ))
             }
             EffectMode::Electricity => {
-                // Check for 20-second timeout
-                if let Some(start_time) = self.electricity_start_time {
-                    if current_time - start_time >= 20_000 {
-                        // Auto-transition to Idle
-                        self.set_mode_instant(EffectMode::Idle, current_time);
-                    }
-                }
+                // Use Strobe for electricity effect
+                use std::time::Duration;
+                Box::new(Strobe::new(led_count, Some(named::STEELBLUE.into()), Duration::from_millis(100), None))
             }
             EffectMode::EnergyPulse => {
-                // Move pulse along strip
-                if let Some(pos) = self.energy_pulse_position {
-                    if pos < led_count {
-                        self.energy_pulse_position = Some(pos + 1);
-                    } else {
-                        // Pulse complete, auto-transition to Idle
-                        self.set_mode_instant(EffectMode::Idle, current_time);
-                    }
-                }
-            }
-            EffectMode::Idle => {
-                // No animation state to update
+                // Use Meteor for energy pulse
+                Box::new(Meteor::new(led_count, Some(named::YELLOW.into()), None, None))
             }
         }
     }
 
     /// Render current state (transition if active, else current effect)
-    pub fn render(&mut self, led_count: usize, current_time: u64) -> Vec<RGB8> {
-        // Get the target frame for current mode
-        let target_frame = self.render_mode_frame(led_count);
-
-        // Apply transition if active
-        let final_frame = match &self.transition_state {
-            TransitionState::None => target_frame,
-            TransitionState::Active { from_frame, start_time, duration_ms, transition_fn } => {
-                let elapsed = (current_time - start_time) as u32;
-                let progress = calculate_progress(elapsed, *duration_ms);
-                transition_fn(from_frame, &target_frame, progress)
+    pub fn render(&mut self) -> Option<Vec<Srgb<u8>>> {
+        let result = match &mut self.transition_state {
+            TransitionState::Active { transition_effect } => {
+                // Use transition effect
+                let result = transition_effect.next();
+                if result.is_none() {
+                    // Transition complete, switch to normal mode
+                    self.transition_state = TransitionState::None;
+                }
+                result
+            }
+            TransitionState::None => {
+                // Use current effect
+                self.current_effect.as_mut().map(|effect| effect.next()).flatten()
             }
         };
-
-        // Store for next transition
-        self.last_frame = final_frame.clone();
-        final_frame
-    }
-
-    /// Render a single frame for the current mode (no transition)
-    fn render_mode_frame(&self, led_count: usize) -> Vec<RGB8> {
-        match self.mode {
-            EffectMode::Idle => self.render_idle(led_count),
-            EffectMode::Breathing => self.render_breathing(led_count),
-            EffectMode::EnergyBar => self.render_energy_bar(led_count),
-            EffectMode::Electricity => self.render_electricity(led_count),
-            EffectMode::EnergyPulse => self.render_energy_pulse(led_count),
+        
+        // Update last_frame for transition capture
+        if let Some(ref frame) = result {
+            self.last_frame = crate::led_effects::vec_srgbu8_to_vec_rgb8(frame.clone());
         }
+        
+        result
     }
 
-    fn render_idle(&self, led_count: usize) -> Vec<RGB8> {
-        vec![RGB8::default(); led_count]
-    }
-
-    fn render_breathing(&self, led_count: usize) -> Vec<RGB8> {
-        let envelope = ((2.0 * std::f32::consts::PI * self.breathing_phase).sin() + 1.0) / 2.0;
-        let brightness = (160.0 * envelope) as u8; // Max brightness 160
-
-        vec![RGB8 { r: brightness, g: 0, b: 0 }; led_count]
-    }
-
-    fn render_energy_bar(&self, led_count: usize) -> Vec<RGB8> {
-        let mut pixels = vec![RGB8::default(); led_count];
-        let num_leds = (led_count as f32 * self.energy_bar_fill) as usize;
-
-        // Create gradient from white (start) to red (end)
-        for i in 0..num_leds.min(led_count) {
-            let ratio = if num_leds > 1 {
-                i as f32 / (num_leds - 1) as f32
-            } else {
-                0.0
-            };
-            pixels[i] = RGB8 {
-                r: 255,
-                g: (255.0 * (1.0 - ratio)) as u8,
-                b: (255.0 * (1.0 - ratio)) as u8,
-            };
-        }
-
-        pixels
-    }
-
-    fn render_electricity(&self, led_count: usize) -> Vec<RGB8> {
-        let mut pixels = vec![RGB8::default(); led_count];
-
-        // Simple lightning effect: random sparks and bolts
-        // This is a placeholder - full implementation would be more complex
-        let time_seed = (self.frame_counter / 10) as u32; // Change every 10 frames
-
-        // Add some random sparks
-        for i in 0..15 { // 15 sparks
-            let pos = ((time_seed.wrapping_mul(7).wrapping_add(i * 13)) % led_count as u32) as usize;
-            let brightness = ((time_seed.wrapping_add(i)) % 200 + 55) as u8; // 55-255
-            pixels[pos] = RGB8 {
-                r: brightness,
-                g: brightness / 2,
-                b: brightness,
-            };
-        }
-
-        // Add a traveling bolt
-        let bolt_pos = (self.frame_counter / 3 % led_count as u64) as usize; // Move every 3 frames
-        if bolt_pos < led_count {
-            pixels[bolt_pos] = RGB8::new(255, 255, 255);
-            // Add some spread
-            if bolt_pos > 0 {
-                pixels[bolt_pos - 1] = RGB8::new(200, 200, 255);
-            }
-            if bolt_pos < led_count - 1 {
-                pixels[bolt_pos + 1] = RGB8::new(200, 200, 255);
-            }
-        }
-
-        pixels
-    }
-
-    fn render_energy_pulse(&self, led_count: usize) -> Vec<RGB8> {
-        let mut pixels = vec![RGB8::default(); led_count];
-
-        if let Some(pos) = self.energy_pulse_position {
-            if pos < led_count {
-                pixels[pos] = RGB8::new(255, 0, 0);
-                // Add some trail
-                if pos > 0 {
-                    pixels[pos - 1] = RGB8::new(128, 0, 0);
-                }
-                if pos > 1 {
-                    pixels[pos - 2] = RGB8::new(64, 0, 0);
-                }
-            }
-        }
-
-        pixels
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     #[test]
     fn test_new_effect_state() {
@@ -309,21 +220,47 @@ mod tests {
 
     #[test]
     fn test_render_idle() {
-        let state = EffectState::new(5);
-        let frame = state.render_idle(5);
+        let mut state = EffectState::new(5);
+        state.set_mode_instant(EffectMode::Idle, 0);
+        let frame = state.render().unwrap();
         assert_eq!(frame.len(), 5);
-        assert!(frame.iter().all(|&pixel| pixel == RGB8::default()));
+        assert!(frame.iter().all(|&pixel| pixel == Srgb::new(0, 0, 0)));
     }
 
     #[test]
-    fn test_render_energy_bar() {
+    fn test_render_optimization_no_change() {
         let mut state = EffectState::new(10);
-        state.energy_bar_fill = 0.5; // 50%
-        let frame = state.render_energy_bar(10);
-        assert_eq!(frame.len(), 10);
-        // First 5 LEDs should be lit
-        assert!(frame[0] != RGB8::default());
-        assert!(frame[4] != RGB8::default());
-        assert_eq!(frame[5], RGB8::default());
+        // Set to Idle mode (should not change)
+        state.set_mode_instant(EffectMode::Idle, 0);
+        
+        // First render
+        let frame1 = state.render().unwrap();
+        
+        // Second render without any state changes - should return cached frame
+        let frame2 = state.render().unwrap();
+        
+        // Frames should be identical since state didn't change
+        assert_eq!(frame1, frame2);
+        assert_eq!(frame1.len(), 10);
+        // All LEDs should be off in Idle mode
+        assert!(frame1.iter().all(|&pixel| pixel == Srgb::new(0, 0, 0)));
+    }
+
+    #[test]
+    fn test_render_optimization_with_change() {
+        let mut state = EffectState::new(10);
+        
+        // First render in Idle
+        let frame1 = state.render().unwrap();
+        
+        // Change power (should trigger re-render)
+        state.set_power(50);
+        state.transition_to(EffectMode::EnergyBar, 0);
+        
+        // Second render after state change
+        let frame2 = state.render().unwrap();
+        
+        // Frames should be different
+        assert_ne!(frame1, frame2);
     }
 }
