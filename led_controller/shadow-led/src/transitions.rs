@@ -1,36 +1,36 @@
 use smart_led_effects::strip::EffectIterator;
+use crate::led_effects::PerpetuateEffect;
 use palette::Srgb;
 
 
-pub struct EffectTransition {
+
+pub struct CrossfadeTransitionEffect {
     from: Box<dyn EffectIterator>,
     to: Box<dyn EffectIterator>,
     duration_frames: u8,
     position: u8,
 }
 
-impl EffectTransition {
+impl CrossfadeTransitionEffect {
     pub fn new(from: Box<dyn EffectIterator>, to: Box<dyn EffectIterator>, duration_frames: u8) -> Self {
-        Self { from, to, duration_frames, position: 0 }
+        Self { from: Box::new(PerpetuateEffect::new(from)), to, duration_frames, position: 0 }
     }
 }
 
-impl EffectIterator for EffectTransition {
+impl EffectIterator for CrossfadeTransitionEffect {
     fn name(&self) -> &'static str {
-        "effect_transition"
+        "crossfade"
     }
 
     fn next(&mut self) -> Option<Vec<Srgb<u8>>> {
         if self.position >= self.duration_frames {
             // Transition complete
-            return None;
+            return self.to.next();
         }
         
         let from_frame = self.from.next()?;
         let to_frame = self.to.next()?;
-        if to_frame.is_empty() && from_frame.is_empty() {
-            return None;
-        }
+
         let t = self.position as f32 / self.duration_frames as f32;
         self.position += 1;
         

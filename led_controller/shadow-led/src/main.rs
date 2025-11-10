@@ -88,51 +88,21 @@ fn main() -> anyhow::Result<()> {
 
     // Initialize effect state machine
     let mut effect_state = EffectState::new(LED_COUNT);
-    let mut frame_counter: u64 = 0;
 
     // Main render loop (60 FPS)
     loop {
-        let current_time = frame_counter;
-
-        // 1. Process commands → trigger state transitions
         while let Some(command) = command_handler.try_recv() {
             log::info!("Processing command: {:?}", command);
-
-            match command {
-                LedCommand::EnergyBar(percentage) => {
-                    // For backward compatibility, set power and transition to EnergyBar
-                    effect_state.set_power(percentage);
-                    effect_state.transition_to(EffectMode::EnergyBar, current_time);
-                }
-                LedCommand::EnergyPulse => {
-                    effect_state.transition_to(EffectMode::EnergyPulse, current_time);
-                }
-                LedCommand::Breathing => {
-                    effect_state.transition_to(EffectMode::Breathing, current_time);
-                }
-                LedCommand::Idle => {
-                    effect_state.set_mode_instant(EffectMode::Idle, current_time);
-                }
-                LedCommand::SetPower(power) => {
-                    effect_state.set_power(power);
-                }
-                LedCommand::Electricity => {
-                    effect_state.transition_to(EffectMode::Electricity, current_time);
-                }
-            }
+            effect_state.transition_to(command);
+            
         }
 
-        // 2. Update effect state (handle transitions)
-        // 3. Render current state (handles transitions internally)
-        let pixels = effect_state.render();
-        if let Some(pixels) = pixels {
+        if let Some(pixels) = &effect_state.next_frame() {
             let frame_buffer = led_effects::vec_srgbu8_to_vec_rgb8(pixels);
             ws2812.write(frame_buffer.into_iter())?;
         }
         // 4. Sync to desired frame rate
         FreeRtos::delay_ms(FRAME_DURATION_MS);
-
-        frame_counter += 1;
     }
 }
 
