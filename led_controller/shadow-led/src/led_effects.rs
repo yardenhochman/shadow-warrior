@@ -131,11 +131,7 @@ impl EffectIterator for EnergyBar {
         let mut pixels_vec = Vec::with_capacity(self.pixels as usize);
         let next = self.current_value + self.delta;
         for i in 0..next {
-            let t = if next > 1 {
-                i as f32 / (next - 1) as f32
-            } else {
-                0.0
-            };
+            let t = i as f32 / self.pixels as f32;
 
             let sr = self.start_color.red;
             let sg = self.start_color.green;
