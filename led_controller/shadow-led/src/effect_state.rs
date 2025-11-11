@@ -1,21 +1,21 @@
 use std::fmt::Display;
 
 use crate::command_handler::LedCommand;
-use crate::led_effects::EmptyEffect;
 use crate::led_effects::EnergyBar;
+use crate::led_effects::StaticFrameEffect;
 use palette::named;
 use smart_led_effects::{
-    strip::{Breathe, EffectIterator, Meteor, Strobe},
+    strip::{Breathe, EffectIterator, Meteor, Bounce},
     Srgb,
 };
 
 /// Available LED effect modes
 pub enum EffectMode {
-    Idle(EmptyEffect),
+    Idle(StaticFrameEffect),
     Breathing(Breathe),
     EnergyBar(EnergyBar),
     Electricity(Meteor),
-    EnergyPulse(Strobe),
+    EnergyPulse(Bounce),
 }
 
 impl Display for EffectMode {
@@ -34,13 +34,15 @@ impl Display for EffectMode {
 pub struct EffectState {
     pub mode: EffectMode,
     pub last_frame: Vec<Srgb<u8>>, // Last rendered frame for transition capture
+    led_count: usize,
 }
 
 impl EffectState {
     pub fn new(led_count: usize) -> Self {
         Self {
-            mode: EffectMode::Idle(EmptyEffect {}),
+            mode: EffectMode::Idle(StaticFrameEffect::new(vec![named::BLACK.into(); led_count])),
             last_frame: vec![palette::named::BLACK; led_count],
+            led_count,
         }
     }
 
@@ -65,7 +67,7 @@ impl EffectState {
                     0.0
                 };
                 EffectMode::EnergyBar(EnergyBar::new(
-                    self.last_frame.len(),
+                    self.led_count,
                     named::WHITE.into(),
                     named::RED.into(),
                     current_power,
@@ -74,24 +76,27 @@ impl EffectState {
                 ))
             }
             LedCommand::Breathing => EffectMode::Breathing(Breathe::new(
-                self.last_frame.len(),
+                self.led_count,
                 Some(named::RED.into()),
                 None,
             )),
-            LedCommand::Idle => EffectMode::Idle(EmptyEffect {}),
+            LedCommand::Idle => EffectMode::Idle(StaticFrameEffect::new(vec![named::BLACK.into(); self.led_count])),
             LedCommand::Electricity => EffectMode::Electricity(Meteor::new(
-                self.last_frame.len(),
+                self.led_count,
                 Some(named::YELLOW.into()),
                 None,
                 None,
             )),
-            LedCommand::EnergyPulse => EffectMode::EnergyPulse(Strobe::new(
-                self.last_frame.len(),
-                Some(named::STEELBLUE.into()),
-                std::time::Duration::from_millis(100),
+            LedCommand::EnergyPulse => EffectMode::EnergyPulse(Bounce::new(
+                self.led_count,
+                Some(named::BLUE.into()),
+                None,
+                None,
+                None,
                 None,
             )),
         };
-        // Create new effect iterator for the mode        // Set the transition effect as the current effect iterator
+        // Create new effect iterator for the mode
+        // Set the transition effect as the current effect iterator
     }
 }
