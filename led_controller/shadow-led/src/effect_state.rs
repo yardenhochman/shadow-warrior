@@ -59,13 +59,13 @@ impl EffectState {
     pub fn transition_to(&mut self, command: LedCommand) {
         self.mode = match command {
             LedCommand::EnergyBar(power) => {
-                let current_power = if let EffectMode::EnergyBar(ref mut energy_bar) = self.mode {
+                let current_power = if let EffectMode::EnergyBar(ref energy_bar) = self.mode {
                     energy_bar.level
                 } else {
                     0.0
                 };
                 EffectMode::EnergyBar(EnergyBar::new(
-                    self.last_frame.len() as u8,
+                    self.last_frame.len(),
                     named::WHITE.into(),
                     named::RED.into(),
                     current_power,
