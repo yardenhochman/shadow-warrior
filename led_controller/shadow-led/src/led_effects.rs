@@ -1,3 +1,4 @@
+use log;
 use palette::Srgb;
 use smart_led_effects::strip::EffectIterator;
 use smart_leds::RGB8;
@@ -80,40 +81,45 @@ impl EffectIterator for PerpetuateEffect {
         }
     }
 }
-
+ 
 pub struct EnergyBar {
     pub level: f32,
-    level_pixels: u8,
+    level_pixels: usize,
     start_color: Srgb,
     end_color: Srgb,
-    pixels: u8,
-    current_value: u8,
-    frames_per_pixels: f32, // speed of the animation, in frames. e.g. for 30 FPS, 15 means fillup the entire bar in 15 0.5 seconds.
-    // If level is 0.5 and pixels is 15, then it will take 7.5 frames to fill up to level_pixels
-    delta: u8,
+    pixels: usize,
+    current_value: usize,
+    pixels_per_frame: f32, // effect speed in pixels per frame, for the entire bar
 }
 
 impl EnergyBar {
+    /// Create a new EnergyBar effect
+    /// - `pixels`: total number of pixels in the strip
+    /// - `start_color`: color at the start of the bar
+    /// - `end_color`: color at the end of the bar
+    /// - `start_level`: initial level (0.0 to 1.0)
+    /// - `level`: target level (0.0 to 1.0)
+    /// - `speed_frames`: number of frames to reach from 0 to full
     pub fn new(
-        led_count: u8,
+        pixels: usize,
         start_color: Srgb,
         end_color: Srgb,
         start_level: f32,
         level: f32,
-        frames_per_pixel: f32,
+        speed_frames: f32,
     ) -> Self {
-        let target_pixels = ((level.clamp(0.0, 1.0) * led_count as f32).round()) as u8;
-        let current_pixels = (start_level.clamp(0.0, 1.0) * led_count as f32).round() as u8;
-        let delta = target_pixels - current_pixels;
+        let target_pixels = ((level.clamp(0.0, 1.0) * pixels as f32).round()) as usize;
+        let current_pixels = (start_level.clamp(0.0, 1.0) * pixels as f32).round() as usize;
+        assert!(speed_frames > 0.0, "speed_frames must be greater than 0");
+        let pixels_per_frame = pixels as f32 / speed_frames;
         EnergyBar {
             level,
             level_pixels: target_pixels,
             start_color,
             end_color,
-            pixels: led_count,
+            pixels,
             current_value: current_pixels,
-            frames_per_pixels: frames_per_pixel,
-            delta: delta,
+            pixels_per_frame,
         }
     }
 }
@@ -124,31 +130,38 @@ impl EffectIterator for EnergyBar {
     }
 
     fn next(&mut self) -> Option<std::vec::Vec<Srgb<u8>>> {
-        if self.current_value >= self.level_pixels {
+        if self.current_value == self.level_pixels {
             return None;
         }
 
-        let mut pixels_vec = Vec::with_capacity(self.pixels as usize);
-        let next = self.current_value + self.delta;
-        for i in 0..next {
-            let t = i as f32 / self.pixels as f32;
+        let mut pixels_vec = Vec::with_capacity(self.pixels);
+        let next = if self.current_value > self.level_pixels {
+           (self.current_value - self.pixels_per_frame.round() as usize).max(self.level_pixels)
+        } else {
+            (self.current_value + self.pixels_per_frame.round() as usize).min(self.level_pixels)
+        };
+        for i in 0..self.pixels {
+            let color = if i > next {
+                palette::named::BLACK
+            } else {
+                let t = i as f32 / self.pixels as f32;
+                let sr = self.start_color.red;
+                let sg = self.start_color.green;
+                let sb = self.start_color.blue;
+                let er = self.end_color.red;
+                let eg = self.end_color.green;
+                let eb = self.end_color.blue;
 
-            let sr = self.start_color.red;
-            let sg = self.start_color.green;
-            let sb = self.start_color.blue;
-            let er = self.end_color.red;
-            let eg = self.end_color.green;
-            let eb = self.end_color.blue;
+                let r = (sr * (1.0 - t) + er * t).clamp(0.0, 1.0);
+                let g = (sg * (1.0 - t) + eg * t).clamp(0.0, 1.0);
+                let b = (sb * (1.0 - t) + eb * t).clamp(0.0, 1.0);
 
-            let r = (sr * (1.0 - t) + er * t).clamp(0.0, 1.0);
-            let g = (sg * (1.0 - t) + eg * t).clamp(0.0, 1.0);
-            let b = (sb * (1.0 - t) + eb * t).clamp(0.0, 1.0);
-
-            let r8 = (r * 255.0).round() as u8;
-            let g8 = (g * 255.0).round() as u8;
-            let b8 = (b * 255.0).round() as u8;
-
-            pixels_vec.push(Srgb::new(r8, g8, b8).into());
+                let r8 = (r * 255.0).round() as u8;
+                let g8 = (g * 255.0).round() as u8;
+                let b8 = (b * 255.0).round() as u8;
+                Srgb::new(r8, g8, b8)
+            };
+            pixels_vec.push(color.into());
         }
 
         let pixel_color = pixels_vec;
