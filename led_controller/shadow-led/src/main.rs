@@ -13,7 +13,8 @@ use esp_idf_svc::wifi::{AuthMethod, ClientConfiguration, Configuration, EspWifi}
 use esp_idf_svc::{eventloop::EspSystemEventLoop, nvs::EspDefaultNvsPartition};
 use heapless::String;
 use smart_leds::{SmartLedsWrite, RGB8};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::thread;
 use ws2812_esp32_rmt_driver::Ws2812Esp32Rmt;
 
 use crate::command_handler::CommandHandler;
@@ -22,6 +23,7 @@ use crate::led_effects::{FRAME_DURATION_MS, FRAME_RATE};
 
 const WIFI_SSID: &str = "super_skunk"; // Replace with your WiFi SSID
 const WIFI_PASSWORD: &str = "0547407479"; // Replace with your WiFi password
+const WIFI_CONNECT_TIMEOUT_MS: u32 = 30_000; // 30 seconds timeout for WiFi connection
 const LED_COUNT: usize = 180;
 const DEVICE_NAME: &str = "ShadowLED";
 
@@ -45,47 +47,88 @@ fn main() -> anyhow::Result<()> {
     // Initialize event loop
     let sys_loop = EspSystemEventLoop::take()?;
 
-    // Initialize WiFi
-    let mut wifi = EspWifi::new(peripherals.modem, sys_loop.clone(), Some(nvs.clone()))?;
-    connect_wifi(&mut wifi)?;
-
-    // Get IP address — wait a short while for IP assignment (avoid logging 0.0.0.0)
-    let mut ip_address = get_ip_address(&wifi);
-    let mut waited_ms = 0u32;
-    while ip_address == "0.0.0.0" && waited_ms < 10_000 {
-        FreeRtos::delay_ms(500);
-        waited_ms += 500;
-        ip_address = get_ip_address(&wifi);
-    }
-    log::info!("Device IP address: {}", ip_address);
-
     // Initialize LED strip on GPIO 26
     let led_pin = pins.gpio26;
     let rmt_channel = peripherals.rmt.channel0;
     let mut ws2812 = initialize_ws2812(led_pin, rmt_channel)?;
 
+    // Blink LEDs on boot
+    blink_leds_on_boot(&mut ws2812)?;
+
     // Initialize command handler
     let command_handler = CommandHandler::new();
     let command_tx = command_handler.get_sender();
 
-    // Initialize BLE service
-    let _ble_service = ble::BleService::new(
+    // Initialize BLE service FIRST (before WiFi)
+    log::info!("Starting BLE service...");
+    let ble_service = Arc::new(Mutex::new(ble::BleService::new(
         DEVICE_NAME,
         Arc::new(CommandHandler::create_ble_callback(command_tx.clone())),
-    )?;
-    _ble_service.update_ip_address(&ip_address)?;
-    _ble_service.update_status("Ready")?;
+    )?));
+    ble_service.lock().unwrap().update_status("Starting WiFi...")?;
+    log::info!("BLE advertising as: {}", DEVICE_NAME);
 
-    // Initialize HTTP server
-    let _http_server = http_server::HttpServer::new(command_tx)?;
+    // Start WiFi connection in background thread (non-blocking)
+    let ble_service_clone = Arc::clone(&ble_service);
+    let _wifi_thread = thread::spawn(move || {
+        log::info!("Starting WiFi connection in background...");
+        
+        match EspWifi::new(peripherals.modem, sys_loop.clone(), Some(nvs.clone())) {
+            Ok(mut wifi) => {
+                match connect_wifi_with_timeout(&mut wifi, WIFI_CONNECT_TIMEOUT_MS) {
+                    Ok(true) => {
+                        let ip_address = get_ip_address(&wifi);
+                        log::info!("WiFi connected! IP address: {}", ip_address);
+                        
+                        // Update BLE with IP address
+                        if let Ok(ble) = ble_service_clone.lock() {
+                            let _ = ble.update_ip_address(&ip_address);
+                            let _ = ble.update_status("WiFi Connected");
+                        }
+                        
+                        // Initialize HTTP server
+                        match http_server::HttpServer::new(command_tx.clone()) {
+                            Ok(_http_server) => {
+                                log::info!("HTTP server running on port 80");
+                                // Keep WiFi and HTTP server alive by holding references
+                                loop {
+                                    FreeRtos::delay_ms(1000);
+                                }
+                            }
+                            Err(e) => {
+                                log::error!("Failed to start HTTP server: {:?}", e);
+                            }
+                        }
+                    }
+                    Ok(false) => {
+                        log::warn!("WiFi connection timed out after {}ms", WIFI_CONNECT_TIMEOUT_MS);
+                        if let Ok(ble) = ble_service_clone.lock() {
+                            let _ = ble.update_status("WiFi Timeout - BLE Only");
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("WiFi connection error: {:?}", e);
+                        if let Ok(ble) = ble_service_clone.lock() {
+                            let _ = ble.update_status("WiFi Error - BLE Only");
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                log::error!("Failed to initialize WiFi: {:?}", e);
+                if let Ok(ble) = ble_service_clone.lock() {
+                    let _ = ble.update_status("WiFi Init Failed - BLE Only");
+                }
+            }
+        }
+    });
 
-    // Blink LEDs on boot
-    blink_leds_on_boot(&mut ws2812)?;
+    // Update BLE status to ready (WiFi is optional)
+    ble_service.lock().unwrap().update_status("Ready")?;
 
     log::info!("ShadowLED Controller initialized successfully!");
-    log::info!("BLE advertising as: {}", DEVICE_NAME);
-    log::info!("HTTP server running on port 80");
     log::info!("Frame rate set to {} FPS", FRAME_RATE);
+    log::info!("WiFi connecting in background (device is operational via BLE)");
 
     // Initialize effect state machine
     let mut effect_state = EffectState::new(LED_COUNT);
@@ -95,20 +138,22 @@ fn main() -> anyhow::Result<()> {
         while let Some(command) = command_handler.try_recv() {
             log::info!("Processing command: {:?}", command);
             effect_state.transition_to(command);
-            _ble_service.update_status(&format!("Mode {}", effect_state.mode))?;
+            if let Ok(ble) = ble_service.lock() {
+                let _ = ble.update_status(&format!("Mode {}", effect_state.mode));
+            }
         }
 
         if let Some(pixels) = &effect_state.next_frame() {
             let frame_buffer = led_effects::vec_srgbu8_to_vec_rgb8(pixels);
             ws2812.write(frame_buffer.into_iter())?;
         }
-        // 4. Sync to desired frame rate
+        // Sync to desired frame rate
         FreeRtos::delay_ms(FRAME_DURATION_MS);
     }
 }
 
-fn connect_wifi(wifi: &mut EspWifi) -> anyhow::Result<()> {
-    log::info!("Connecting to WiFi...");
+fn connect_wifi_with_timeout(wifi: &mut EspWifi, timeout_ms: u32) -> anyhow::Result<bool> {
+    log::info!("Connecting to WiFi (timeout: {}ms)...", timeout_ms);
 
     let ssid: String<32> = WIFI_SSID
         .try_into()
@@ -125,22 +170,33 @@ fn connect_wifi(wifi: &mut EspWifi) -> anyhow::Result<()> {
     });
 
     wifi.set_configuration(&wifi_configuration)?;
-
     wifi.start()?;
     wifi.connect()?;
 
-    // Wait for connection
+    // Wait for connection with timeout
+    let mut elapsed_ms = 0u32;
+    let check_interval_ms = 500u32;
+    
     while !wifi.is_connected()? {
-        let config = wifi.get_configuration()?;
-        log::info!(
-            "Waiting for WiFi connection... Current config: {:?}",
-            config
-        );
-        FreeRtos::delay_ms(500);
+        if elapsed_ms >= timeout_ms {
+            log::warn!("WiFi connection timeout reached");
+            return Ok(false);
+        }
+        
+        if elapsed_ms % 5000 == 0 {
+            log::info!(
+                "Waiting for WiFi connection... ({}/{}ms)",
+                elapsed_ms,
+                timeout_ms
+            );
+        }
+        
+        FreeRtos::delay_ms(check_interval_ms);
+        elapsed_ms += check_interval_ms;
     }
 
-    log::info!("WiFi connected!");
-    Ok(())
+    log::info!("WiFi connected successfully!");
+    Ok(true)
 }
 
 fn get_ip_address(wifi: &EspWifi) -> std::string::String {
