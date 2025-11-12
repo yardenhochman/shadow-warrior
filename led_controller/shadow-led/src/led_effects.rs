@@ -169,3 +169,89 @@ impl EffectIterator for EnergyBar {
         Some(pixel_color)
     }
 }
+
+/// Effect wrapper that adjusts the brightness of pixels from an inner effect
+pub struct BrightnessFilterEffect {
+    inner: Box<dyn EffectIterator>,
+    brightness_factor: f32,
+}
+
+impl BrightnessFilterEffect {
+    /// Create a new brightness filter effect
+    /// - `inner`: the effect to wrap and adjust
+    /// - `brightness_factor`: factor to multiply brightness by (0.0 to 1.0 for dimming, >1.0 for brightening)
+    pub fn new(inner: Box<dyn EffectIterator>, brightness_factor: f32) -> Self {
+        Self {
+            inner,
+            brightness_factor: brightness_factor.max(0.0),
+        }
+    }
+}
+
+impl EffectIterator for BrightnessFilterEffect {
+    fn name(&self) -> &'static str {
+        "brightness_filter"
+    }
+
+    fn next(&mut self) -> Option<Vec<Srgb<u8>>> {
+        self.inner.next().map(|frame| {
+            frame
+                .iter()
+                .map(|pixel| {
+                    let r = ((pixel.red as f32) * self.brightness_factor).min(255.0) as u8;
+                    let g = ((pixel.green as f32) * self.brightness_factor).min(255.0) as u8;
+                    let b = ((pixel.blue as f32) * self.brightness_factor).min(255.0) as u8;
+                    Srgb::new(r, g, b)
+                })
+                .collect()
+        })
+    }
+}
+
+/// Effect wrapper that applies gamma correction to pixels from an inner effect
+pub struct GammaCorrectionEffect {
+    inner: Box<dyn EffectIterator>,
+    gamma: f32,
+}
+
+impl GammaCorrectionEffect {
+    /// Create a new gamma correction effect
+    /// - `inner`: the effect to wrap and adjust
+    /// - `gamma`: gamma value (typical range 1.5 to 2.5 for display correction)
+    ///   - gamma > 1.0: brightens the image (compensates for dark display)
+    ///   - gamma < 1.0: darkens the image
+    ///   - gamma = 1.0: no effect
+    pub fn new(inner: Box<dyn EffectIterator>, gamma: f32) -> Self {
+        Self {
+            inner,
+            gamma: gamma.max(0.1), // clamp to avoid division issues
+        }
+    }
+
+    /// Apply gamma correction to a single color value (0-255)
+    fn apply_gamma(value: u8, gamma: f32) -> u8 {
+        let normalized = value as f32 / 255.0; // normalize to 0.0-1.0
+        let corrected = normalized.powf(1.0 / gamma); // apply gamma correction
+        (corrected * 255.0).min(255.0) as u8 // scale back to 0-255
+    }
+}
+
+impl EffectIterator for GammaCorrectionEffect {
+    fn name(&self) -> &'static str {
+        "gamma_correction"
+    }
+
+    fn next(&mut self) -> Option<Vec<Srgb<u8>>> {
+        self.inner.next().map(|frame| {
+            frame
+                .iter()
+                .map(|pixel| {
+                    let r = Self::apply_gamma(pixel.red, self.gamma);
+                    let g = Self::apply_gamma(pixel.green, self.gamma);
+                    let b = Self::apply_gamma(pixel.blue, self.gamma);
+                    Srgb::new(r, g, b)
+                })
+                .collect()
+        })
+    }
+}
