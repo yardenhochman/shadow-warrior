@@ -183,7 +183,7 @@
                 </q-item-label>
               </q-item-section>
               <q-item-section side v-if="!ledConnected">
-                <q-btn label="Connect" color="primary" size="sm" @click="connectLED" />
+                <q-btn label="Connect" color="primary" size="sm" @click="scanAndShowDevices" />
               </q-item-section>
             </q-item>
 
@@ -207,6 +207,65 @@
         </q-card-section>
       </q-card>
     </div>
+
+    <!-- Device Selection Dialog -->
+    <q-dialog v-model="deviceDialog.show" persistent>
+      <q-card style="min-width: 400px">
+        <q-card-section class="row items-center">
+          <div class="text-h6">Select LED Controller</div>
+          <q-space />
+          <q-btn icon="close" flat round dense v-close-popup />
+        </q-card-section>
+
+        <q-card-section v-if="deviceDialog.scanning">
+          <div class="text-center q-pa-md">
+            <q-spinner color="primary" size="3em" />
+            <div class="text-h6 q-mt-md">Scanning for devices...</div>
+          </div>
+        </q-card-section>
+
+        <q-card-section v-else-if="deviceDialog.devices.length === 0">
+          <div class="text-center q-pa-md">
+            <q-icon name="device_unknown" size="4em" color="grey" />
+            <div class="text-h6 q-mt-md text-grey">No devices found</div>
+            <div class="text-body2 text-grey q-mt-sm">
+              Make sure your ShadowLED device is powered on and in range
+            </div>
+          </div>
+        </q-card-section>
+
+        <q-list v-else>
+          <q-item
+            v-for="device in deviceDialog.devices"
+            :key="device.deviceId"
+            clickable
+            @click="connectToDevice(device)"
+          >
+            <q-item-section avatar>
+              <q-icon name="lightbulb" color="primary" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label>{{ device.name || 'Unknown Device' }}</q-item-label>
+              <q-item-label caption>{{ device.deviceId }}</q-item-label>
+            </q-item-section>
+            <q-item-section side>
+              <q-icon name="chevron_right" color="grey" />
+            </q-item-section>
+          </q-item>
+        </q-list>
+
+        <q-card-actions align="right">
+          <q-btn flat label="Cancel" v-close-popup />
+          <q-btn
+            flat
+            label="Scan Again"
+            color="primary"
+            @click="scanDevices"
+            :loading="deviceDialog.scanning"
+          />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
   </q-page>
 </template>
 
@@ -221,6 +280,7 @@ import { speakerService } from 'src/services/speaker';
 import { useStateMachine } from 'src/composables/use-state-machine';
 import { useEnergyVisualization } from 'src/composables/use-energy-visualization';
 import EnergyBar from 'src/components/EnergyBar.vue';
+import type { BleDevice } from '@capacitor-community/bluetooth-le';
 
 const stateMachine = useStateMachineStore();
 useStateMachine();
@@ -229,6 +289,13 @@ const energyViz = useEnergyVisualization();
 const sensorsRunning = ref(false);
 const ledConnected = ref(false);
 const cooldownInterval = ref<number | null>(null);
+
+// Device selection dialog state
+const deviceDialog = ref({
+  show: false,
+  scanning: false,
+  devices: [] as BleDevice[],
+});
 
 const metrics = computed(() => stateMachine.metrics);
 
@@ -317,17 +384,38 @@ async function stopSensors() {
   sensorsRunning.value = false;
 }
 
-async function connectLED() {
+async function scanAndShowDevices() {
+  deviceDialog.value.show = true;
+  await scanDevices();
+}
+
+async function scanDevices() {
+  deviceDialog.value.scanning = true;
+  deviceDialog.value.devices = [];
+
   try {
     await ledControllerService.initialize();
-    const devices = await ledControllerService.scan();
+    const allDevices = await ledControllerService.scan();
 
-    if (devices.length > 0 && devices[0]) {
-      await ledControllerService.connect(devices[0].deviceId);
-      ledConnected.value = true;
-    }
+    // Filter for devices named "ShadowLED"
+    deviceDialog.value.devices = allDevices.filter(device =>
+      device.name && device.name.includes('ShadowLED')
+    );
   } catch (error) {
-    console.error('Failed to connect LED controller:', error);
+    console.error('Failed to scan for devices:', error);
+    deviceDialog.value.devices = [];
+  } finally {
+    deviceDialog.value.scanning = false;
+  }
+}
+
+async function connectToDevice(device: BleDevice) {
+  try {
+    await ledControllerService.connect(device.deviceId);
+    ledConnected.value = true;
+    deviceDialog.value.show = false;
+  } catch (error) {
+    console.error('Failed to connect to device:', error);
   }
 }
 
