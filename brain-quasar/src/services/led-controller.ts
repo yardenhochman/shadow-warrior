@@ -1,39 +1,39 @@
 // LED controller service for BLE/WiFi communication
 import { BleClient, type BleDevice } from '@capacitor-community/bluetooth-le';
+import { Capacitor } from '@capacitor/core';
 import { eventBus, Events } from './event-bus';
 
-// LED modes matching the state machine
+// LED modes matching the Rust command handler
 export enum LEDMode {
-  OFF = 'off',
-  STANDBY = 'standby',
-  PULSE = 'pulse',
-  FIGHT = 'fight',
-  VICTORY = 'victory',
+  IDLE = 'idle',
+  ENERGY_BAR = 'energy_bar',
+  ENERGY_PULSE = 'energy_pulse',
+  BREATHING = 'breathing',
+  ELECTRICITY = 'electricity',
 }
 
 interface LEDCommand {
   mode: LEDMode;
-  intensity?: number; // 0-1
-  color?: { r: number; g: number; b: number };
+  percentage?: number; // 0-100 for energy_bar
 }
 
 interface LEDControllerConfig {
   deviceId?: string;
   serviceUUID: string;
-  characteristicUUID: string;
+  characteristicUUID: string; // RX characteristic for writing commands
   autoReconnect: boolean;
 }
 
 class LEDControllerService {
   private config: LEDControllerConfig = {
-    serviceUUID: '6E400001-B5A3-F393-E0A9-E50E24DCCA9E', // Shadow Warrior service UUID
-    characteristicUUID: '6E400004-B5A3-F393-E0A9-E50E24DCCA9E', // LED control characteristic
+    serviceUUID: 'd08d81bb-7270-45de-a475-5b52feb820b6', // Shadow Warrior service UUID
+    characteristicUUID: '8f97424f-8c2f-4a86-9e53-92059ccb1559', // RX characteristic for writing commands
     autoReconnect: true,
   };
 
   private device: BleDevice | null = null;
   private connected = false;
-  private currentMode: LEDMode = LEDMode.OFF;
+  private currentMode: LEDMode = LEDMode.IDLE;
 
   async initialize(): Promise<void> {
     try {
@@ -54,9 +54,19 @@ class LEDControllerService {
     const devices: BleDevice[] = [];
 
     try {
+      // Initialize BLE client first
+      // For Android 12+ (API 31+): androidNeverForLocation means we don't need location
+      // For Android 11 and below (API 30-): Location permission AND location services must be enabled
+      console.log('Initializing BLE client...');
+      await BleClient.initialize({ androidNeverForLocation: true });
+
+      console.log('Starting BLE scan...');
+      console.log('Note: On Android 11 and below, ensure Location Services are enabled in Settings');
+
       await BleClient.requestLEScan(
         {
-          services: [this.config.serviceUUID],
+          namePrefix: 'ShadowLED',
+          allowDuplicates: true,
         },
         (result) => {
           devices.push(result.device);
@@ -73,6 +83,20 @@ class LEDControllerService {
       return devices;
     } catch (error) {
       console.error('Failed to scan for LED controllers:', error);
+
+      // Provide helpful error message for Android 11 and below
+      if (Capacitor.getPlatform() === 'android') {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        const enhancedError = new Error(
+          'Bluetooth scan failed. On Android 11 and below, make sure:\n' +
+          '1. Location permission is granted\n' +
+          '2. Location Services are turned ON in Settings\n' +
+          '3. Bluetooth is enabled\n\n' +
+          `Original error: ${errorMessage}`
+        );
+        throw enhancedError;
+      }
+
       throw error;
     }
   }
@@ -98,8 +122,8 @@ class LEDControllerService {
 
       console.log('Connected to LED controller:', deviceId);
 
-      // Send initial standby command
-      await this.sendCommand({ mode: LEDMode.STANDBY });
+      // Send initial idle command
+      await this.sendCommand({ mode: LEDMode.IDLE });
     } catch (error) {
       console.error('Failed to connect to LED controller:', error);
       throw error;
@@ -136,28 +160,33 @@ class LEDControllerService {
     }
 
     try {
-      // Create command packet
-      // Format: [mode (1 byte), intensity (1 byte), r (1 byte), g (1 byte), b (1 byte)]
-      const modeMap: Record<LEDMode, number> = {
-        [LEDMode.OFF]: 0,
-        [LEDMode.STANDBY]: 1,
-        [LEDMode.PULSE]: 2,
-        [LEDMode.FIGHT]: 3,
-        [LEDMode.VICTORY]: 4,
-      };
+      // Create command string based on mode
+      let commandString: string;
 
-      const intensity = Math.round((command.intensity || 0) * 255);
-      const r = command.color?.r || 0;
-      const g = command.color?.g || 0;
-      const b = command.color?.b || 0;
+      switch (command.mode) {
+        case LEDMode.IDLE:
+          commandString = 'idle';
+          break;
+        case LEDMode.ENERGY_BAR:
+          commandString = `energy_bar ${command.percentage || 0}`;
+          break;
+        case LEDMode.ENERGY_PULSE:
+          commandString = 'energy_pulse';
+          break;
+        case LEDMode.BREATHING:
+          commandString = 'breathing';
+          break;
+        case LEDMode.ELECTRICITY:
+          commandString = 'electricity';
+          break;
+        default:
+          console.error('Unknown LED mode:', command.mode);
+          return;
+      }
 
-      const data = new Uint8Array([
-        modeMap[command.mode],
-        intensity,
-        r,
-        g,
-        b,
-      ]);
+      // Convert string to UTF-8 bytes
+      const encoder = new TextEncoder();
+      const data = encoder.encode(commandString);
 
       // Convert to DataView for BLE write
       const dataView = new DataView(data.buffer);
@@ -170,7 +199,7 @@ class LEDControllerService {
       );
 
       this.currentMode = command.mode;
-      console.log('Sent LED command:', command);
+      console.log('Sent LED command:', commandString);
     } catch (error) {
       console.error('Failed to send LED command:', error);
     }
