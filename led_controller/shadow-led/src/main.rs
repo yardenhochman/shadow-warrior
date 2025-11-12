@@ -15,120 +15,15 @@ use heapless::String;
 use smart_leds::{SmartLedsWrite, RGB8};
 use std::sync::Arc;
 use ws2812_esp32_rmt_driver::Ws2812Esp32Rmt;
-use esp_idf_sys as sys;
 
 use crate::command_handler::CommandHandler;
 use crate::effect_state::EffectState;
 use crate::led_effects::{FRAME_DURATION_MS, FRAME_RATE};
 
-const WIFI_CONFIG_PATH: &str = "/spiffs/wifi.conf";
+const WIFI_SSID: &str = "super_skunk"; // Replace with your WiFi SSID
+const WIFI_PASSWORD: &str = "0547407479"; // Replace with your WiFi password
 const LED_COUNT: usize = 180;
 const DEVICE_NAME: &str = "ShadowLED";
-
-/// Safe wrapper for SPIFFS operations
-struct SpiffsHandle;
-
-impl SpiffsHandle {
-    fn mount() -> anyhow::Result<Self> {
-        unsafe {
-            let mut spiffs_config = sys::esp_vfs_spiffs_conf_t {
-                base_path: b"/spiffs\0".as_ptr() as *const u8,
-                partition_label: b"storage\0".as_ptr() as *const u8,
-                max_files: 5,
-                format_if_mount_failed: false,
-            };
-
-            let ret = sys::esp_vfs_spiffs_register(&mut spiffs_config);
-            if ret != 0 {
-                return Err(anyhow::anyhow!("Failed to mount SPIFFS: {}", ret));
-            }
-
-            // Verify mount
-            let mut total_bytes: usize = 0;
-            let mut used_bytes: usize = 0;
-            let ret = sys::esp_spiffs_info(b"storage\0".as_ptr() as *const u8, &mut total_bytes as *mut usize, &mut used_bytes as *mut usize);
-            if ret != 0 {
-                return Err(anyhow::anyhow!("SPIFFS partition not accessible: {}", ret));
-            }
-
-            log::info!("SPIFFS mounted successfully, total: {} bytes, used: {} bytes", total_bytes, used_bytes);
-        }
-
-        Ok(SpiffsHandle)
-    }
-}
-
-impl Drop for SpiffsHandle {
-    fn drop(&mut self) {
-        unsafe {
-            sys::esp_vfs_spiffs_unregister(b"storage\0".as_ptr() as *const u8);
-        }
-        log::info!("SPIFFS unmounted");
-    }
-}
-
-fn read_wifi_config() -> anyhow::Result<Option<(String<32>, String<64>)>> {
-    log::info!("Attempting to read WiFi config from {}", WIFI_CONFIG_PATH);
-
-    // Mount SPIFFS safely
-    let _spiffs = SpiffsHandle::mount()?;
-
-    // Try to open the config file
-    let file = match std::fs::File::open(WIFI_CONFIG_PATH) {
-        Ok(f) => f,
-        Err(e) => {
-            log::info!("WiFi config file not found ({}), WiFi will be disabled", e);
-            return Ok(None);
-        }
-    };
-
-    // Read the file content
-    use std::io::Read;
-    let mut content = std::string::String::new();
-    if file.take(1024).read_to_string(&mut content).is_err() {
-        log::warn!("Failed to read WiFi config file");
-        return Ok(None);
-    }
-
-    // Parse the config file (simple key=value format)
-    let mut ssid: Option<String<32>> = None;
-    let mut password: Option<String<64>> = None;
-
-    for line in content.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-
-        if let Some((key, value)) = line.split_once('=') {
-            let key = key.trim();
-            let value = value.trim().trim_matches('"');
-
-            match key {
-                "ssid" => {
-                    ssid = Some(String::try_from(value).map_err(|_| anyhow::anyhow!("SSID too long"))?);
-                }
-                "password" => {
-                    password = Some(String::try_from(value).map_err(|_| anyhow::anyhow!("Password too long"))?);
-                }
-                _ => {}
-            }
-        }
-    }
-
-    // SPIFFS will be automatically unmounted when _spiffs goes out of scope
-
-    match (ssid, password) {
-        (Some(s), Some(p)) => {
-            log::info!("WiFi config loaded successfully");
-            Ok(Some((s, p)))
-        }
-        _ => {
-            log::warn!("WiFi config file incomplete (missing ssid or password)");
-            Ok(None)
-        }
-    }
-}
 
 fn main() -> anyhow::Result<()> {
     // It is necessary to call this function once. Otherwise, some patches to the runtime
@@ -147,35 +42,25 @@ fn main() -> anyhow::Result<()> {
     // Initialize NVS
     let nvs = EspDefaultNvsPartition::take()?;
 
-    // Initialize system event loop
+    // Initialize event loop
     let sys_loop = EspSystemEventLoop::take()?;
 
-    // Try to read WiFi configuration from SPIFFS
-    let wifi_config = read_wifi_config()?;
-    let mut wifi: Option<EspWifi> = None;
-    let mut ip_address = "No WiFi".to_string();
+    // Initialize WiFi
+    let mut wifi = EspWifi::new(peripherals.modem, sys_loop.clone(), Some(nvs.clone()))?;
+    connect_wifi(&mut wifi)?;
 
-    if let Some((ssid, password)) = wifi_config {
-        log::info!("WiFi config found, initializing WiFi...");
-        let mut wifi_instance = EspWifi::new(peripherals.modem, sys_loop.clone(), Some(nvs.clone()))?;
-        connect_wifi(&mut wifi_instance, ssid, password)?;
-
-        // Get IP address — wait a short while for IP assignment (avoid logging 0.0.0.0)
-        ip_address = get_ip_address(&wifi_instance);
-        let mut waited_ms = 0u32;
-        while ip_address == "0.0.0.0" && waited_ms < 10_000 {
-            FreeRtos::delay_ms(500);
-            waited_ms += 500;
-            ip_address = get_ip_address(&wifi_instance);
-        }
-        log::info!("Device IP address: {}", ip_address);
-        wifi = Some(wifi_instance);
-    } else {
-        log::info!("No WiFi config found, running in offline mode");
+    // Get IP address — wait a short while for IP assignment (avoid logging 0.0.0.0)
+    let mut ip_address = get_ip_address(&wifi);
+    let mut waited_ms = 0u32;
+    while ip_address == "0.0.0.0" && waited_ms < 10_000 {
+        FreeRtos::delay_ms(500);
+        waited_ms += 500;
+        ip_address = get_ip_address(&wifi);
     }
+    log::info!("Device IP address: {}", ip_address);
 
-    // Initialize LED strip on GPIO 16
-    let led_pin = pins.gpio16;
+    // Initialize LED strip on GPIO 26
+    let led_pin = pins.gpio26;
     let rmt_channel = peripherals.rmt.channel0;
     let mut ws2812 = initialize_ws2812(led_pin, rmt_channel)?;
 
@@ -191,24 +76,15 @@ fn main() -> anyhow::Result<()> {
     _ble_service.update_ip_address(&ip_address)?;
     _ble_service.update_status("Ready")?;
 
-    // Initialize HTTP server only if WiFi is available
-    let _http_server = if wifi.is_some() {
-        Some(http_server::HttpServer::new(command_tx)?)
-    } else {
-        log::info!("HTTP server not started (no WiFi)");
-        None
-    };
+    // Initialize HTTP server
+    let _http_server = http_server::HttpServer::new(command_tx)?;
 
     // Blink LEDs on boot
     blink_leds_on_boot(&mut ws2812)?;
 
     log::info!("ShadowLED Controller initialized successfully!");
     log::info!("BLE advertising as: {}", DEVICE_NAME);
-    if wifi.is_some() {
-        log::info!("HTTP server running on port 80");
-    } else {
-        log::info!("Running in offline mode (BLE only)");
-    }
+    log::info!("HTTP server running on port 80");
     log::info!("Frame rate set to {} FPS", FRAME_RATE);
 
     // Initialize effect state machine
@@ -231,8 +107,15 @@ fn main() -> anyhow::Result<()> {
     }
 }
 
-fn connect_wifi(wifi: &mut EspWifi, ssid: String<32>, password: String<64>) -> anyhow::Result<()> {
+fn connect_wifi(wifi: &mut EspWifi) -> anyhow::Result<()> {
     log::info!("Connecting to WiFi...");
+
+    let ssid: String<32> = WIFI_SSID
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("SSID too long"))?;
+    let password: String<64> = WIFI_PASSWORD
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("Password too long"))?;
 
     let wifi_configuration = Configuration::Client(ClientConfiguration {
         ssid,
@@ -267,9 +150,9 @@ fn get_ip_address(wifi: &EspWifi) -> std::string::String {
     }
 }
 
-fn initialize_ws2812<'a, T: OutputPin>(pin: T, channel: CHANNEL0) -> anyhow::Result<Ws2812Esp32Rmt<'a>> {
+fn initialize_ws2812<'a>(pin: Gpio26, channel: CHANNEL0) -> anyhow::Result<Ws2812Esp32Rmt<'a>> {
     log::info!(
-        "Initializing WS2812B LED strip with {} LEDs on GPIO 16",
+        "Initializing WS2812B LED strip with {} LEDs on GPIO 26",
         LED_COUNT
     );
 
