@@ -1,5 +1,6 @@
 mod ble;
 mod command_handler;
+mod config;
 mod effect_state;
 mod http_server;
 mod led_effects;
@@ -21,11 +22,6 @@ use crate::command_handler::CommandHandler;
 use crate::effect_state::EffectState;
 use crate::led_effects::{FRAME_DURATION_MS, FRAME_RATE};
 
-const WIFI_SSID: &str = "super_skunk"; // Replace with your WiFi SSID
-const WIFI_PASSWORD: &str = "0547407479"; // Replace with your WiFi password
-const WIFI_CONNECT_TIMEOUT_MS: u32 = 30_000; // 30 seconds timeout for WiFi connection
-const LED_COUNT: usize = 180;
-const DEVICE_NAME: &str = "ShadowLED";
 
 fn main() -> anyhow::Result<()> {
     // It is necessary to call this function once. Otherwise, some patches to the runtime
@@ -36,6 +32,13 @@ fn main() -> anyhow::Result<()> {
     esp_idf_svc::log::EspLogger::initialize_default();
 
     log::info!("ShadowLED Controller starting...");
+
+    // Mount SPIFFS and load configuration
+    config::mount_spiffs()?;
+    let app_config = config::AppConfig::load_or_default();
+    
+    log::info!("Device: {}, LEDs: {}", app_config.device.device_name, app_config.device.led_count);
+    log::info!("WiFi SSID: {}", app_config.wifi.ssid);
 
     // Initialize peripherals
     let peripherals = Peripherals::take()?;
@@ -50,10 +53,10 @@ fn main() -> anyhow::Result<()> {
     // Initialize LED strip on GPIO 26
     let led_pin = pins.gpio26;
     let rmt_channel = peripherals.rmt.channel0;
-    let mut ws2812 = initialize_ws2812(led_pin, rmt_channel)?;
+    let mut ws2812 = initialize_ws2812(led_pin, rmt_channel, app_config.device.led_count)?;
 
     // Blink LEDs on boot
-    blink_leds_on_boot(&mut ws2812)?;
+    blink_leds_on_boot(&mut ws2812, app_config.device.led_count)?;
 
     // Initialize command handler
     let command_handler = CommandHandler::new();
@@ -62,12 +65,15 @@ fn main() -> anyhow::Result<()> {
     // Initialize BLE service FIRST (before WiFi)
     log::info!("Starting BLE service...");
     let ble_service = Arc::new(Mutex::new(ble::BleService::new(
-        DEVICE_NAME,
+        &app_config.device.device_name,
         Arc::new(CommandHandler::create_ble_callback(command_tx.clone())),
     )?));
     ble_service.lock().unwrap().update_status("Starting WiFi...")?;
-    log::info!("BLE advertising as: {}", DEVICE_NAME);
+    log::info!("BLE advertising as: {}", app_config.device.device_name);
 
+    // Clone config for WiFi thread
+    let wifi_config = app_config.wifi.clone();
+    
     // Start WiFi connection in background thread (non-blocking)
     let ble_service_clone = Arc::clone(&ble_service);
     let _wifi_thread = thread::spawn(move || {
@@ -75,7 +81,7 @@ fn main() -> anyhow::Result<()> {
         
         match EspWifi::new(peripherals.modem, sys_loop.clone(), Some(nvs.clone())) {
             Ok(mut wifi) => {
-                match connect_wifi_with_timeout(&mut wifi, WIFI_CONNECT_TIMEOUT_MS) {
+                match connect_wifi_with_timeout(&mut wifi, &wifi_config) {
                     Ok(true) => {
                         let ip_address = get_ip_address(&wifi);
                         log::info!("WiFi connected! IP address: {}", ip_address);
@@ -97,20 +103,33 @@ fn main() -> anyhow::Result<()> {
                             }
                             Err(e) => {
                                 log::error!("Failed to start HTTP server: {:?}", e);
+                                // Leak resources to prevent pthread cleanup issues
+                                std::mem::forget(wifi);
+                                std::mem::forget(sys_loop);
+                                std::mem::forget(nvs);
                             }
                         }
                     }
                     Ok(false) => {
-                        log::warn!("WiFi connection timed out after {}ms", WIFI_CONNECT_TIMEOUT_MS);
+                        log::warn!("WiFi connection timed out after {}ms", wifi_config.timeout_ms);
                         if let Ok(ble) = ble_service_clone.lock() {
                             let _ = ble.update_status("WiFi Timeout - BLE Only");
                         }
+                        // Leak resources to prevent heap corruption during pthread cleanup
+                        // These are global singletons that shouldn't be dropped anyway
+                        std::mem::forget(wifi);
+                        std::mem::forget(sys_loop);
+                        std::mem::forget(nvs);
                     }
                     Err(e) => {
                         log::error!("WiFi connection error: {:?}", e);
                         if let Ok(ble) = ble_service_clone.lock() {
                             let _ = ble.update_status("WiFi Error - BLE Only");
                         }
+                        // Leak resources to prevent heap corruption
+                        std::mem::forget(wifi);
+                        std::mem::forget(sys_loop);
+                        std::mem::forget(nvs);
                     }
                 }
             }
@@ -119,6 +138,9 @@ fn main() -> anyhow::Result<()> {
                 if let Ok(ble) = ble_service_clone.lock() {
                     let _ = ble.update_status("WiFi Init Failed - BLE Only");
                 }
+                // Leak NVS and sys_loop to prevent heap corruption
+                std::mem::forget(sys_loop);
+                std::mem::forget(nvs);
             }
         }
     });
@@ -131,7 +153,7 @@ fn main() -> anyhow::Result<()> {
     log::info!("WiFi connecting in background (device is operational via BLE)");
 
     // Initialize effect state machine
-    let mut effect_state = EffectState::new(LED_COUNT);
+    let mut effect_state = EffectState::new(app_config.device.led_count);
 
     // Main render loop (60 FPS)
     loop {
@@ -152,13 +174,13 @@ fn main() -> anyhow::Result<()> {
     }
 }
 
-fn connect_wifi_with_timeout(wifi: &mut EspWifi, timeout_ms: u32) -> anyhow::Result<bool> {
-    log::info!("Connecting to WiFi (timeout: {}ms)...", timeout_ms);
+fn connect_wifi_with_timeout(wifi: &mut EspWifi, wifi_config: &config::WifiConfig) -> anyhow::Result<bool> {
+    log::info!("Connecting to WiFi (timeout: {}ms)...", wifi_config.timeout_ms);
 
-    let ssid: String<32> = WIFI_SSID
+    let ssid: String<32> = wifi_config.ssid.as_str()
         .try_into()
         .map_err(|_| anyhow::anyhow!("SSID too long"))?;
-    let password: String<64> = WIFI_PASSWORD
+    let password: String<64> = wifi_config.password.as_str()
         .try_into()
         .map_err(|_| anyhow::anyhow!("Password too long"))?;
 
@@ -178,7 +200,7 @@ fn connect_wifi_with_timeout(wifi: &mut EspWifi, timeout_ms: u32) -> anyhow::Res
     let check_interval_ms = 500u32;
     
     while !wifi.is_connected()? {
-        if elapsed_ms >= timeout_ms {
+        if elapsed_ms >= wifi_config.timeout_ms {
             log::warn!("WiFi connection timeout reached");
             return Ok(false);
         }
@@ -187,7 +209,7 @@ fn connect_wifi_with_timeout(wifi: &mut EspWifi, timeout_ms: u32) -> anyhow::Res
             log::info!(
                 "Waiting for WiFi connection... ({}/{}ms)",
                 elapsed_ms,
-                timeout_ms
+                wifi_config.timeout_ms
             );
         }
         
@@ -206,10 +228,10 @@ fn get_ip_address(wifi: &EspWifi) -> std::string::String {
     }
 }
 
-fn initialize_ws2812<'a>(pin: Gpio26, channel: CHANNEL0) -> anyhow::Result<Ws2812Esp32Rmt<'a>> {
+fn initialize_ws2812<'a>(pin: Gpio26, channel: CHANNEL0, led_count: usize) -> anyhow::Result<Ws2812Esp32Rmt<'a>> {
     log::info!(
         "Initializing WS2812B LED strip with {} LEDs on GPIO 26",
-        LED_COUNT
+        led_count
     );
 
     let ws2812 = Ws2812Esp32Rmt::new(channel, pin)?;
@@ -218,17 +240,17 @@ fn initialize_ws2812<'a>(pin: Gpio26, channel: CHANNEL0) -> anyhow::Result<Ws281
     Ok(ws2812)
 }
 
-fn blink_leds_on_boot(ws2812: &mut Ws2812Esp32Rmt) -> anyhow::Result<()> {
+fn blink_leds_on_boot(ws2812: &mut Ws2812Esp32Rmt, led_count: usize) -> anyhow::Result<()> {
     log::info!("Blinking LEDs on boot...");
 
     // Create pixel buffer using RGB8
-    let mut pixels = vec![RGB8::default(); LED_COUNT];
+    let mut pixels = vec![RGB8::default(); led_count];
 
     for i in 0..3 {
         log::info!(
             "LED blink {}: ON - Setting all {} LEDs to white",
             i + 1,
-            LED_COUNT
+            led_count
         );
 
         // Set all LEDs to white (RGB: 255, 255, 255)
@@ -241,7 +263,7 @@ fn blink_leds_on_boot(ws2812: &mut Ws2812Esp32Rmt) -> anyhow::Result<()> {
         log::info!(
             "LED blink {}: OFF - Setting all {} LEDs to black",
             i + 1,
-            LED_COUNT
+            led_count
         );
 
         // Set all LEDs to black (off)
