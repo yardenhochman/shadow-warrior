@@ -6,12 +6,13 @@
   "author": "Avishai Ish-Shalom <avishai.ishshalom@gmail.com>",
   "type": "module",
   "private": true,
+  "buildNumber": 2,
   "scripts": {
     "lint": "eslint -c ./eslint.config.js \"./src*/**/*.{ts,js,cjs,mjs,vue}\"",
     "format": "prettier --write \"**/*.{js,ts,vue,scss,html,md,json}\" --ignore-path .gitignore",
     "test": "echo \"No test specified\" && exit 0",
     "dev": "quasar dev",
-    "build": "quasar build",
+    "build": "node scripts/increment-build.js && quasar build",
     "postinstall": "quasar prepare"
   },
   "dependencies": {
@@ -20,6 +21,7 @@
     "@capacitor/motion": "^7.0.1",
     "@quasar/extras": "^1.16.4",
     "axios": "^1.2.1",
+    "capacitor-zeroconf": "^4.0.0",
     "pinia": "^3.0.1",
     "quasar": "^2.16.0",
     "vue": "^3.5.22",

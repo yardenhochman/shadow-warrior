@@ -4,7 +4,10 @@
       <q-toolbar>
         <q-btn flat dense round icon="menu" aria-label="Menu" @click="toggleLeftDrawer" />
 
-        <q-toolbar-title> Shadow Warrior Brain</q-toolbar-title>
+        <q-toolbar-title>
+          Shadow Warrior Brain
+          <div class="text-caption">ver {{ version }}-{{ buildNumber }}</div>
+        </q-toolbar-title>
 
         <q-btn flat dense round icon="settings" aria-label="Settings" to="/settings" />
       </q-toolbar>
@@ -42,8 +45,11 @@
 
 <script setup lang="ts">
 import { ref } from 'vue';
+import packageJson from '../../package.json';
 
 const leftDrawerOpen = ref(false);
+const version = packageJson.version;
+const buildNumber = packageJson.buildNumber || 0;
 
 function toggleLeftDrawer() {
   leftDrawerOpen.value = !leftDrawerOpen.value;
