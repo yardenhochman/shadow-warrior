@@ -60,6 +60,8 @@ export const Events = {
   LED_COMMAND: 'device:led',
   SPEAKER_COMMAND: 'device:speaker',
   UV_LIGHT_COMMAND: 'device:uv-light',
+  CONTROLLER_CONNECTED: 'device:controller-connected',
+  CONTROLLER_DISCONNECTED: 'device:controller-disconnected',
 
   // Metrics events
   METRICS_UPDATED: 'metrics:updated',
