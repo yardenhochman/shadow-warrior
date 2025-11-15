@@ -17,10 +17,12 @@ interface StateMachineState {
   cooldownStartTime: number | null;
   warmingStartTime: number | null;
   fightStartTime: number | null;
+  lastActivityTime: number | null; // Track last punch or shout time for inactivity detection
   timers: {
     cooldown: number | null;
     warming: number | null;
     fight: number | null;
+    inactivity: number | null; // Timer for checking fight inactivity
     decay: number | null;
   };
   lastEffectTrigger: number;
@@ -43,6 +45,7 @@ export const useStateMachineStore = defineStore('stateMachine', {
       cooldownDuration: 5 * 60 * 1000, // 5 minutes
       warmingTimeout: 60 * 1000, // 1 minute
       fightTimeout: 3 * 60 * 1000, // 3 minutes
+      fightInactivityTimeout: 60 * 1000, // 1 minute - no punches or shouts
       warmingDecayRate: 5, // Points per second
       fightDecayRate: 3, // Points per second
       warmingShoutScale: 10, // Power multiplier for warming shouts
@@ -54,10 +57,12 @@ export const useStateMachineStore = defineStore('stateMachine', {
     cooldownStartTime: null,
     warmingStartTime: null,
     fightStartTime: null,
+    lastActivityTime: null,
     timers: {
       cooldown: null,
       warming: null,
       fight: null,
+      inactivity: null,
       decay: null,
     },
     lastEffectTrigger: 0,
@@ -185,6 +190,7 @@ export const useStateMachineStore = defineStore('stateMachine', {
 
     onEnterFight(): void {
       this.fightStartTime = Date.now();
+      this.lastActivityTime = Date.now();
       this.metrics.fightPower = 0;
       this.lastEffectTrigger = 0;
       this.accumulatedPower = 0;
@@ -192,12 +198,24 @@ export const useStateMachineStore = defineStore('stateMachine', {
       // Start the power decay loop
       this.startDecayLoop();
 
-      // Set timeout to revert to idle if threshold not reached
+      // Set timeout for maximum fight duration
       this.timers.fight = window.setTimeout(() => {
         if (this.currentState === ArenaState.FIGHT) {
-          this.transition(ArenaState.IDLE);
+          console.log('Fight timeout reached - ending fight');
+          this.transition(ArenaState.VICTORY);
         }
       }, this.config.fightTimeout);
+
+      // Set up inactivity check - runs every second
+      this.timers.inactivity = window.setInterval(() => {
+        if (this.currentState === ArenaState.FIGHT && this.lastActivityTime !== null) {
+          const timeSinceActivity = Date.now() - this.lastActivityTime;
+          if (timeSinceActivity >= this.config.fightInactivityTimeout) {
+            console.log('Fight inactivity timeout reached - ending fight');
+            this.transition(ArenaState.VICTORY);
+          }
+        }
+      }, 1000) as unknown as number;
 
       // Send LED command for electricity mode (fight mode)
       eventBus.emit(Events.LED_COMMAND, { mode: 'electricity' });
@@ -265,6 +283,9 @@ export const useStateMachineStore = defineStore('stateMachine', {
           this.transition(ArenaState.FIGHT);
         }
       } else if (this.currentState === ArenaState.FIGHT) {
+        // Track activity
+        this.lastActivityTime = Date.now();
+
         // Shouts during fight contribute to fight power using scale factor
         const powerGain = amplitude * this.config.fightShoutScale;
         this.metrics.fightPower = Math.min(
@@ -275,10 +296,7 @@ export const useStateMachineStore = defineStore('stateMachine', {
         // Accumulate power for effect triggering with 100ms debounce
         this.triggerEffectDebounced(powerGain);
 
-        // Check if victory threshold reached
-        if (this.metrics.fightPower >= this.config.fightThreshold) {
-          this.transition(ArenaState.VICTORY);
-        }
+        // Bar can fill to 100% but fight continues until timeout or inactivity
       }
 
       // Emit metrics update
@@ -290,6 +308,9 @@ export const useStateMachineStore = defineStore('stateMachine', {
       this.metrics.punchForce = force;
 
       if (this.currentState === ArenaState.FIGHT) {
+        // Track activity
+        this.lastActivityTime = Date.now();
+
         // Punches contribute to fight power using scale factor
         const powerGain = force * this.config.fightPunchScale;
         this.metrics.fightPower = Math.min(
@@ -300,10 +321,7 @@ export const useStateMachineStore = defineStore('stateMachine', {
         // Accumulate power for effect triggering with 100ms debounce
         this.triggerEffectDebounced(powerGain);
 
-        // Check if victory threshold reached
-        if (this.metrics.fightPower >= this.config.fightThreshold) {
-          this.transition(ArenaState.VICTORY);
-        }
+        // Bar can fill to 100% but fight continues until timeout or inactivity
       }
 
       // Emit metrics update
@@ -396,9 +414,9 @@ export const useStateMachineStore = defineStore('stateMachine', {
 
     // Clear all timers
     clearTimers(): void {
-      Object.values(this.timers).forEach((timer) => {
+      Object.entries(this.timers).forEach(([key, timer]) => {
         if (timer !== null) {
-          if (timer === this.timers.decay) {
+          if (key === 'decay' || key === 'inactivity') {
             clearInterval(timer as unknown as number);
           } else {
             clearTimeout(timer);
@@ -409,6 +427,7 @@ export const useStateMachineStore = defineStore('stateMachine', {
         cooldown: null,
         warming: null,
         fight: null,
+        inactivity: null,
         decay: null,
       };
     },

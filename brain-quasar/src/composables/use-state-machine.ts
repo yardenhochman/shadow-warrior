@@ -26,13 +26,13 @@ export function useStateMachine() {
 
   const handleStateChange = (payload: { from: ArenaState; to: ArenaState }) => {
     console.log('State change detected:', payload.from, '->', payload.to);
-    
+
     // Handle music playback based on state transitions
     if (payload.to === ArenaStateEnum.FIGHT) {
       // Entering fight mode - play random song
       const playlist = musicPlayerService.getPlaylist();
       console.log('Fight mode - playlist has', playlist.length, 'tracks');
-      
+
       if (playlist.length > 0) {
         // Pick random track
         const randomIndex = Math.floor(Math.random() * playlist.length);
