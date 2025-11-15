@@ -4,7 +4,7 @@
 set -e
 
 # Build the web assets
-npx quasar build
+npm run build
 
 # Sync the web assets to the native projects
 npx cap sync

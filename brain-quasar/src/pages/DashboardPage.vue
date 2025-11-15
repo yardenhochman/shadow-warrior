@@ -308,6 +308,9 @@
           </div>
         </q-card-section>
       </q-card>
+
+      <!-- Music Player -->
+      <MusicPlayer class="q-mt-md" />
     </div>
   </q-page>
 </template>
@@ -323,6 +326,7 @@ import { speakerService } from 'src/services/speaker';
 import { useStateMachine } from 'src/composables/use-state-machine';
 import { useEnergyVisualization } from 'src/composables/use-energy-visualization';
 import EnergyBar from 'src/components/EnergyBar.vue';
+import MusicPlayer from 'src/components/MusicPlayer.vue';
 import type { BleDevice } from '@capacitor-community/bluetooth-le';
 import { eventBus, Events } from 'src/services/event-bus';
 

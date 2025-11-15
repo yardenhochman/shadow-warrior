@@ -70,4 +70,13 @@ export const Events = {
 
   // Config events
   CONFIG_UPDATED: 'config:updated',
+
+  // Music events
+  MUSIC_PLAYING: 'music:playing',
+  MUSIC_PAUSED: 'music:paused',
+  MUSIC_STOPPED: 'music:stopped',
+  MUSIC_VOLUME_CHANGED: 'music:volume-changed',
+  MUSIC_PLAYLIST_UPDATED: 'music:playlist-updated',
+  MUSIC_TRACK_LOADED: 'music:track-loaded',
+  MUSIC_ERROR: 'music:error',
 } as const;
