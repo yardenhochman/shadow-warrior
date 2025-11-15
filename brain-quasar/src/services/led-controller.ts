@@ -70,11 +70,15 @@ class LEDControllerService {
 
   private controllers: Map<string, { type: ControllerType; device: BleDevice | WLEDController }> = new Map();
   private currentMode: LEDMode = LEDMode.IDLE;
+  private readonly STORAGE_KEY = 'shadow-warrior-led-controllers';
 
   async initialize(): Promise<void> {
     try {
       await BleClient.initialize();
       console.log('LED controller BLE client initialized');
+
+      // Load saved controllers from localStorage
+      this.loadSavedControllers();
 
       // Listen for LED commands from event bus
       eventBus.on(Events.LED_COMMAND, (command: LEDCommand) => {
@@ -83,6 +87,84 @@ class LEDControllerService {
     } catch (error) {
       console.error('Failed to initialize LED controller:', error);
       throw error;
+    }
+  }
+
+  // Load saved controllers from localStorage
+  private loadSavedControllers(): void {
+    try {
+      const saved = localStorage.getItem(this.STORAGE_KEY);
+      if (!saved) {
+        console.log('No saved controllers found');
+        return;
+      }
+
+      const savedControllers = JSON.parse(saved) as Array<{
+        id: string;
+        type: ControllerType;
+        ip?: string;
+        name?: string;
+        deviceId?: string;
+        deviceName?: string;
+      }>;
+
+      console.log('Loading saved controllers:', savedControllers.length);
+
+      for (const saved of savedControllers) {
+        if (saved.type === ControllerType.WLED && saved.ip) {
+          // Restore WLED controller
+          const wledController: WLEDController = {
+            ip: saved.ip,
+            ws: null,
+            connected: false,
+            name: saved.name || `WLED ${saved.ip}`,
+          };
+          this.controllers.set(saved.id, { type: ControllerType.WLED, device: wledController });
+          console.log('Restored WLED controller:', saved.id);
+        } else if (saved.type === ControllerType.BLE && saved.deviceId) {
+          // Restore BLE controller reference (will need to reconnect)
+          const bleDevice: BleDevice = {
+            deviceId: saved.deviceId,
+            name: saved.deviceName || 'Unknown BLE Device',
+          };
+          this.controllers.set(saved.id, { type: ControllerType.BLE, device: bleDevice });
+          console.log('Restored BLE controller reference:', saved.id);
+        }
+      }
+
+      console.log('Restored %d controllers from storage', this.controllers.size);
+    } catch (error) {
+      console.error('Failed to load saved controllers:', error);
+    }
+  }
+
+  // Save controllers to localStorage
+  private saveControllers(): void {
+    try {
+      const toSave = Array.from(this.controllers.entries()).map(([id, { type, device }]) => {
+        if (type === ControllerType.WLED) {
+          const wled = device as WLEDController;
+          return {
+            id,
+            type,
+            ip: wled.ip,
+            name: wled.name,
+          };
+        } else {
+          const ble = device as BleDevice;
+          return {
+            id,
+            type,
+            deviceId: ble.deviceId,
+            deviceName: ble.name,
+          };
+        }
+      });
+
+      localStorage.setItem(this.STORAGE_KEY, JSON.stringify(toSave));
+      console.log('Saved %d controllers to storage', toSave.length);
+    } catch (error) {
+      console.error('Failed to save controllers:', error);
     }
   }
 
@@ -222,6 +304,7 @@ class LEDControllerService {
 
   // Add discovered controllers to the service
   addDiscoveredControllers(discoveredControllers: { type: ControllerType; device: BleDevice | WLEDController }[]): void {
+    let added = false;
     for (const { type, device } of discoveredControllers) {
       let controllerId: string;
       if (type === ControllerType.BLE) {
@@ -235,7 +318,13 @@ class LEDControllerService {
       if (!this.controllers.has(controllerId)) {
         this.controllers.set(controllerId, { type, device });
         console.log('Added discovered controller:', controllerId);
+        added = true;
       }
+    }
+
+    // Save to localStorage if any controllers were added
+    if (added) {
+      this.saveControllers();
     }
   }
 
@@ -258,6 +347,9 @@ class LEDControllerService {
 
     this.controllers.set(controllerId, { type: ControllerType.WLED, device: wledController });
     console.log('Added manual WLED controller:', controllerId);
+
+    // Save to localStorage
+    this.saveControllers();
 
     return controllerId;
   }
@@ -544,6 +636,24 @@ class LEDControllerService {
       type,
       device,
     }));
+  }
+
+  // Remove a controller
+  async removeController(controllerId: string): Promise<void> {
+    const controller = this.controllers.get(controllerId);
+    if (!controller) {
+      return;
+    }
+
+    // Disconnect first if connected
+    await this.disconnect(controllerId);
+
+    // Remove from map
+    this.controllers.delete(controllerId);
+    console.log('Removed controller:', controllerId);
+
+    // Save to localStorage
+    this.saveControllers();
   }
 }
 
