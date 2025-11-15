@@ -79,6 +79,20 @@
           </div>
 
           <div class="q-mt-md">
+            <div class="text-subtitle2">Fight Inactivity Timeout (seconds)</div>
+            <q-slider
+              v-model="fightInactivitySeconds"
+              :min="10"
+              :max="120"
+              :step="10"
+              label
+              label-always
+              color="red"
+              @update:model-value="updateFightInactivityTimeout"
+            />
+          </div>
+
+          <div class="q-mt-md">
             <div class="text-subtitle2">Warming Decay Rate (power/second)</div>
             <q-slider
               v-model="config.warmingDecayRate"
@@ -384,6 +398,7 @@ const config = ref({
   cooldownDuration: 300000,
   warmingTimeout: 60000,
   fightTimeout: 180000,
+  fightInactivityTimeout: 60000,
   warmingDecayRate: 5,
   fightDecayRate: 3,
   warmingShoutScale: 10,
@@ -416,6 +431,7 @@ const uvConfig = ref({
 const cooldownMinutes = ref(5);
 const warmingSeconds = ref(60);
 const fightMinutes = ref(3);
+const fightInactivitySeconds = ref(60);
 
 function updateConfig() {
   stateMachine.updateConfig({
@@ -448,6 +464,13 @@ function updateFightTimeout() {
   config.value.fightTimeout = fightMinutes.value * 60000;
   stateMachine.updateConfig({
     fightTimeout: config.value.fightTimeout,
+  });
+}
+
+function updateFightInactivityTimeout() {
+  config.value.fightInactivityTimeout = fightInactivitySeconds.value * 1000;
+  stateMachine.updateConfig({
+    fightInactivityTimeout: config.value.fightInactivityTimeout,
   });
 }
 
@@ -488,6 +511,7 @@ function resetSettings() {
     cooldownDuration: 300000,
     warmingTimeout: 60000,
     fightTimeout: 180000,
+    fightInactivityTimeout: 60000,
     warmingDecayRate: 5,
     fightDecayRate: 5,
     warmingShoutScale: 4,
@@ -571,6 +595,7 @@ function loadSettings() {
     config.value.cooldownDuration = stateMachine.config.cooldownDuration;
     config.value.warmingTimeout = stateMachine.config.warmingTimeout;
     config.value.fightTimeout = stateMachine.config.fightTimeout;
+    config.value.fightInactivityTimeout = stateMachine.config.fightInactivityTimeout;
     config.value.warmingDecayRate = stateMachine.config.warmingDecayRate;
     config.value.fightDecayRate = stateMachine.config.fightDecayRate;
     config.value.warmingShoutScale = stateMachine.config.warmingShoutScale;
@@ -580,6 +605,7 @@ function loadSettings() {
     cooldownMinutes.value = stateMachine.config.cooldownDuration / 60000;
     warmingSeconds.value = stateMachine.config.warmingTimeout / 1000;
     fightMinutes.value = stateMachine.config.fightTimeout / 60000;
+    fightInactivitySeconds.value = stateMachine.config.fightInactivityTimeout / 1000;
   }
 }
 
