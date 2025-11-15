@@ -47,7 +47,7 @@ export function useStateMachine() {
     } else if (payload.from === ArenaStateEnum.FIGHT) {
       // Exiting fight mode - stop music
       console.log('Fight mode ended - stopping music');
-      musicPlayerService.stop();
+      void musicPlayerService.stop();
     }
   };
 
