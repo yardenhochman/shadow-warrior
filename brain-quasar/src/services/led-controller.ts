@@ -20,7 +20,7 @@ export enum ControllerType {
 }
 
 interface LEDCommand {
-  mode: LEDMode;
+  mode: LEDMode | string; // Accept both enum and string for flexibility
   percentage?: number; // 0-100 for energy_bar
 }
 
@@ -409,20 +409,23 @@ class LEDControllerService {
     // Create command string based on mode
     let commandString: string;
 
-    switch (command.mode) {
-      case LEDMode.IDLE:
+    // Normalize mode to string for comparison
+    const mode = typeof command.mode === 'string' ? command.mode : command.mode;
+
+    switch (mode) {
+      case 'idle':
         commandString = 'idle';
         break;
-      case LEDMode.ENERGY_BAR:
+      case 'energy_bar':
         commandString = `energy_bar ${command.percentage || 0}`;
         break;
-      case LEDMode.ENERGY_PULSE:
+      case 'energy_pulse':
         commandString = 'energy_pulse';
         break;
-      case LEDMode.BREATHING:
+      case 'breathing':
         commandString = 'breathing';
         break;
-      case LEDMode.ELECTRICITY:
+      case 'electricity':
         commandString = 'electricity';
         break;
       default:
@@ -444,7 +447,7 @@ class LEDControllerService {
       dataView
     );
 
-    this.currentMode = command.mode;
+    this.currentMode = mode as LEDMode;
     console.log('Sent BLE LED command:', commandString, 'to', device.deviceId);
   }
 
@@ -457,26 +460,49 @@ class LEDControllerService {
     // Map LEDMode to WLED effect
     let wledCommand: WLEDState;
 
-    switch (command.mode) {
-      case LEDMode.IDLE:
-        wledCommand = { on: false, bri: 0, seg: [] };
+    // Normalize mode to string for comparison
+    const mode = typeof command.mode === 'string' ? command.mode : command.mode;
+    const power = Math.round((command.percentage || 0) * 2.55);
+    switch (mode) {
+      case 'idle':
+        // Dim breathing effect for idle
+        wledCommand = {
+          on: true,
+          bri: 50,
+          seg: [{ fx: 1, sx: 128, ix: 128 }] // Breathing effect, medium speed
+        };
         break;
-      case LEDMode.ENERGY_BAR:
+      case 'energy_bar':
         // Solid color with brightness based on percentage
         wledCommand = {
           on: true,
-          bri: Math.round((command.percentage || 0) * 2.55), // 0-100 to 0-255
-          seg: [{ fx: 0 }] // Solid effect
+          bri: power, // 0-100 to 0-255
+          seg: [{ fx: 83, ix: power }] // Solid effect
         };
         break;
-      case LEDMode.ENERGY_PULSE:
-        wledCommand = { on: true, bri: 255, seg: [{ fx: 2 }] }; // Pulse effect
+      case 'energy_pulse':
+        // Pulse effect for energy/victory
+        wledCommand = {
+          on: true,
+          bri: 255,
+          seg: [{ fx: 2, sx: 200, ix: 200 }] // Pulse effect, fast
+        };
         break;
-      case LEDMode.BREATHING:
-        wledCommand = { on: true, bri: 255, seg: [{ fx: 1 }] }; // Breathing effect
+      case 'breathing':
+        // Breathing effect for warming mode
+        wledCommand = {
+          on: true,
+          bri: 255,
+          seg: [{ fx: 1, sx: 150, ix: 150 }] // Breathing effect, medium-slow
+        };
         break;
-      case LEDMode.ELECTRICITY:
-        wledCommand = { on: true, bri: 255, seg: [{ fx: 33 }] }; // Lightning effect (assuming ID 33)
+      case 'electricity':
+        // Lightning/electricity effect for fight mode
+        wledCommand = {
+          on: true,
+          bri: 255,
+          seg: [{ fx: 43, sx: 220, ix: 255 }] // Lightning effect (fx 43), high intensity
+        };
         break;
       default:
         console.error('Unknown LED mode:', command.mode);
@@ -484,7 +510,7 @@ class LEDControllerService {
     }
 
     wledDevice.ws.send(JSON.stringify(wledCommand));
-    this.currentMode = command.mode;
+    this.currentMode = mode as LEDMode;
     console.log('Sent WLED command:', wledCommand, 'to', wledDevice.ip);
   }
 
