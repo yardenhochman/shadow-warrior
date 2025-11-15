@@ -240,17 +240,29 @@
                 </q-item-label>
               </q-item-section>
               <q-item-section side>
-                <q-btn
-                  :icon="ledControllerService.isControllerConnected(controller.id) ? 'power_off' : 'power'"
-                  :color="ledControllerService.isControllerConnected(controller.id) ? 'negative' : 'positive'"
-                  size="sm"
-                  round
-                  flat
-                  @click="ledControllerService.isControllerConnected(controller.id) ? disconnectController(controller.id) : connectController(controller.id)"
-                  :loading="connectingController === controller.id || disconnectingController === controller.id"
-                >
-                  <q-tooltip>{{ ledControllerService.isControllerConnected(controller.id) ? 'Disconnect' : 'Connect' }}</q-tooltip>
-                </q-btn>
+                <div class="row q-gutter-xs">
+                  <q-btn
+                    :icon="ledControllerService.isControllerConnected(controller.id) ? 'power_off' : 'power'"
+                    :color="ledControllerService.isControllerConnected(controller.id) ? 'negative' : 'positive'"
+                    size="sm"
+                    round
+                    flat
+                    @click="ledControllerService.isControllerConnected(controller.id) ? disconnectController(controller.id) : connectController(controller.id)"
+                    :loading="connectingController === controller.id || disconnectingController === controller.id"
+                  >
+                    <q-tooltip>{{ ledControllerService.isControllerConnected(controller.id) ? 'Disconnect' : 'Connect' }}</q-tooltip>
+                  </q-btn>
+                  <q-btn
+                    icon="delete"
+                    color="negative"
+                    size="sm"
+                    round
+                    flat
+                    @click="removeController(controller.id)"
+                  >
+                    <q-tooltip>Remove Controller</q-tooltip>
+                  </q-btn>
+                </div>
               </q-item-section>
             </q-item>
           </q-list>
@@ -535,16 +547,31 @@ async function connectController(controllerId: string) {
   }
 }
 
+async function removeController(controllerId: string) {
+  try {
+    // Disconnect if connected
+    if (ledControllerService.isControllerConnected(controllerId)) {
+      await ledControllerService.disconnect(controllerId);
+    }
+    // Remove the controller
+    await ledControllerService.removeController(controllerId);
+    ledConnected.value = ledControllerService.getConnectedControllers().length > 0;
+  } catch (error) {
+    console.error('Failed to remove controller:', error);
+    alert(`Failed to remove controller: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 onMounted(async () => {
   console.log('DashboardPage onMounted - initializing services');
-  
+
   // Listen for controller connection events BEFORE initializing
   // (initialize will load saved controllers and emit CONTROLLER_ADDED events)
   eventBus.on(Events.CONTROLLER_CONNECTED, controllerConnectedHandler);
   eventBus.on(Events.CONTROLLER_DISCONNECTED, controllerDisconnectedHandler);
   eventBus.on(Events.CONTROLLER_ADDED, controllerAddedHandler);
   eventBus.on(Events.CONTROLLER_REMOVED, controllerRemovedHandler);
-  
+
   // Initialize services (this will load saved controllers and trigger CONTROLLER_ADDED events)
   await ledControllerService.initialize();
   console.log('LED controller service initialized');
