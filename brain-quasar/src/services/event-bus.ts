@@ -62,6 +62,8 @@ export const Events = {
   UV_LIGHT_COMMAND: 'device:uv-light',
   CONTROLLER_CONNECTED: 'device:controller-connected',
   CONTROLLER_DISCONNECTED: 'device:controller-disconnected',
+  CONTROLLER_ADDED: 'device:controller-added',
+  CONTROLLER_REMOVED: 'device:controller-removed',
 
   // Metrics events
   METRICS_UPDATED: 'metrics:updated',

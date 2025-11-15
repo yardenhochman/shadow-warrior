@@ -172,18 +172,18 @@
             <q-item>
               <q-item-section avatar>
                 <q-icon
-                  :name="ledConnected ? 'check_circle' : 'cancel'"
-                  :color="ledConnected ? 'positive' : 'negative'"
+                  :name="allControllers.length > 0 ? 'check_circle' : 'cancel'"
+                  :color="allControllers.length > 0 ? 'positive' : 'negative'"
                 />
               </q-item-section>
               <q-item-section>
                 <q-item-label>LED Controller</q-item-label>
                 <q-item-label caption>
-                  {{ ledConnected ? 'Connected' : 'Disconnected' }}
+                  {{ allControllers.length > 0
+                    ? `${connectedCount}/${allControllers.length} connected`
+                    : 'No controllers configured'
+                  }}
                 </q-item-label>
-              </q-item-section>
-              <q-item-section side v-if="!ledConnected">
-                <q-btn label="Connect" color="primary" size="sm" @click="scanAndShowDevices" />
               </q-item-section>
             </q-item>
 
@@ -207,21 +207,21 @@
         </q-card-section>
       </q-card>
 
-      <!-- Connected Controllers -->
-      <q-card v-if="connectedControllers.length > 0" class="q-mt-md">
+      <!-- Controllers -->
+      <q-card class="q-mt-md">
         <q-card-section>
-          <div class="text-h6">Connected Controllers</div>
+          <div class="text-h6 q-mb-md">LED Controllers</div>
 
-          <q-list>
+          <q-list v-if="allControllers.length > 0">
             <q-item
-              v-for="controller in connectedControllers"
+              v-for="controller in allControllers"
               :key="controller.id"
               class="q-pa-sm"
             >
               <q-item-section avatar>
                 <q-icon
                   :name="controller.type === ControllerType.WLED ? 'wifi' : 'bluetooth'"
-                  color="primary"
+                  :color="ledControllerService.isControllerConnected(controller.id) ? 'positive' : 'grey'"
                   size="sm"
                 />
               </q-item-section>
@@ -241,115 +241,62 @@
               </q-item-section>
               <q-item-section side>
                 <q-btn
-                  icon="power_off"
-                  color="negative"
+                  :icon="ledControllerService.isControllerConnected(controller.id) ? 'power_off' : 'power'"
+                  :color="ledControllerService.isControllerConnected(controller.id) ? 'negative' : 'positive'"
                   size="sm"
                   round
                   flat
-                  @click="disconnectController(controller.id)"
-                  :loading="disconnectingController === controller.id"
+                  @click="ledControllerService.isControllerConnected(controller.id) ? disconnectController(controller.id) : connectController(controller.id)"
+                  :loading="connectingController === controller.id || disconnectingController === controller.id"
                 >
-                  <q-tooltip>Disconnect</q-tooltip>
+                  <q-tooltip>{{ ledControllerService.isControllerConnected(controller.id) ? 'Disconnect' : 'Connect' }}</q-tooltip>
                 </q-btn>
               </q-item-section>
             </q-item>
           </q-list>
-        </q-card-section>
-      </q-card>
-    </div>
 
-    <!-- Device Selection Dialog -->
-    <q-dialog v-model="deviceDialog.show" persistent>
-      <q-card style="min-width: 400px">
-        <q-card-section class="row items-center">
-          <div class="text-h6">Select LED Controller</div>
-          <q-space />
-          <q-btn icon="close" flat round dense v-close-popup />
-        </q-card-section>
-
-        <q-card-section v-if="deviceDialog.scanning">
-          <div class="text-center q-pa-md">
-            <q-spinner color="primary" size="3em" />
-            <div class="text-h6 q-mt-md">Scanning for devices...</div>
+          <div v-else class="text-center q-pa-md q-mb-md">
+            <q-icon name="lightbulb_outline" size="3em" color="grey" />
+            <div class="text-subtitle1 q-mt-sm text-grey">No controllers configured</div>
           </div>
-        </q-card-section>
 
-        <q-card-section v-else-if="deviceDialog.devices.length === 0">
-          <div class="text-center q-pa-md">
-            <q-icon name="device_unknown" size="4em" color="grey" />
-            <div class="text-h6 q-mt-md text-grey">No devices found</div>
-            <div class="text-body2 text-grey q-mt-sm">
-              Make sure your ShadowLED device is powered on and in range
-            </div>
-            <div class="text-body2 text-grey q-mt-sm">
-              Note: WLED controllers may not appear in automatic scan. Use manual IP entry below.
-            </div>
-          </div>
-        </q-card-section>
-
-        <q-list v-else>
-          <q-item
-            v-for="controller in deviceDialog.devices"
-            :key="controller.id"
-            clickable
-            @click="connectToDevice(controller)"
-          >
-            <q-item-section avatar>
-              <q-icon name="lightbulb" color="primary" />
-            </q-item-section>
-            <q-item-section>
-              <q-item-label>
-                {{ controller.type === ControllerType.BLE ? ((controller.device as BleDevice).name || 'Unknown BLE Device') : ((controller.device as WLEDController).name || `WLED ${(controller.device as WLEDController).ip}`) }}
-              </q-item-label>
-              <q-item-label caption>
-                {{ controller.type === ControllerType.BLE ? (controller.device as BleDevice).deviceId : (controller.device as WLEDController).ip }}
-              </q-item-label>
-            </q-item-section>
-            <q-item-section side>
-              <q-icon name="chevron_right" color="grey" />
-            </q-item-section>
-          </q-item>
-        </q-list>
-
-        <!-- Manual WLED IP Entry -->
-        <q-card-section class="q-pt-none">
-          <q-separator class="q-mb-md" />
-          <div class="text-subtitle2 q-mb-sm">Add WLED Controller Manually</div>
+          <!-- Add Controller Section -->
+          <q-separator class="q-my-md" />
+          <div class="text-subtitle2 q-mb-sm">Add Controller</div>
           <div class="row q-gutter-sm">
             <div class="col">
               <q-input
-                v-model="manualWledIp"
-                label="WLED IP Address"
-                placeholder="192.168.1.100"
+                v-model="newControllerAddress"
+                label="Controller Address (IP or BLE ID)"
+                placeholder="192.168.1.100 or BLE:device-id"
                 outlined
                 dense
-                :rules="[val => val && val.length > 0 || 'IP address is required']"
               />
             </div>
             <div class="col-auto">
               <q-btn
-                label="Add WLED"
+                label="Add"
                 color="primary"
-                @click="addWledByIp"
-                :loading="deviceDialog.addingWled"
-                :disable="!manualWledIp || deviceDialog.addingWled"
+                @click="addControllerByAddress"
+                :loading="addingController"
+                :disable="!newControllerAddress || addingController"
               />
+            </div>
+            <div class="col-auto">
+              <q-btn
+                label="Scan"
+                color="secondary"
+                @click="scanForControllers"
+                :disable="true"
+                icon="search"
+              >
+                <q-tooltip>BLE scan feature coming soon</q-tooltip>
+              </q-btn>
             </div>
           </div>
         </q-card-section>
-
-        <q-card-actions align="right">
-          <q-btn flat label="Cancel" v-close-popup />
-          <q-btn
-            flat
-            label="Scan Again"
-            color="primary"
-            @click="scanDevices"
-            :loading="deviceDialog.scanning"
-          />
-        </q-card-actions>
       </q-card>
-    </q-dialog>
+    </div>
   </q-page>
 </template>
 
@@ -375,26 +322,32 @@ const sensorsRunning = ref(false);
 const ledConnected = ref(false);
 const cooldownInterval = ref<number | null>(null);
 const disconnectingController = ref<string | null>(null);
+const connectingController = ref<string | null>(null);
 const connectionCheckInterval = ref<number | null>(null);
+const newControllerAddress = ref('');
+const addingController = ref(false);
+const controllerListVersion = ref(0); // Force reactivity trigger
 
 // Event handlers for cleanup
 const controllerConnectedHandler = () => {
   ledConnected.value = ledControllerService.getConnectedControllers().length > 0;
+  controllerListVersion.value++; // Force UI update
 };
 
 const controllerDisconnectedHandler = () => {
   ledConnected.value = ledControllerService.getConnectedControllers().length > 0;
+  controllerListVersion.value++; // Force UI update
 };
 
-// Device selection dialog state
-const deviceDialog = ref({
-  show: false,
-  scanning: false,
-  addingWled: false,
-  devices: [] as { id: string; type: ControllerType; device: BleDevice | WLEDController }[],
-});
+const controllerAddedHandler = () => {
+  console.log('Controller added event received, forcing UI update');
+  controllerListVersion.value++; // Trigger reactivity
+};
 
-const manualWledIp = ref('');
+const controllerRemovedHandler = () => {
+  console.log('Controller removed event received, forcing UI update');
+  controllerListVersion.value++; // Trigger reactivity
+};
 
 const metrics = computed(() => stateMachine.metrics);
 
@@ -420,10 +373,20 @@ const cooldownTimeDisplay = computed(() => {
   return `${minutes}:${seconds.toString().padStart(2, '0')}`;
 });
 
-const connectedControllers = computed(() => {
-  return ledControllerService.getControllers().filter(controller =>
-    ledControllerService.isControllerConnected(controller.id)
-  );
+const allControllers = computed(() => {
+  // Use controllerListVersion to force reactivity when controllers are added/removed
+  void controllerListVersion.value;
+  const controllers = ledControllerService.getControllers();
+  console.log('allControllers computed:', controllers.length, 'controllers');
+  return controllers;
+});
+
+const connectedCount = computed(() => {
+  // Use controllerListVersion to force reactivity
+  void controllerListVersion.value;
+  const count = ledControllerService.getConnectedControllers().length;
+  console.log('connectedCount computed:', count);
+  return count;
 });
 
 async function startSensors() {
@@ -489,72 +452,57 @@ async function stopSensors() {
   sensorsRunning.value = false;
 }
 
-async function scanAndShowDevices() {
-  deviceDialog.value.show = true;
-  await scanDevices();
-}
+function addControllerByAddress() {
+  if (!newControllerAddress.value) return;
 
-async function scanDevices() {
-  deviceDialog.value.scanning = true;
-  deviceDialog.value.devices = [];
-
+  addingController.value = true;
   try {
-    await ledControllerService.initialize();
-    const discoveredControllers = await ledControllerService.scan();
-
-    // Add discovered controllers to the service
-    ledControllerService.addDiscoveredControllers(discoveredControllers);
-
-    // Get all controllers for display
-    const allControllers = ledControllerService.getControllers();
-
-    // Filter for BLE devices named "ShadowLED" and WLED controllers
-    deviceDialog.value.devices = allControllers.filter(controller =>
-      (controller.type === ControllerType.BLE && (controller.device as BleDevice).name?.includes('ShadowLED')) ||
-      controller.type === ControllerType.WLED
-    );
-  } catch (error) {
-    console.error('Failed to scan for devices:', error);
-    deviceDialog.value.devices = [];
-  } finally {
-    deviceDialog.value.scanning = false;
-  }
-}
-
-async function connectToDevice(controller: { id: string; type: ControllerType; device: BleDevice | WLEDController }) {
-  try {
-    await ledControllerService.connect(controller.id);
-    ledConnected.value = ledControllerService.getConnectedControllers().length > 0;
-    deviceDialog.value.show = false;
-  } catch (error) {
-    console.error('Failed to connect to device:', error);
-    alert(`Failed to connect to ${controller.type === ControllerType.BLE ? 'BLE' : 'WLED'} controller: ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
-
-function addWledByIp() {
-  if (!manualWledIp.value) return;
-
-  deviceDialog.value.addingWled = true;
-  try {
-    // Add WLED controller by IP
-    ledControllerService.addWledController(manualWledIp.value);
-
-    // Refresh the device list to show the newly added controller
-    const allControllers = ledControllerService.getControllers();
-    deviceDialog.value.devices = allControllers.filter(controller =>
-      (controller.type === ControllerType.BLE && (controller.device as BleDevice).name?.includes('ShadowLED')) ||
-      controller.type === ControllerType.WLED
-    );
+    // Add controller by address (IP for WLED)
+    const controllerId = ledControllerService.addWledController(newControllerAddress.value);
+    console.log('Added controller at', newControllerAddress.value);
 
     // Clear the input
-    manualWledIp.value = '';
+    newControllerAddress.value = '';
+
+    // Automatically try to connect to the newly added controller
+    connectController(controllerId).catch(error => {
+      console.error('Failed to auto-connect to new controller:', error);
+    });
   } catch (error) {
-    console.error('Failed to add WLED controller:', error);
-    alert(`Failed to add WLED controller: ${error instanceof Error ? error.message : String(error)}`);
+    console.error('Failed to add controller:', error);
+
+    // Check if it's an "already added" error
+    if (error instanceof Error && error.message.includes('already added')) {
+      // Extract IP from the input to find the existing controller
+      const cleanIp = newControllerAddress.value.replace(/^https?:\/\//, '');
+      const existingControllerId = `wled-${cleanIp}`;
+
+      // Check if it's connected
+      const isConnected = ledControllerService.isControllerConnected(existingControllerId);
+
+      if (isConnected) {
+        alert(`Controller at ${cleanIp} is already added and connected!`);
+      } else {
+        // Try to connect to the existing controller
+        alert(`Controller at ${cleanIp} is already configured. Attempting to connect...`);
+        connectController(existingControllerId).catch(connectError => {
+          console.error('Failed to connect to existing controller:', connectError);
+        });
+      }
+
+      // Clear the input
+      newControllerAddress.value = '';
+    } else {
+      alert(`Failed to add controller: ${error instanceof Error ? error.message : String(error)}`);
+    }
   } finally {
-    deviceDialog.value.addingWled = false;
+    addingController.value = false;
   }
+}
+
+function scanForControllers() {
+  // Placeholder for future BLE scan functionality
+  console.log('Scan functionality will be implemented later');
 }
 
 function forceState(state: string) {
@@ -574,17 +522,53 @@ async function disconnectController(controllerId: string) {
   }
 }
 
+async function connectController(controllerId: string) {
+  connectingController.value = controllerId;
+  try {
+    await ledControllerService.connect(controllerId);
+    ledConnected.value = ledControllerService.getConnectedControllers().length > 0;
+  } catch (error) {
+    console.error('Failed to connect controller:', error);
+    alert(`Failed to connect controller: ${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    connectingController.value = null;
+  }
+}
+
 onMounted(async () => {
-  // Initialize services
+  console.log('DashboardPage onMounted - initializing services');
+  
+  // Listen for controller connection events BEFORE initializing
+  // (initialize will load saved controllers and emit CONTROLLER_ADDED events)
+  eventBus.on(Events.CONTROLLER_CONNECTED, controllerConnectedHandler);
+  eventBus.on(Events.CONTROLLER_DISCONNECTED, controllerDisconnectedHandler);
+  eventBus.on(Events.CONTROLLER_ADDED, controllerAddedHandler);
+  eventBus.on(Events.CONTROLLER_REMOVED, controllerRemovedHandler);
+  
+  // Initialize services (this will load saved controllers and trigger CONTROLLER_ADDED events)
   await ledControllerService.initialize();
+  console.log('LED controller service initialized');
+
   ledConnected.value = ledControllerService.getConnectedControllers().length > 0;
+  console.log('Initial connected controllers:', ledConnected.value);
+
+  // Automatically connect to all pre-configured controllers
+  const allControllers = ledControllerService.getControllers();
+  console.log('Pre-configured controllers found:', allControllers.length);
+  if (allControllers.length > 0) {
+    console.log('Attempting to connect to', allControllers.length, 'pre-configured controllers...');
+    // Connect to all controllers in parallel
+    await Promise.allSettled(
+      allControllers.map(controller => ledControllerService.connect(controller.id))
+    );
+    ledConnected.value = ledControllerService.getConnectedControllers().length > 0;
+    console.log('After auto-connect, connected controllers:', ledConnected.value);
+  } else {
+    console.log('No pre-configured controllers found, skipping auto-connect');
+  }
 
   // Preload audio
   await speakerService.preloadAll();
-
-  // Listen for controller connection events
-  eventBus.on(Events.CONTROLLER_CONNECTED, controllerConnectedHandler);
-  eventBus.on(Events.CONTROLLER_DISCONNECTED, controllerDisconnectedHandler);
 
   // Update cooldown timer
   cooldownInterval.value = window.setInterval(() => {
@@ -611,6 +595,8 @@ onUnmounted(() => {
   // Clean up event listeners
   eventBus.off(Events.CONTROLLER_CONNECTED, controllerConnectedHandler);
   eventBus.off(Events.CONTROLLER_DISCONNECTED, controllerDisconnectedHandler);
+  eventBus.off(Events.CONTROLLER_ADDED, controllerAddedHandler);
+  eventBus.off(Events.CONTROLLER_REMOVED, controllerRemovedHandler);
 });
 </script>
 

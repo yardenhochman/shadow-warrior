@@ -94,6 +94,7 @@ class LEDControllerService {
   private loadSavedControllers(): void {
     try {
       const saved = localStorage.getItem(this.STORAGE_KEY);
+      console.log('Loading controllers from localStorage, key:', this.STORAGE_KEY, 'value:', saved);
       if (!saved) {
         console.log('No saved controllers found');
         return;
@@ -108,7 +109,7 @@ class LEDControllerService {
         deviceName?: string;
       }>;
 
-      console.log('Loading saved controllers:', savedControllers.length);
+      console.log('Loading saved controllers:', savedControllers.length, 'controllers from storage');
 
       for (const saved of savedControllers) {
         if (saved.type === ControllerType.WLED && saved.ip) {
@@ -133,6 +134,11 @@ class LEDControllerService {
       }
 
       console.log('Restored %d controllers from storage', this.controllers.size);
+
+      // Emit event for each restored controller to trigger UI updates
+      for (const [id, { type }] of this.controllers.entries()) {
+        eventBus.emit(Events.CONTROLLER_ADDED, { id, type });
+      }
     } catch (error) {
       console.error('Failed to load saved controllers:', error);
     }
@@ -350,6 +356,9 @@ class LEDControllerService {
 
     // Save to localStorage
     this.saveControllers();
+
+    // Emit event for UI updates
+    eventBus.emit(Events.CONTROLLER_ADDED, { id: controllerId, type: ControllerType.WLED });
 
     return controllerId;
   }
@@ -631,11 +640,13 @@ class LEDControllerService {
   }
 
   getControllers(): { id: string; type: ControllerType; device: BleDevice | WLEDController }[] {
-    return Array.from(this.controllers.entries()).map(([id, { type, device }]) => ({
+    const controllers = Array.from(this.controllers.entries()).map(([id, { type, device }]) => ({
       id,
       type,
       device,
     }));
+    console.log('getControllers returning:', controllers.length, 'controllers');
+    return controllers;
   }
 
   // Remove a controller
