@@ -6,6 +6,7 @@ export enum ArenaState {
   FIGHT = 'fight',
   VICTORY = 'victory',
   COOLDOWN = 'cooldown',
+  SUSPENDED = 'suspended',
 }
 
 export interface StateTransition {
@@ -34,6 +35,13 @@ export interface StateConfig {
   fightPunchScale: number; // Power gain multiplier for punches during fight (default 10)
   fightShoutScale: number; // Power gain multiplier for shouts during fight (default 2, which is 0.2x of punch)
   presenceDetectionThreshold: number; // Shout amplitude threshold to trigger IDLE -> WARMING transition (default 0.3)
+  schedule: ScheduleConfig; // Schedule configuration
+}
+
+export interface ScheduleConfig {
+  enabled: boolean;                    // Enable/disable schedule feature
+  dailyActiveStart: string;            // HH:mm format (e.g., "09:00")
+  dailyActiveEnd: string;              // HH:mm format (e.g., "22:00")
 }
 
 export interface ArenaEvent {
@@ -44,9 +52,10 @@ export interface ArenaEvent {
 
 // Valid state transitions according to AGENTS.md
 export const VALID_TRANSITIONS: Record<ArenaState, ArenaState[]> = {
-  [ArenaState.IDLE]: [ArenaState.WARMING],
-  [ArenaState.WARMING]: [ArenaState.FIGHT, ArenaState.IDLE],
-  [ArenaState.FIGHT]: [ArenaState.IDLE, ArenaState.VICTORY],
-  [ArenaState.VICTORY]: [ArenaState.COOLDOWN],
-  [ArenaState.COOLDOWN]: [ArenaState.IDLE],
+  [ArenaState.IDLE]: [ArenaState.WARMING, ArenaState.SUSPENDED],
+  [ArenaState.WARMING]: [ArenaState.FIGHT, ArenaState.IDLE, ArenaState.SUSPENDED],
+  [ArenaState.FIGHT]: [ArenaState.IDLE, ArenaState.VICTORY, ArenaState.SUSPENDED],
+  [ArenaState.VICTORY]: [ArenaState.COOLDOWN, ArenaState.SUSPENDED],
+  [ArenaState.COOLDOWN]: [ArenaState.IDLE, ArenaState.SUSPENDED],
+  [ArenaState.SUSPENDED]: [], // No automatic transitions - manual only
 };

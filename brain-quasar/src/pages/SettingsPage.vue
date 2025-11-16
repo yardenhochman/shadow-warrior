@@ -355,6 +355,47 @@
         </q-card-section>
       </q-card>
 
+      <!-- Schedule Configuration -->
+      <q-card class="q-mb-md">
+        <q-card-section>
+          <div class="text-h6">Schedule Configuration</div>
+          <div class="text-caption text-grey q-mb-md">
+            Configure daily active hours. Arena will suspend outside these times.
+          </div>
+
+          <q-toggle
+            v-model="scheduleConfig.enabled"
+            label="Enable Schedule"
+            color="primary"
+            @update:model-value="updateScheduleConfig"
+          />
+
+          <div v-if="scheduleConfig.enabled" class="q-mt-md">
+            <div class="q-mt-md">
+              <div class="text-subtitle2">Daily Active Start Time</div>
+              <q-input
+                v-model="scheduleConfig.dailyActiveStart"
+                type="time"
+                outlined
+                hint="Arena becomes active at this time"
+                @update:model-value="updateScheduleConfig"
+              />
+            </div>
+
+            <div class="q-mt-md">
+              <div class="text-subtitle2">Daily Active End Time</div>
+              <q-input
+                v-model="scheduleConfig.dailyActiveEnd"
+                type="time"
+                outlined
+                hint="Arena suspends at this time"
+                @update:model-value="updateScheduleConfig"
+              />
+            </div>
+          </div>
+        </q-card-section>
+      </q-card>
+
       <!-- Actions -->
       <div class="row q-col-gutter-sm">
         <div class="col-6">
@@ -372,7 +413,7 @@
             color="negative"
             icon="restore"
             outline
-            @click="resetSettings"
+            @click="() => void resetSettings()"
             class="full-width"
           />
         </div>
@@ -387,6 +428,7 @@ import { useStateMachineStore } from 'src/stores/state-machine';
 import { accelerometerService } from 'src/services/accelerometer';
 import { microphoneService } from 'src/services/microphone';
 import { uvLightService } from 'src/services/uv-light';
+import { scheduleService } from 'src/services/schedule';
 import { useQuasar } from 'quasar';
 
 const $q = useQuasar();
@@ -426,6 +468,12 @@ const uvConfig = ref({
   relayUrl: 'http://192.168.1.100',
   onEndpoint: '/relay/on',
   offEndpoint: '/relay/off',
+});
+
+const scheduleConfig = ref({
+  enabled: false,
+  dailyActiveStart: '09:00',
+  dailyActiveEnd: '22:00',
 });
 
 const cooldownMinutes = ref(5);
@@ -486,12 +534,18 @@ function updateUVConfig() {
   uvLightService.updateConfig(uvConfig.value);
 }
 
+async function updateScheduleConfig() {
+  stateMachine.updateScheduleConfig(scheduleConfig.value);
+  await scheduleService.updateSchedule(scheduleConfig.value);
+}
+
 function saveSettings() {
   const settings = {
     stateMachine: config.value,
     accelerometer: accelConfig.value,
     microphone: micConfig.value,
     uvLight: uvConfig.value,
+    schedule: scheduleConfig.value,
   };
 
   localStorage.setItem('shadow-warrior-settings', JSON.stringify(settings));
@@ -503,7 +557,7 @@ function saveSettings() {
   });
 }
 
-function resetSettings() {
+async function resetSettings() {
   // Reset to defaults
   config.value = {
     warmingThreshold: 80,
@@ -541,6 +595,12 @@ function resetSettings() {
     offEndpoint: '/relay/off',
   };
 
+  scheduleConfig.value = {
+    enabled: false,
+    dailyActiveStart: '09:00',
+    dailyActiveEnd: '22:00',
+  };
+
   cooldownMinutes.value = 5;
   warmingSeconds.value = 60;
   fightMinutes.value = 3;
@@ -549,6 +609,7 @@ function resetSettings() {
   updateAccelConfig();
   updateMicConfig();
   updateUVConfig();
+  await updateScheduleConfig();
 
   $q.notify({
     type: 'info',
@@ -557,7 +618,7 @@ function resetSettings() {
   });
 }
 
-function loadSettings() {
+async function loadSettings() {
   const saved = localStorage.getItem('shadow-warrior-settings');
   if (saved) {
     try {
@@ -585,6 +646,11 @@ function loadSettings() {
         uvConfig.value = settings.uvLight;
         updateUVConfig();
       }
+
+      if (settings.schedule) {
+        scheduleConfig.value = settings.schedule;
+        await updateScheduleConfig();
+      }
     } catch (error) {
       console.error('Failed to load settings:', error);
     }
@@ -610,6 +676,6 @@ function loadSettings() {
 }
 
 onMounted(() => {
-  loadSettings();
+  void loadSettings();
 });
 </script>

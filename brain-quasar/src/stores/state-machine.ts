@@ -4,6 +4,7 @@ import {
   type StateTransition,
   type ArenaMetrics,
   type StateConfig,
+  type ScheduleConfig,
   VALID_TRANSITIONS,
 } from 'src/types/state-machine';
 import { eventBus, Events } from 'src/services/event-bus';
@@ -52,6 +53,11 @@ export const useStateMachineStore = defineStore('stateMachine', {
       fightPunchScale: 10, // Power multiplier for fight punches
       fightShoutScale: 2, // Power multiplier for fight shouts (0.2x of punches)
       presenceDetectionThreshold: 0.3, // Shout amplitude threshold for IDLE -> WARMING
+      schedule: {
+        enabled: false,
+        dailyActiveStart: '09:00',
+        dailyActiveEnd: '22:00',
+      },
     },
     history: [],
     cooldownStartTime: null,
@@ -75,6 +81,7 @@ export const useStateMachineStore = defineStore('stateMachine', {
     isFight: (state) => state.currentState === ArenaState.FIGHT,
     isVictory: (state) => state.currentState === ArenaState.VICTORY,
     isCooldown: (state) => state.currentState === ArenaState.COOLDOWN,
+    isSuspended: (state) => state.currentState === ArenaState.SUSPENDED,
 
     canTransitionTo: (state) => (targetState: ArenaState) => {
       return VALID_TRANSITIONS[state.currentState].includes(targetState);
@@ -151,6 +158,9 @@ export const useStateMachineStore = defineStore('stateMachine', {
           break;
         case ArenaState.COOLDOWN:
           this.onEnterCooldown();
+          break;
+        case ArenaState.SUSPENDED:
+          this.onEnterSuspended();
           break;
       }
     },
@@ -260,8 +270,32 @@ export const useStateMachineStore = defineStore('stateMachine', {
       }, this.config.cooldownDuration);
     },
 
+    onEnterSuspended(): void {
+      // Stop all timers
+      this.clearTimers();
+      this.stopDecayLoop();
+
+      // Turn off all devices
+      eventBus.emit(Events.LED_COMMAND, { mode: 'off' });
+      eventBus.emit(Events.SPEAKER_COMMAND, { action: 'stop' });
+      eventBus.emit(Events.UV_LIGHT_COMMAND, { action: 'off' });
+
+      // Reset metrics
+      this.metrics.warmingPower = 0;
+      this.metrics.fightPower = 0;
+      this.metrics.shoutAmplitude = 0;
+      this.metrics.punchForce = 0;
+
+      console.log('Arena SUSPENDED');
+    },
+
     // Handle shout detection
     onShoutDetected(amplitude: number): void {
+      // If suspended, ignore all sensor input
+      if (this.currentState === ArenaState.SUSPENDED) {
+        return;
+      }
+
       this.metrics.shoutAmplitude = amplitude;
 
       if (this.currentState === ArenaState.IDLE && amplitude > this.config.presenceDetectionThreshold) {
@@ -305,6 +339,11 @@ export const useStateMachineStore = defineStore('stateMachine', {
 
     // Handle punch detection
     onPunchDetected(force: number): void {
+      // If suspended, ignore all sensor input
+      if (this.currentState === ArenaState.SUSPENDED) {
+        return;
+      }
+
       this.metrics.punchForce = force;
 
       if (this.currentState === ArenaState.FIGHT) {
@@ -381,6 +420,12 @@ export const useStateMachineStore = defineStore('stateMachine', {
       eventBus.emit(Events.CONFIG_UPDATED, this.config);
     },
 
+    // Update schedule configuration
+    updateScheduleConfig(newScheduleConfig: ScheduleConfig): void {
+      this.config.schedule = { ...this.config.schedule, ...newScheduleConfig };
+      eventBus.emit(Events.CONFIG_UPDATED, this.config);
+    },
+
     // Start the decay loop for power degradation
     startDecayLoop(): void {
       // Clear any existing decay loop
@@ -430,6 +475,20 @@ export const useStateMachineStore = defineStore('stateMachine', {
         inactivity: null,
         decay: null,
       };
+    },
+
+    // Suspend the arena (can be called manually or by schedule)
+    suspend(): boolean {
+      // Can suspend from any state
+      return this.transition(ArenaState.SUSPENDED, true); // Force transition
+    },
+
+    // Resume from suspension (manual only)
+    resumeFromSuspension(): boolean {
+      if (this.currentState !== ArenaState.SUSPENDED) {
+        return false;
+      }
+      return this.transition(ArenaState.IDLE, true); // Force to IDLE
     },
 
     // Manual state control (for testing/debugging)

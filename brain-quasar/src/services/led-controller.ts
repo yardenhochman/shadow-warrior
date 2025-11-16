@@ -529,6 +529,9 @@ class LEDControllerService {
       case 'electricity':
         commandString = 'electricity';
         break;
+      case 'off':
+        commandString = 'off';
+        break;
       default:
         console.error('Unknown LED mode:', command.mode);
         return;
@@ -603,6 +606,14 @@ class LEDControllerService {
           on: true,
           bri: 255,
           seg: [{ fx: 43, sx: 220, ix: 255 }] // Lightning effect (fx 43), high intensity
+        };
+        break;
+      case 'off':
+        // Turn off the lights
+        wledCommand = {
+          on: false,
+          bri: 0,
+          seg: [], // Empty segments when off
         };
         break;
       default:

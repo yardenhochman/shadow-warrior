@@ -71,6 +71,10 @@ export const Events = {
   // Config events
   CONFIG_UPDATED: 'config:updated',
 
+  // Schedule events
+  SCHEDULE_SUSPEND_REQUESTED: 'schedule:suspend-requested',
+  SCHEDULE_ACTIVATE_AVAILABLE: 'schedule:activate-available',
+
   // Music events
   MUSIC_PLAYING: 'music:playing',
   MUSIC_PAUSED: 'music:paused',
