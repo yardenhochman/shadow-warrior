@@ -3,6 +3,7 @@ import { boot } from 'quasar/wrappers';
 import { ledControllerService } from 'src/services/led-controller';
 import { speakerService } from 'src/services/speaker';
 import { uvLightService } from 'src/services/uv-light';
+import { scheduleService } from 'src/services/schedule';
 
 export default boot(async () => {
   console.log('Initializing Shadow Warrior services...');
@@ -29,6 +30,10 @@ export default boot(async () => {
         console.error('Failed to load saved settings:', error);
       }
     }
+
+    // Initialize schedule service
+    await scheduleService.initialize();
+    console.log('Schedule service initialized');
 
     console.log('All services initialized successfully');
   } catch (error) {

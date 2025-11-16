@@ -51,12 +51,27 @@ export function useStateMachine() {
     }
   };
 
+  const handleScheduleSuspend = () => {
+    console.log('Schedule suspend requested');
+    store.suspend();
+  };
+
+  const handleScheduleActivate = () => {
+    console.log('Schedule activate requested');
+    // Only resume if currently suspended
+    if (store.currentState === ArenaStateEnum.SUSPENDED) {
+      store.resumeFromSuspension();
+    }
+  };
+
   // Set up event listeners
   onMounted(() => {
     eventBus.on(Events.PUNCH_DETECTED, handlePunch);
     eventBus.on(Events.SHOUT_DETECTED, handleShout);
     eventBus.on(Events.STATE_TRANSITION_REQUESTED, handleTransitionRequest);
     eventBus.on(Events.STATE_CHANGED, handleStateChange);
+    eventBus.on(Events.SCHEDULE_SUSPEND_REQUESTED, handleScheduleSuspend);
+    eventBus.on(Events.SCHEDULE_ACTIVATE_AVAILABLE, handleScheduleActivate);
   });
 
   // Clean up event listeners
@@ -65,6 +80,8 @@ export function useStateMachine() {
     eventBus.off(Events.SHOUT_DETECTED, handleShout);
     eventBus.off(Events.STATE_TRANSITION_REQUESTED, handleTransitionRequest);
     eventBus.off(Events.STATE_CHANGED, handleStateChange);
+    eventBus.off(Events.SCHEDULE_SUSPEND_REQUESTED, handleScheduleSuspend);
+    eventBus.off(Events.SCHEDULE_ACTIVATE_AVAILABLE, handleScheduleActivate);
   });
 
   return {

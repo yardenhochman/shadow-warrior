@@ -8,6 +8,15 @@
           <div class="text-h2 text-center q-mt-md" :class="stateColorClass">
             {{ currentStateDisplay }}
           </div>
+          <div class="text-center q-mt-md">
+            <q-btn
+              :label="suspendResumeButtonLabel"
+              :color="suspendResumeButtonColor"
+              :icon="suspendResumeButtonIcon"
+              @click="toggleSuspendResume"
+              size="lg"
+            />
+          </div>
         </q-card-section>
       </q-card>
 
@@ -378,6 +387,7 @@ const stateColorClass = computed(() => {
     [ArenaState.FIGHT]: 'text-red',
     [ArenaState.VICTORY]: 'text-green',
     [ArenaState.COOLDOWN]: 'text-blue',
+    [ArenaState.SUSPENDED]: 'text-purple',
   };
   return colors[stateMachine.currentState];
 });
@@ -403,6 +413,18 @@ const connectedCount = computed(() => {
   const count = ledControllerService.getConnectedControllers().length;
   console.log('connectedCount computed:', count);
   return count;
+});
+
+const suspendResumeButtonLabel = computed(() => {
+  return stateMachine.currentState === ArenaState.SUSPENDED ? 'Resume Arena' : 'Suspend Arena';
+});
+
+const suspendResumeButtonColor = computed(() => {
+  return stateMachine.currentState === ArenaState.SUSPENDED ? 'primary' : 'warning';
+});
+
+const suspendResumeButtonIcon = computed(() => {
+  return stateMachine.currentState === ArenaState.SUSPENDED ? 'play_arrow' : 'pause';
 });
 
 async function startSensors() {
@@ -523,6 +545,14 @@ function scanForControllers() {
 
 function forceState(state: string) {
   stateMachine.forceTransition(state as ArenaState);
+}
+
+function toggleSuspendResume() {
+  if (stateMachine.currentState === ArenaState.SUSPENDED) {
+    stateMachine.resumeFromSuspension();
+  } else {
+    stateMachine.suspend();
+  }
 }
 
 async function disconnectController(controllerId: string) {
