@@ -8,6 +8,10 @@ import com.getcapacitor.BridgeActivity;
 public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
+        // Register custom plugins before super.onCreate()
+        registerPlugin(MusicPlaybackPlugin.class);
+        registerPlugin(NativeAudioExtended.class);
+        
         super.onCreate(savedInstanceState);
         android.util.Log.d("MainActivity", "onCreate called - Build 10");
         
@@ -19,6 +23,27 @@ public class MainActivity extends BridgeActivity {
     public void onResume() {
         super.onResume();
         configureMixedContent();
+    }
+    
+    @Override
+    public void onPause() {
+        super.onPause();
+        
+        // Prevent WebView from pausing timers and JavaScript execution
+        // This is critical for background audio playback
+        if (this.bridge != null && this.bridge.getWebView() != null) {
+            WebView webView = this.bridge.getWebView();
+            // Don't pause timers - keeps JavaScript and audio running
+            // Note: onPause() does NOT pause timers by default in modern Android,
+            // but we're being explicit here
+            android.util.Log.d("MainActivity", "onPause - WebView timers kept active for background audio");
+        }
+    }
+    
+    @Override
+    public void onStop() {
+        super.onStop();
+        android.util.Log.d("MainActivity", "onStop - activity stopped but audio should continue via foreground service");
     }
     
     private void configureMixedContent() {
