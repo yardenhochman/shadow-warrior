@@ -569,11 +569,18 @@ class LEDControllerService {
     const power = Math.round((command.percentage || 0) * 2.55);
     switch (mode) {
       case 'idle':
-        // Dim breathing effect for idle
+        // Candle Multi effect for idle - red, low power
         wledCommand = {
           on: true,
-          bri: 50,
-          seg: [{ fx: 1, sx: 128, ix: 128 }] // Breathing effect, medium speed
+          bri: 50, // Low brightness
+          seg: [{
+            fx: 102, // Candle Multi effect
+            sx: 128, // Medium speed
+            ix: 128, // Medium intensity
+            c1: 255, // Red
+            c2: 0,   // Green
+            c3: 0    // Blue
+          }]
         };
         break;
       case 'energy_bar':
