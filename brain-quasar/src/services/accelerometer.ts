@@ -1,6 +1,7 @@
-// Accelerometer service for punch detection
-import { Motion, type AccelListenerEvent } from '@capacitor/motion';
+// Accelerometer service for punch detection using native Android sensors
+import AccelerometerMonitoring, { type PunchEvent } from 'src/plugins/accelerometer-monitoring';
 import { eventBus, Events } from './event-bus';
+import type { PluginListenerHandle } from '@capacitor/core';
 
 interface PunchDetectionConfig {
   threshold: number; // G-force threshold for punch detection (e.g., 2.0 = 2G)
@@ -15,9 +16,7 @@ class AccelerometerService {
     enabled: false,
   };
 
-  private lastPunchTime = 0;
-  private listenerId: { remove: () => Promise<void> } | null = null;
-  private baselineAccel = { x: 0, y: 0, z: 9.81 }; // Gravity baseline
+  private listenerHandle: PluginListenerHandle | null = null;
 
   async start(): Promise<void> {
     if (this.config.enabled) {
@@ -26,34 +25,33 @@ class AccelerometerService {
     }
 
     try {
-      // Request DeviceMotion permission on platforms that require it
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const DeviceMotionEventWithPermission = DeviceMotionEvent as any;
-      if (
-        typeof DeviceMotionEvent !== 'undefined' &&
-        typeof DeviceMotionEventWithPermission.requestPermission === 'function'
-      ) {
-        console.log('Requesting DeviceMotion permission...');
-        try {
-          const permission = await DeviceMotionEventWithPermission.requestPermission();
-          console.log('DeviceMotion permission result:', permission);
-          if (permission !== 'granted') {
-            console.warn('DeviceMotion permission denied');
-            throw new Error('DeviceMotion permission denied by user');
-          }
-        } catch (permissionError) {
-          console.error('Failed to request DeviceMotion permission:', permissionError);
-          throw permissionError;
-        }
-      }
+      // Start native accelerometer monitoring
+      console.log('Starting native accelerometer monitoring...');
+      await AccelerometerMonitoring.startMonitoring({
+        threshold: this.config.threshold,
+        cooldownMs: this.config.cooldownMs,
+      });
 
-      // Start listening to accelerometer
-      this.listenerId = await Motion.addListener('accel', this.handleAcceleration.bind(this));
+      // Listen for punch events from native code
+      this.listenerHandle = await AccelerometerMonitoring.addListener(
+        'punchDetected',
+        (event: PunchEvent) => {
+          console.log('Native punch detected:', event);
+
+          // Emit punch event to the app's event bus
+          eventBus.emit(Events.PUNCH_DETECTED, {
+            force: event.force,
+            magnitude: event.magnitude,
+            raw: event.raw,
+            timestamp: event.timestamp,
+          });
+        }
+      );
 
       this.config.enabled = true;
-      console.log('Accelerometer service started');
+      console.log('Native accelerometer service started');
     } catch (error) {
-      console.error('Failed to start accelerometer:', error);
+      console.error('Failed to start native accelerometer:', error);
       throw error;
     }
   }
@@ -63,59 +61,41 @@ class AccelerometerService {
       return;
     }
 
-    if (this.listenerId) {
-      await this.listenerId.remove();
-      this.listenerId = null;
+    // Remove event listener
+    if (this.listenerHandle) {
+      await this.listenerHandle.remove();
+      this.listenerHandle = null;
+    }
+
+    // Stop native monitoring
+    try {
+      console.log('Stopping native accelerometer monitoring...');
+      await AccelerometerMonitoring.stopMonitoring();
+      console.log('Native accelerometer monitoring stopped');
+    } catch (error) {
+      console.error('Failed to stop native accelerometer:', error);
     }
 
     this.config.enabled = false;
     console.log('Accelerometer service stopped');
   }
 
-  private handleAcceleration(event: AccelListenerEvent): void {
-    const { x, y, z } = event.acceleration;
-
-    // Calculate magnitude of acceleration vector
-    // Subtract gravity baseline for more accurate punch detection
-    const deltaX = x - this.baselineAccel.x;
-    const deltaY = y - this.baselineAccel.y;
-    const deltaZ = z - this.baselineAccel.z;
-
-    const magnitude = Math.sqrt(deltaX * deltaX + deltaY * deltaY + deltaZ * deltaZ);
-
-    // Detect punch based on threshold
-    if (magnitude > this.config.threshold) {
-      const now = Date.now();
-
-      // Check cooldown period to avoid duplicate detections
-      if (now - this.lastPunchTime >= this.config.cooldownMs) {
-        this.lastPunchTime = now;
-
-        // Normalize force to 0-1 range (assume max 6G for normalization)
-        const normalizedForce = Math.min(magnitude / 6.0, 1.0);
-
-        // Emit punch event
-        eventBus.emit(Events.PUNCH_DETECTED, {
-          force: normalizedForce,
-          magnitude,
-          raw: { x, y, z },
-          timestamp: now,
-        });
-
-        console.log('Punch detected: magnitude=%d, force=%f', magnitude, normalizedForce);
-      }
-    }
-
-    // Update baseline using exponential moving average (for drift correction)
-    const alpha = 0.01; // Smoothing factor
-    this.baselineAccel.x = alpha * x + (1 - alpha) * this.baselineAccel.x;
-    this.baselineAccel.y = alpha * y + (1 - alpha) * this.baselineAccel.y;
-    this.baselineAccel.z = alpha * z + (1 - alpha) * this.baselineAccel.z;
-  }
-
-  updateConfig(config: Partial<PunchDetectionConfig>): void {
+  async updateConfig(config: Partial<PunchDetectionConfig>): Promise<void> {
     this.config = { ...this.config, ...config };
     console.log('Accelerometer config updated:', this.config);
+
+    // Update native config if monitoring is active
+    if (this.config.enabled) {
+      try {
+        await AccelerometerMonitoring.updateConfig({
+          threshold: this.config.threshold,
+          cooldownMs: this.config.cooldownMs,
+        });
+        console.log('Native accelerometer config updated');
+      } catch (error) {
+        console.error('Failed to update native accelerometer config:', error);
+      }
+    }
   }
 
   getConfig(): PunchDetectionConfig {

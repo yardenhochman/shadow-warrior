@@ -6,7 +6,7 @@
   "author": "Avishai Ish-Shalom <avishai.ishshalom@gmail.com>",
   "type": "module",
   "private": true,
-  "buildNumber": 105,
+  "buildNumber": 122,
   "scripts": {
     "lint": "eslint -c ./eslint.config.js \"./src*/**/*.{ts,js,cjs,mjs,vue}\"",
     "format": "prettier --write \"**/*.{js,ts,vue,scss,html,md,json}\" --ignore-path .gitignore",
@@ -20,7 +20,6 @@
     "@capacitor-community/native-audio": "^7.0.1",
     "@capacitor/android": "^7.4.4",
     "@capacitor/filesystem": "^7.1.4",
-    "@capacitor/motion": "^7.0.1",
     "@capawesome/capacitor-file-picker": "^7.2.0",
     "@quasar/extras": "^1.16.4",
     "axios": "^1.2.1",
