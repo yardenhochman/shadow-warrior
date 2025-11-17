@@ -26,6 +26,20 @@
           </q-item-section>
         </q-item>
 
+        <q-item clickable to="/monitor">
+          <q-item-section avatar>
+            <q-icon name="sensors" />
+          </q-item-section>
+          <q-item-section>
+            <q-item-label>Monitor Arena</q-item-label>
+          </q-item-section>
+          <q-item-section side v-if="isMonitorMode">
+            <q-chip size="sm" color="blue" text-color="white" icon="sensors">
+              {{ monitorConnectionStatus }}
+            </q-chip>
+          </q-item-section>
+        </q-item>
+
         <q-item clickable to="/settings">
           <q-item-section avatar>
             <q-icon name="settings" />
@@ -44,12 +58,23 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
+import { useMonitorModeStore } from 'src/stores/monitor-mode';
 import packageJson from '../../package.json';
 
 const leftDrawerOpen = ref(false);
 const version = packageJson.version;
 const buildNumber = packageJson.buildNumber || 0;
+
+const monitorStore = useMonitorModeStore();
+const isMonitorMode = computed(() => monitorStore.isMonitorMode);
+const monitorConnectionStatus = computed(() => {
+  const status = monitorStore.connectionStatus;
+  if (status === 'connected') return 'Connected';
+  if (status === 'connecting') return 'Connecting...';
+  if (status === 'scanning') return 'Scanning...';
+  return 'Disconnected';
+});
 
 function toggleLeftDrawer() {
   leftDrawerOpen.value = !leftDrawerOpen.value;
