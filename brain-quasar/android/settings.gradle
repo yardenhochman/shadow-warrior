@@ -1,5 +1,7 @@
 include ':app'
 include ':capacitor-cordova-android-plugins'
+include ':ble-peripheral'
 project(':capacitor-cordova-android-plugins').projectDir = new File('./capacitor-cordova-android-plugins/')
+project(':ble-peripheral').projectDir = new File('./ble-peripheral/')
 
 apply from: 'capacitor.settings.gradle'
