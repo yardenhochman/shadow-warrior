@@ -396,6 +396,85 @@
         </q-card-section>
       </q-card>
 
+      <!-- BLE Arena Broadcasting Configuration -->
+      <q-card class="q-mb-md">
+        <q-card-section>
+          <div class="text-h6">Arena Broadcasting (BLE)</div>
+          <div class="text-caption text-grey q-mb-md">
+            Enable Bluetooth broadcasting to allow monitor devices to remotely view arena state.
+          </div>
+
+          <q-toggle
+            v-model="bleConfig.enabled"
+            label="Enable Arena Broadcasting"
+            color="primary"
+            @update:model-value="updateBleConfig"
+          />
+
+          <div v-if="bleConfig.enabled" class="q-mt-md">
+            <q-input
+              v-model="bleConfig.arenaName"
+              label="Arena Name (Broadcast Name)"
+              hint="Name shown to scanning devices"
+              outlined
+              maxlength="30"
+              counter
+              @update:model-value="updateBleConfig"
+            />
+
+            <div v-if="bleStatus" class="q-mt-md">
+              <div class="text-subtitle2">Status</div>
+              <q-chip
+                :color="bleStatus.isAdvertising ? 'positive' : 'warning'"
+                text-color="white"
+                icon="bluetooth"
+              >
+                {{ bleStatus.isAdvertising ? 'Broadcasting' : 'Idle' }}
+              </q-chip>
+              <q-chip v-if="bleStatus.connectedDevices > 0" color="info" text-color="white" icon="devices">
+                {{ bleStatus.connectedDevices }} device{{ bleStatus.connectedDevices !== 1 ? 's' : '' }}
+                connected
+              </q-chip>
+            </div>
+          </div>
+        </q-card-section>
+      </q-card>
+
+      <!-- HTTP Server Configuration -->
+      <q-card class="q-mb-md">
+        <q-card-section>
+          <div class="text-h6">HTTP Server Configuration</div>
+          <div class="text-caption text-grey q-mb-md">
+            Enable HTTP API to expose arena state to monitoring devices on the local network.
+          </div>
+
+          <q-toggle
+            v-model="httpServerConfig.enabled"
+            label="Enable HTTP Server (port 8080)"
+            color="primary"
+            @update:model-value="updateHttpServerConfig"
+          />
+
+          <div v-if="httpServerConfig.enabled" class="q-mt-md">
+            <div class="q-mt-md">
+              <div class="text-subtitle2">API Endpoints</div>
+              <div class="text-caption q-mt-sm">
+                <ul class="q-pl-md q-my-sm">
+                  <li>/api/health - Server health check</li>
+                  <li>/api/arena-state - Current arena state and metrics</li>
+                  <li>/api/arena-config - Current configuration</li>
+                  <li>/api/arena-history - State transition history</li>
+                  <li>/api/info - Server information</li>
+                </ul>
+              </div>
+              <p class="text-caption text-warning q-mt-md">
+                Note: HTTP server settings take effect after app restart. Find your device's IP address in device settings or use a network scanner to access: http://&lt;device-ip&gt;:8080/api/arena-state
+              </p>
+            </div>
+          </div>
+        </q-card-section>
+      </q-card>
+
       <!-- Actions -->
       <div class="row q-col-gutter-sm">
         <div class="col-6">
@@ -430,6 +509,7 @@ import { microphoneService } from 'src/services/microphone';
 import { uvLightService } from 'src/services/uv-light';
 import { scheduleService } from 'src/services/schedule';
 import { useQuasar } from 'quasar';
+import { bleArenaPeripheral } from 'src/services/ble-arena-peripheral';
 
 const $q = useQuasar();
 const stateMachine = useStateMachineStore();
@@ -475,6 +555,17 @@ const scheduleConfig = ref({
   dailyActiveStart: '09:00',
   dailyActiveEnd: '22:00',
 });
+
+const httpServerConfig = ref({
+  enabled: false,
+});
+
+const bleConfig = ref({
+  enabled: false,
+  arenaName: 'Shadow Warrior Arena',
+});
+
+const bleStatus = ref<{ isAdvertising: boolean; connectedDevices: number } | null>(null);
 
 const cooldownMinutes = ref(5);
 const warmingSeconds = ref(60);
@@ -539,6 +630,42 @@ async function updateScheduleConfig() {
   await scheduleService.updateSchedule(scheduleConfig.value);
 }
 
+function updateHttpServerConfig() {
+  localStorage.setItem(
+    'shadow-warrior-http-server-enabled',
+    httpServerConfig.value.enabled.toString()
+  );
+  $q.notify({
+    type: 'info',
+    message: httpServerConfig.value.enabled
+      ? 'HTTP server will be enabled on next app restart'
+      : 'HTTP server will be disabled on next app restart',
+    position: 'top',
+  });
+}
+
+async function updateBleConfig() {
+  localStorage.setItem(
+    'shadow-warrior-ble-peripheral-enabled',
+    bleConfig.value.enabled.toString()
+  );
+  localStorage.setItem(
+    'shadow-warrior-ble-arena-name',
+    bleConfig.value.arenaName
+  );
+
+  bleArenaPeripheral.setArenaName(bleConfig.value.arenaName);
+  await bleArenaPeripheral.toggle(bleConfig.value.enabled);
+
+  bleStatus.value = bleArenaPeripheral.getStatus();
+
+  $q.notify({
+    type: 'positive',
+    message: bleConfig.value.enabled ? 'Arena broadcasting enabled' : 'Arena broadcasting disabled',
+    position: 'top',
+  });
+}
+
 function saveSettings() {
   const settings = {
     stateMachine: config.value,
@@ -546,6 +673,7 @@ function saveSettings() {
     microphone: micConfig.value,
     uvLight: uvConfig.value,
     schedule: scheduleConfig.value,
+    httpServer: httpServerConfig.value,
   };
 
   localStorage.setItem('shadow-warrior-settings', JSON.stringify(settings));
@@ -601,6 +729,15 @@ async function resetSettings() {
     dailyActiveEnd: '22:00',
   };
 
+  httpServerConfig.value = {
+    enabled: false,
+  };
+
+  bleConfig.value = {
+    enabled: false,
+    arenaName: 'Shadow Warrior Arena',
+  };
+
   cooldownMinutes.value = 5;
   warmingSeconds.value = 60;
   fightMinutes.value = 3;
@@ -610,6 +747,7 @@ async function resetSettings() {
   updateMicConfig();
   updateUVConfig();
   await updateScheduleConfig();
+  updateHttpServerConfig();
 
   $q.notify({
     type: 'info',
@@ -651,6 +789,14 @@ async function loadSettings() {
         scheduleConfig.value = settings.schedule;
         await updateScheduleConfig();
       }
+
+      if (settings.httpServer) {
+        httpServerConfig.value = settings.httpServer;
+      }
+
+      if (settings.ble) {
+        bleConfig.value = settings.ble;
+      }
     } catch (error) {
       console.error('Failed to load settings:', error);
     }
@@ -675,7 +821,25 @@ async function loadSettings() {
   }
 }
 
-onMounted(() => {
-  void loadSettings();
+onMounted(async () => {
+  await loadSettings();
+  // Load HTTP server enabled flag from localStorage
+  const httpServerEnabled = localStorage.getItem('shadow-warrior-http-server-enabled');
+  if (httpServerEnabled !== null) {
+    httpServerConfig.value.enabled = httpServerEnabled === 'true';
+  }
+
+  // Load BLE config from localStorage
+  const blePeripheralEnabled = localStorage.getItem('shadow-warrior-ble-peripheral-enabled');
+  const bleArenaName = localStorage.getItem('shadow-warrior-ble-arena-name');
+  if (blePeripheralEnabled !== null) {
+    bleConfig.value.enabled = blePeripheralEnabled === 'true';
+  }
+  if (bleArenaName !== null) {
+    bleConfig.value.arenaName = bleArenaName;
+  }
+
+  // Update BLE status
+  bleStatus.value = bleArenaPeripheral.getStatus();
 });
 </script>
