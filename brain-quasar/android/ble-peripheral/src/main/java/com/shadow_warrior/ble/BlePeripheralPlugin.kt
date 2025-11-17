@@ -82,14 +82,13 @@ class BlePeripheralPlugin : Plugin() {
                 .build()
 
             val advertiseData = AdvertiseData.Builder()
-                .setIncludeDeviceName(false)  // Exclude device name to reduce packet size
+                .setIncludeDeviceName(true)  // Include device name in main advertisement for external scanners
                 .setIncludeTxPowerLevel(false)  // Reduce packet size
                 .addServiceUuid(ParcelUuid(UUID.fromString(serviceUuid)))
                 .build()
 
-            // Use scan response to include the service name (has separate 31-byte limit)
+            // Use scan response with additional data if needed (has separate 31-byte limit)
             val scanResponse = AdvertiseData.Builder()
-                .setIncludeDeviceName(true)
                 .build()
 
             // Start advertising with scan response

@@ -57,10 +57,11 @@ export default boot(async () => {
 
     // Initialize BLE Arena Peripheral for broadcasting arena state
     try {
-      const blePeripheralEnabled =
-        localStorage.getItem('shadow-warrior-ble-peripheral-enabled') === 'true';
+      // Default to enabled unless explicitly disabled
+      const storedValue = localStorage.getItem('shadow-warrior-ble-peripheral-enabled');
+      const blePeripheralEnabled = storedValue === null || storedValue === 'true';
       const arenaName =
-        localStorage.getItem('shadow-warrior-ble-arena-name') || 'Shadow Arena';
+        localStorage.getItem('shadow-warrior-ble-arena-name') || 'Shadow Warrior Arena';
 
       console.log('[BLE Peripheral] Enabled flag:', blePeripheralEnabled);
       console.log('[BLE Peripheral] Arena name:', arenaName);
