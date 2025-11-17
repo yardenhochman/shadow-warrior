@@ -78,6 +78,7 @@
         android:usesPermissionFlags="neverForLocation"
         tools:targetApi="s" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
     
     <!-- Location permission for BLE scanning on Android 11 and below -->
     <!-- On Android 12+ (API 31+), BLUETOOTH_SCAN with neverForLocation is sufficient -->
