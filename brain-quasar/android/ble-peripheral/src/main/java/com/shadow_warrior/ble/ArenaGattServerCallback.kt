@@ -16,10 +16,10 @@ class ArenaGattServerCallback(private val plugin: BlePeripheralPlugin) : Bluetoo
 
         when (newState) {
             BluetoothGatt.STATE_CONNECTED -> {
-                plugin.notifyListeners("onDeviceConnected", obj)
+                plugin.emitEvent("onDeviceConnected", obj)
             }
             BluetoothGatt.STATE_DISCONNECTED -> {
-                plugin.notifyListeners("onDeviceDisconnected", obj)
+                plugin.emitEvent("onDeviceDisconnected", obj)
             }
         }
     }
@@ -56,7 +56,7 @@ class ArenaGattServerCallback(private val plugin: BlePeripheralPlugin) : Bluetoo
             val obj = JSObject()
             obj.put("data", value.map { it.toInt() })
             obj.put("deviceAddress", device?.address ?: "unknown")
-            plugin.notifyListeners("onDataReceived", obj)
+            plugin.emitEvent("onDataReceived", obj)
         }
     }
 }

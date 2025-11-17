@@ -4,6 +4,7 @@ import android.os.Bundle;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import com.getcapacitor.BridgeActivity;
+import com.shadow_warrior.ble.BlePeripheralPlugin;
 
 public class MainActivity extends BridgeActivity {
     @Override
@@ -11,7 +12,8 @@ public class MainActivity extends BridgeActivity {
         // Register custom plugins before super.onCreate()
         registerPlugin(MusicPlaybackPlugin.class);
         registerPlugin(NativeAudioExtended.class);
-        
+        registerPlugin(BlePeripheralPlugin.class);
+
         super.onCreate(savedInstanceState);
         android.util.Log.d("MainActivity", "onCreate called - Build 10");
         
