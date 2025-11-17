@@ -1,6 +1,7 @@
 import { WebPlugin } from '@capacitor/core';
 import type { MusicPlaybackPlugin } from './music-playback';
 import type { BlePeripheralPlugin } from './ble-peripheral';
+import type { AccelerometerPlugin } from './accelerometer-monitoring';
 
 export class MusicPlaybackWeb extends WebPlugin implements MusicPlaybackPlugin {
   startForegroundService(options: { trackName: string }): Promise<void> {
@@ -12,6 +13,24 @@ export class MusicPlaybackWeb extends WebPlugin implements MusicPlaybackPlugin {
   stopForegroundService(): Promise<void> {
     console.log('[MusicPlaybackWeb] stopForegroundService called');
     console.log('Web platform: Foreground service not needed');
+    return Promise.resolve();
+  }
+}
+
+export class AccelerometerMonitoringWeb extends WebPlugin implements AccelerometerPlugin {
+  startMonitoring(options: { threshold: number; cooldownMs: number }): Promise<void> {
+    console.log('[AccelerometerMonitoringWeb] startMonitoring called', options);
+    console.log('Web platform: Native accelerometer not available, would use DeviceMotion API');
+    return Promise.resolve();
+  }
+
+  stopMonitoring(): Promise<void> {
+    console.log('[AccelerometerMonitoringWeb] stopMonitoring called');
+    return Promise.resolve();
+  }
+
+  updateConfig(options: { threshold: number; cooldownMs: number }): Promise<void> {
+    console.log('[AccelerometerMonitoringWeb] updateConfig called', options);
     return Promise.resolve();
   }
 }

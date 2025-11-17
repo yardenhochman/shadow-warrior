@@ -149,17 +149,25 @@ class BlePeripheralPlugin : Plugin() {
                 dataArray.getInt(i)
             }
 
+            android.util.Log.d("BlePeripheralPlugin", "sendData: sending ${data.size} bytes to $txCharUuid")
+
             val byteArray = data.map { it.toByte() }.toByteArray()
-            (gattServer?.services?.find { service ->
+            val txChar = gattServer?.services?.find { service ->
                 service.characteristics.any { it.uuid.toString() == txCharUuid }
-            }?.characteristics?.find { it.uuid.toString() == txCharUuid })?.apply {
-                value = byteArray
-                gattServer?.notifyCharacteristicChanged(null, this, false)
+            }?.characteristics?.find { it.uuid.toString() == txCharUuid }
+
+            if (txChar != null) {
+                txChar.value = byteArray
+                val notified = gattServer?.notifyCharacteristicChanged(null, txChar, false) ?: false
+                android.util.Log.d("BlePeripheralPlugin", "Characteristic notification sent: $notified")
+                call.resolve()
+            } else {
+                android.util.Log.e("BlePeripheralPlugin", "TX characteristic not found: $txCharUuid")
+                call.reject("TX characteristic not found")
             }
-            call.resolve()
         } catch (e: Exception) {
             call.reject("Error sending data: ${e.message}")
-            android.util.Log.e("BlePeripheralPlugin", "Error sending data: ${e.message}")
+            android.util.Log.e("BlePeripheralPlugin", "Error sending data: ${e.message}", e)
         }
     }
 

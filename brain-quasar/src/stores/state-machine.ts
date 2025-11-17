@@ -395,7 +395,7 @@ export const useStateMachineStore = defineStore('stateMachine', {
         } else if (this.currentState === ArenaState.FIGHT) {
           // Map accumulated power to appropriate fight effect
           // Higher power = more intense effect
-          if (this.accumulatedPower >= 20) {
+          if (this.accumulatedPower >= 40) {
             // High power punch/shout - electricity effect
             eventBus.emit(Events.LED_COMMAND, { mode: 'electricity' });
           } else if (this.accumulatedPower >= 10) {

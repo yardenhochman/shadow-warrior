@@ -35,7 +35,9 @@ class BleArenaMonitor {
     store.setConnectionStatus('scanning');
 
     try {
+      console.log('[BLE Monitor] Initializing BLE client...');
       await BleClient.initialize();
+      console.log('[BLE Monitor] BLE client initialized');
 
       console.log('[BLE Monitor] Scanning for Shadow Warrior Arena...');
 
@@ -45,11 +47,15 @@ class BleArenaMonitor {
       });
 
       this.device = device;
-      console.log('[BLE Monitor] Found arena:', device.name);
+      console.log('[BLE Monitor] Found arena:', device.name, device.deviceId);
 
       await this.connectToDevice();
     } catch (error) {
       console.error('[BLE Monitor] Scan error:', error);
+      console.error('[BLE Monitor] Error details:', {
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : 'N/A',
+      });
       store.setConnectionStatus('disconnected');
       throw error;
     }

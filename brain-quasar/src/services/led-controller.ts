@@ -52,6 +52,9 @@ interface WLEDSegment {
   c1?: number; // custom parameter 1
   c2?: number; // custom parameter 2
   c3?: number; // custom parameter 3
+  start?: number;
+  stop?: number;
+  pal?: number;
 }
 
 interface LEDControllerConfig {
@@ -588,7 +591,7 @@ class LEDControllerService {
         wledCommand = {
           on: true,
           bri: power, // 0-100 to 0-255
-          seg: [{ fx: 83, ix: power }] // Solid effect
+          seg: [{ fx: 83, ix: power, stop: Math.ceil(255*power/100) }] // Solid effect
         };
         break;
       case 'energy_pulse':
@@ -612,7 +615,7 @@ class LEDControllerService {
         wledCommand = {
           on: true,
           bri: 255,
-          seg: [{ fx: 43, sx: 220, ix: 255 }] // Lightning effect (fx 43), high intensity
+          seg: [{ fx: 43, sx: 220, ix: 255, pal: 50 }] // Lightning effect (fx 43), high intensity
         };
         break;
       case 'off':

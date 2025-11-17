@@ -614,7 +614,7 @@ function updateFightInactivityTimeout() {
 }
 
 function updateAccelConfig() {
-  accelerometerService.updateConfig(accelConfig.value);
+  void accelerometerService.updateConfig(accelConfig.value);
 }
 
 function updateMicConfig() {

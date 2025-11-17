@@ -3,15 +3,24 @@
     <!-- Connection Status Banner -->
     <q-banner v-if="!isConnected" class="bg-warning text-white q-mb-md">
       <template v-slot:avatar>
-        <q-icon name="bluetooth_searching" />
+        <q-icon
+          :name="connectionStatusIcon"
+          :animation="connectionStatus !== 'disconnected' ? 'spin' : undefined"
+        />
       </template>
-      Not connected to arena
+      <div>
+        <div>{{ connectionStatusText }}</div>
+        <div v-if="connectionStatus !== 'disconnected'" class="text-caption">
+          {{ connectionStatusDetail }}
+        </div>
+      </div>
       <template v-slot:action>
         <q-btn
-          label="Scan & Connect"
+          :label="connectionStatus === 'disconnected' ? 'Scan & Connect' : 'Cancel'"
           flat
-          @click="scanAndConnect"
+          @click="handleConnectionAction"
           :loading="connectionStatus === 'scanning' || connectionStatus === 'connecting'"
+          :disable="connectionStatus !== 'disconnected'"
         />
       </template>
     </q-banner>
@@ -190,6 +199,39 @@ const connectedArenaName = computed(() => store.connectedArenaName);
 const remoteArenaState = computed(() => store.remoteArenaState);
 const lastUpdate = computed(() => store.lastUpdate);
 
+const connectionStatusIcon = computed(() => {
+  switch (connectionStatus.value) {
+    case 'scanning':
+      return 'bluetooth_searching';
+    case 'connecting':
+      return 'bluetooth';
+    default:
+      return 'bluetooth_disabled';
+  }
+});
+
+const connectionStatusText = computed(() => {
+  switch (connectionStatus.value) {
+    case 'scanning':
+      return 'Scanning for arenas...';
+    case 'connecting':
+      return 'Connecting to arena...';
+    default:
+      return 'Not connected to arena';
+  }
+});
+
+const connectionStatusDetail = computed(() => {
+  switch (connectionStatus.value) {
+    case 'scanning':
+      return 'Looking for Shadow Warrior Arena devices';
+    case 'connecting':
+      return 'Establishing BLE connection...';
+    default:
+      return '';
+  }
+});
+
 const lastUpdateTime = computed(() => {
   if (!lastUpdate.value) return 'Never';
   const elapsed = Date.now() - lastUpdate.value;
@@ -203,7 +245,20 @@ async function scanAndConnect(): Promise<void> {
     store.enableMonitorMode();
     await bleArenaMonitor.scanAndConnect();
   } catch (error) {
-    console.error('Failed to connect:', error);
+    console.error('Failed to scan and connect:', error);
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    console.error('Detailed error:', errorMsg);
+    store.setConnectionStatus('disconnected');
+  }
+}
+
+async function handleConnectionAction(): Promise<void> {
+  if (connectionStatus.value === 'disconnected') {
+    await scanAndConnect();
+  } else {
+    // Cancel ongoing connection attempt
+    await bleArenaMonitor.disconnect();
+    store.disableMonitorMode();
   }
 }
 
