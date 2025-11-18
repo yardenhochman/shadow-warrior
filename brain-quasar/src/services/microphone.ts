@@ -8,6 +8,11 @@ interface ShoutDetectionConfig {
   fftSize: number; // FFT size for frequency analysis
   updateIntervalMs: number; // How often to check audio levels
   enabled: boolean;
+  gain: number; // Audio gain multiplier (0.1-10.0, default 1.5)
+  // getUserMedia audio constraints (require restart to apply)
+  echoCancellation: boolean; // Remove echo (default false)
+  noiseSuppression: boolean; // Reduce background noise (default true)
+  autoGainControl: boolean; // Automatic volume adjustment (default false)
   // Optional filtering config for shout frequency band (20-150 Hz by default)
   filterEnabled?: boolean;
   filterLowHz?: number;
@@ -21,6 +26,10 @@ class MicrophoneService {
     fftSize: 2048,
     updateIntervalMs: 50, // 20 Hz update rate
     enabled: false,
+    gain: 1.5, // 1.5x gain by default
+    echoCancellation: false,
+    noiseSuppression: false,
+    autoGainControl: false,
     // Default filter settings target a wider shout band by default
     filterEnabled: true,
     filterLowHz: 150,
@@ -30,6 +39,7 @@ class MicrophoneService {
   private audioContext: AudioContext | null = null;
   private analyser: AnalyserNode | null = null;
   private microphone: MediaStreamAudioSourceNode | null = null;
+  private gainNode: GainNode | null = null;
   private highpassFilter: BiquadFilterNode | null = null;
   private lowpassFilter: BiquadFilterNode | null = null;
   private mediaStream: MediaStream | null = null;
@@ -47,9 +57,9 @@ class MicrophoneService {
       // Request microphone access - this will prompt for permission if needed
       this.mediaStream = await navigator.mediaDevices.getUserMedia({
         audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: false,
+          echoCancellation: this.config.echoCancellation,
+          noiseSuppression: this.config.noiseSuppression,
+          autoGainControl: this.config.autoGainControl,
         },
       });
       console.log('getUserMedia successful, tracks:', this.mediaStream.getAudioTracks().length);
@@ -75,6 +85,10 @@ class MicrophoneService {
       // Create microphone source
       this.microphone = this.audioContext.createMediaStreamSource(this.mediaStream);
 
+      // Create gain node
+      this.gainNode = this.audioContext.createGain();
+      this.gainNode.gain.value = this.config.gain;
+
       // Read filter settings from config (with defaults)
       // Read optional filter settings from config with safe defaults
       const filterEnabled =
@@ -92,13 +106,15 @@ class MicrophoneService {
         this.lowpassFilter.type = 'lowpass';
         this.lowpassFilter.frequency.value = filterHighHz;
 
-        // Chain: microphone -> highpass -> lowpass -> analyser
-        this.microphone.connect(this.highpassFilter);
+        // Chain: microphone -> gain -> highpass -> lowpass -> analyser
+        this.microphone.connect(this.gainNode);
+        this.gainNode.connect(this.highpassFilter);
         this.highpassFilter.connect(this.lowpassFilter);
         this.lowpassFilter.connect(this.analyser);
       } else {
-        // Direct connect if filtering disabled
-        this.microphone.connect(this.analyser);
+        // Chain: microphone -> gain -> analyser
+        this.microphone.connect(this.gainNode);
+        this.gainNode.connect(this.analyser);
       }
 
       // Create data array for amplitude analysis
@@ -157,6 +173,15 @@ class MicrophoneService {
     if (this.microphone) {
       this.microphone.disconnect();
       this.microphone = null;
+    }
+    // Disconnect and null gain node
+    if (this.gainNode) {
+      try {
+        this.gainNode.disconnect();
+      } catch {
+        /* ignore */
+      }
+      this.gainNode = null;
     }
     // Disconnect and null filters
     if (this.highpassFilter) {
@@ -249,11 +274,20 @@ class MicrophoneService {
         config.updateIntervalMs !== undefined ||
         config.filterEnabled !== undefined ||
         config.filterLowHz !== undefined ||
-        config.filterHighHz !== undefined);
+        config.filterHighHz !== undefined ||
+        config.echoCancellation !== undefined ||
+        config.noiseSuppression !== undefined ||
+        config.autoGainControl !== undefined);
 
     this.config = { ...this.config, ...config };
 
-    // Restart if FFT settings changed while running
+    // Update gain dynamically if changed (no restart needed)
+    if (config.gain !== undefined && this.gainNode) {
+      this.gainNode.gain.value = config.gain;
+      console.log('Gain updated to:', config.gain);
+    }
+
+    // Restart if FFT, filter, or audio constraint settings changed while running
     if (needsRestart) {
       void this.stop().then(() => this.start());
     }
