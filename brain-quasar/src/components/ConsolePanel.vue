@@ -98,7 +98,7 @@ function toggleConsole() {
 // Override console methods
 function overrideConsole() {
   const consoleObj = console as unknown as Record<string, unknown>;
-  
+
   consoleObj.warn = function (...args: unknown[]) {
     const text = args.map(arg => {
       if (typeof arg === 'object' && arg !== null) {

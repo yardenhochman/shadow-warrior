@@ -725,22 +725,62 @@ async function updateBleConfig() {
 }
 
 function saveSettings() {
-  const settings = {
-    stateMachine: config.value,
-    accelerometer: accelConfig.value,
-    microphone: micConfig.value,
-    uvLight: uvConfig.value,
-    schedule: scheduleConfig.value,
-    httpServer: httpServerConfig.value,
-  };
+  try {
+    const settings = {
+      stateMachine: config.value,
+      accelerometer: accelConfig.value,
+      microphone: micConfig.value,
+      uvLight: uvConfig.value,
+      schedule: scheduleConfig.value,
+      httpServer: httpServerConfig.value,
+      ble: bleConfig.value,
+    };
 
-  localStorage.setItem('shadow-warrior-settings', JSON.stringify(settings));
+    console.log('Attempting to save settings...');
+    console.log('Settings object:', settings);
+    
+    const settingsJson = JSON.stringify(settings);
+    console.log('Settings JSON length:', settingsJson.length, 'bytes');
+    console.log('Settings JSON preview:', settingsJson.substring(0, 200));
+    
+    localStorage.setItem('shadow-warrior-settings', settingsJson);
+    console.log('Settings saved successfully to localStorage');
 
-  $q.notify({
-    type: 'positive',
-    message: 'Settings saved successfully',
-    position: 'top',
-  });
+    try {
+      $q.notify({
+        type: 'positive',
+        message: 'Settings saved successfully',
+        position: 'top',
+      });
+    } catch (notifyError) {
+      console.warn('Failed to show notification:', notifyError);
+    }
+  } catch (error) {
+    console.error('Failed to save settings - Error type:', typeof error);
+    console.error('Failed to save settings - Error:', error);
+    console.error('Failed to save settings - Error string:', String(error));
+    console.error('Failed to save settings - Error JSON:', JSON.stringify(error, Object.getOwnPropertyNames(error)));
+    
+    let errorMessage = 'Unknown error';
+    if (error instanceof Error) {
+      errorMessage = error.message;
+    } else if (error && typeof error === 'object') {
+      errorMessage = JSON.stringify(error, Object.getOwnPropertyNames(error));
+    } else {
+      errorMessage = String(error);
+    }
+    
+    try {
+      $q.notify({
+        type: 'negative',
+        message: `Failed to save settings: ${errorMessage}`,
+        position: 'top',
+        timeout: 5000,
+      });
+    } catch (notifyError) {
+      console.error('Failed to show error notification:', notifyError);
+    }
+  }
 }
 
 async function resetSettings() {
