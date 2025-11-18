@@ -3,6 +3,7 @@ BEFORE ANYTHING ELSE: run 'bd onboard' and follow the instructions
 # Dev
 to build: `npm run build && npx cap sync android`
 to build and deploy: ./build_and_deploy.sh
+(the following assumes fish shell)
 If JAVA_HOME is unset: `set -x JAVA_HOME /Applications/Android\ Studio.app/Contents/jbr/Contents/Home`
 If adb is not found: `set -x PATH $PATH ~/Library/Android/sdk/platform-tools/`
 

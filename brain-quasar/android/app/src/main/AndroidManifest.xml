@@ -46,6 +46,17 @@
                 android:value="Motion sensor monitoring for punch detection" />
         </service>
 
+        <!-- Shadow Warrior foreground service for BLE, audio, and sensors -->
+        <service
+            android:name=".ShadowWarriorForegroundService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice|mediaPlayback|specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Boxing training system with BLE communication, audio feedback, and motion tracking" />
+        </service>
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
@@ -76,6 +87,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
@@ -93,8 +105,9 @@
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
     
     <!-- Location permission for BLE scanning on Android 11 and below -->
-    <!-- On Android 12+ (API 31+), BLUETOOTH_SCAN with neverForLocation is sufficient -->
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
+    <!-- On Android 12+ (API 31+), BLUETOOTH_SCAN with neverForLocation should be sufficient, -->
+    <!-- but some BLE libraries still check for location permission, so we declare it -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" android:maxSdkVersion="30" />
 <!-- Android 10, 11: Background location permission if needed for certain BLE operations -->
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />

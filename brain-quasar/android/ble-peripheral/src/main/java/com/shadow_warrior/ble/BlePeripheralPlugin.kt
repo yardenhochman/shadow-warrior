@@ -81,14 +81,20 @@ class BlePeripheralPlugin : Plugin() {
                 .setConnectable(true)
                 .build()
 
+            // Temporarily set the adapter name to our custom name for advertising
+            // This is necessary because Android doesn't provide setLocalName() in AdvertiseData
+            val originalName = bluetoothAdapter?.name
+            bluetoothAdapter?.name = serviceName
+
             val advertiseData = AdvertiseData.Builder()
-                .setIncludeDeviceName(true)  // Include device name in main advertisement for external scanners
+                .setIncludeDeviceName(false)  // Don't include in main packet to save space
                 .setIncludeTxPowerLevel(false)  // Reduce packet size
                 .addServiceUuid(ParcelUuid(UUID.fromString(serviceUuid)))
                 .build()
 
-            // Use scan response with additional data if needed (has separate 31-byte limit)
+            // Use scan response with device name (has separate 31-byte limit)
             val scanResponse = AdvertiseData.Builder()
+                .setIncludeDeviceName(true)  // Now includes our custom name
                 .build()
 
             // Start advertising with scan response
@@ -153,8 +159,8 @@ class BlePeripheralPlugin : Plugin() {
 
             val byteArray = data.map { it.toByte() }.toByteArray()
             val txChar = gattServer?.services?.find { service ->
-                service.characteristics.any { it.uuid.toString() == txCharUuid }
-            }?.characteristics?.find { it.uuid.toString() == txCharUuid }
+                service.characteristics.any { it.uuid.toString().equals(txCharUuid, ignoreCase = true) }
+            }?.characteristics?.find { it.uuid.toString().equals(txCharUuid, ignoreCase = true) }
 
             if (txChar != null) {
                 txChar.value = byteArray

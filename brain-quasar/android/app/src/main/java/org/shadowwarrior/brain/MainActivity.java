@@ -17,7 +17,10 @@ public class MainActivity extends BridgeActivity {
 
         super.onCreate(savedInstanceState);
         android.util.Log.d("MainActivity", "onCreate called - Native accelerometer implementation");
-        
+
+        // Start foreground service for background operation
+        ShadowWarriorForegroundService.start(this);
+
         // Configure WebView after initialization
         configureMixedContent();
     }

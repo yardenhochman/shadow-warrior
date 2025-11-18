@@ -39,6 +39,17 @@ class BleArenaMonitor {
       await BleClient.initialize();
       console.log('[BLE Monitor] BLE client initialized');
 
+      // Try to request permissions before device scan
+      try {
+        console.log('[BLE Monitor] Requesting BLE permissions...');
+        // Some devices require this call before scanning
+        const bleClientAny = BleClient as unknown as { requestBluetoothPermissions?: () => Promise<void> };
+        await bleClientAny.requestBluetoothPermissions?.();
+        console.log('[BLE Monitor] Permissions granted');
+      } catch (permError) {
+        console.warn('[BLE Monitor] Permission request failed (may not be required):', permError);
+      }
+
       console.log('[BLE Monitor] Scanning for Shadow Warrior Arena...');
 
       const device = await BleClient.requestDevice({
@@ -55,6 +66,8 @@ class BleArenaMonitor {
       console.error('[BLE Monitor] Error details:', {
         message: error instanceof Error ? error.message : String(error),
         stack: error instanceof Error ? error.stack : 'N/A',
+        errorCode: (error as { errorCode?: string }).errorCode,
+        errorMessage: (error as { errorMessage?: string }).errorMessage,
       });
       store.setConnectionStatus('disconnected');
       throw error;
