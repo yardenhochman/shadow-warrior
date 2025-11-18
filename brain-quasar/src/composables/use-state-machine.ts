@@ -10,8 +10,8 @@ export function useStateMachine() {
   const store = useStateMachineStore();
 
   // Event handlers
-  const handlePunch = (payload: { force: number }) => {
-    store.onPunchDetected(payload.force);
+  const handlePunch = (payload: { force: number; magnitude: number }) => {
+    store.onPunchDetected(payload.force, payload.magnitude);
   };
 
   const handleShout = (payload: { amplitude: number }) => {

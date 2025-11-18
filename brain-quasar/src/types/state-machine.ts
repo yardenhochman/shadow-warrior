@@ -18,6 +18,7 @@ export interface StateTransition {
 export interface ArenaMetrics {
   shoutAmplitude: number; // 0-1 normalized amplitude
   punchForce: number; // 0-1 normalized force
+  punchMagnitude: number; // G-force magnitude
   warmingPower: number; // 0-100 warming threshold
   fightPower: number; // 0-100 fight threshold
 }

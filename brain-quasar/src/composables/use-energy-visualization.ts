@@ -5,6 +5,7 @@ import { eventBus, Events } from 'src/services/event-bus';
 export function useEnergyVisualization() {
   const shoutAmplitude = ref(0);
   const punchForce = ref(0);
+  const punchMagnitude = ref(0);
   const lastPunchTime = ref(0);
 
   // Punch force decay for visual effect
@@ -15,8 +16,9 @@ export function useEnergyVisualization() {
     shoutAmplitude.value = payload.amplitude;
   };
 
-  const handlePunch = (payload: { force: number; timestamp: number }) => {
+  const handlePunch = (payload: { force: number; magnitude: number; timestamp: number }) => {
     punchForce.value = payload.force;
+    punchMagnitude.value = payload.magnitude;
     lastPunchTime.value = payload.timestamp;
 
     // Clear any existing decay interval
@@ -74,6 +76,7 @@ export function useEnergyVisualization() {
   return {
     shoutAmplitude,
     punchForce,
+    punchMagnitude,
     lastPunchTime,
   };
 }

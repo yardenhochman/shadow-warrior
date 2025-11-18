@@ -39,11 +39,18 @@ public class AccelerometerService extends Service implements SensorEventListener
     private long cooldownMs = DEFAULT_COOLDOWN_MS;
     private long lastPunchTime = 0;
     
-    // Baseline for drift correction (gravity)
+    // Baseline for drift correction (gravity) - now configurable
     private float baselineX = 0f;
     private float baselineY = 0f;
     private float baselineZ = 9.81f;
-    private static final float BASELINE_ALPHA = 0.01f; // Smoothing factor
+    private float baselineAlpha = 0.01f; // Smoothing factor
+    
+    // EWMA smoothing for accelerometer values (trend detection)
+    private float smoothedX = 0f;
+    private float smoothedY = 0f;
+    private float smoothedZ = 0f;
+    private float accelAlpha = 0.3f; // Smoothing factor for accelerometer values
+    private boolean initialized = false; // Track if smoothed values are initialized
     
     // Plugin instance for sending events
     private static AccelerometerPlugin pluginInstance = null;
@@ -91,8 +98,13 @@ public class AccelerometerService extends Service implements SensorEventListener
         if (intent != null) {
             threshold = intent.getFloatExtra("threshold", DEFAULT_THRESHOLD);
             cooldownMs = intent.getLongExtra("cooldownMs", DEFAULT_COOLDOWN_MS);
+            baselineAlpha = intent.getFloatExtra("baselineAlpha", 0.01f);
+            baselineX = intent.getFloatExtra("baselineX", 0.0f);
+            baselineY = intent.getFloatExtra("baselineY", 0.0f);
+            baselineZ = intent.getFloatExtra("baselineZ", 9.81f);
+            accelAlpha = intent.getFloatExtra("accelAlpha", 0.3f);
             android.util.Log.d("AccelerometerService", 
-                "Config - threshold: " + threshold + "G, cooldown: " + cooldownMs + "ms");
+                "Config - threshold: " + threshold + "G, cooldown: " + cooldownMs + "ms, baselineAlpha: " + baselineAlpha + ", accelAlpha: " + accelAlpha);
         }
         
         // Create notification
@@ -124,10 +136,24 @@ public class AccelerometerService extends Service implements SensorEventListener
         float y = event.values[1];
         float z = event.values[2];
         
-        // Calculate magnitude with baseline correction
-        float deltaX = x - baselineX;
-        float deltaY = y - baselineY;
-        float deltaZ = z - baselineZ;
+        // Apply EWMA smoothing to accelerometer values for trend detection
+        if (!initialized) {
+            // Initialize smoothed values with first reading
+            smoothedX = x;
+            smoothedY = y;
+            smoothedZ = z;
+            initialized = true;
+        } else {
+            // Apply exponential smoothing
+            smoothedX = accelAlpha * x + (1 - accelAlpha) * smoothedX;
+            smoothedY = accelAlpha * y + (1 - accelAlpha) * smoothedY;
+            smoothedZ = accelAlpha * z + (1 - accelAlpha) * smoothedZ;
+        }
+        
+        // Use smoothed values for punch detection
+        float deltaX = smoothedX - baselineX;
+        float deltaY = smoothedY - baselineY;
+        float deltaZ = smoothedZ - baselineZ;
         
         float magnitude = (float) Math.sqrt(deltaX * deltaX + deltaY * deltaY + deltaZ * deltaZ);
         
@@ -139,21 +165,21 @@ public class AccelerometerService extends Service implements SensorEventListener
             if (now - lastPunchTime >= cooldownMs) {
                 lastPunchTime = now;
                 
-                // Normalize force to 0-1 range (assume max 6G)
-                float normalizedForce = Math.min(magnitude / 6.0f, 1.0f);
+                // Normalize force to 0-1 range (assume max 10G)
+                float normalizedForce = Math.min(magnitude / 10.0f, 1.0f);
                 
-                // Send punch event to JavaScript
+                // Send punch event to JavaScript (use original raw values for event data)
                 sendPunchEvent(normalizedForce, magnitude, x, y, z, now);
                 
                 android.util.Log.d("AccelerometerService", 
-                    "Punch detected! magnitude=" + magnitude + "G, force=" + normalizedForce);
+                    "Punch detected! magnitude=" + magnitude + "G, force=" + normalizedForce + ", smoothed: (" + smoothedX + "," + smoothedY + "," + smoothedZ + ")");
             }
         }
         
         // Update baseline using exponential moving average (drift correction)
-        baselineX = BASELINE_ALPHA * x + (1 - BASELINE_ALPHA) * baselineX;
-        baselineY = BASELINE_ALPHA * y + (1 - BASELINE_ALPHA) * baselineY;
-        baselineZ = BASELINE_ALPHA * z + (1 - BASELINE_ALPHA) * baselineZ;
+        baselineX = baselineAlpha * smoothedX + (1 - baselineAlpha) * baselineX;
+        baselineY = baselineAlpha * smoothedY + (1 - baselineAlpha) * baselineY;
+        baselineZ = baselineAlpha * smoothedZ + (1 - baselineAlpha) * baselineZ;
     }
 
     @Override
@@ -169,11 +195,16 @@ public class AccelerometerService extends Service implements SensorEventListener
         }
     }
     
-    public void updateConfig(float newThreshold, long newCooldownMs) {
+    public void updateConfig(float newThreshold, long newCooldownMs, float newBaselineAlpha, float newBaselineX, float newBaselineY, float newBaselineZ, float newAccelAlpha) {
         this.threshold = newThreshold;
         this.cooldownMs = newCooldownMs;
+        this.baselineAlpha = newBaselineAlpha;
+        this.baselineX = newBaselineX;
+        this.baselineY = newBaselineY;
+        this.baselineZ = newBaselineZ;
+        this.accelAlpha = newAccelAlpha;
         android.util.Log.d("AccelerometerService", 
-            "Config updated - threshold: " + threshold + "G, cooldown: " + cooldownMs + "ms");
+            "Config updated - threshold: " + threshold + "G, cooldown: " + cooldownMs + "ms, baselineAlpha: " + baselineAlpha + ", accelAlpha: " + accelAlpha);
     }
 
     @Override

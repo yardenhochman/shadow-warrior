@@ -37,6 +37,7 @@ export const useStateMachineStore = defineStore('stateMachine', {
     metrics: {
       shoutAmplitude: 0,
       punchForce: 0,
+      punchMagnitude: 0,
       warmingPower: 0,
       fightPower: 0,
     },
@@ -171,6 +172,7 @@ export const useStateMachineStore = defineStore('stateMachine', {
       this.metrics.fightPower = 0;
       this.metrics.shoutAmplitude = 0;
       this.metrics.punchForce = 0;
+      this.metrics.punchMagnitude = 0;
       this.lastEffectTrigger = 0;
       this.accumulatedPower = 0;
 
@@ -285,6 +287,7 @@ export const useStateMachineStore = defineStore('stateMachine', {
       this.metrics.fightPower = 0;
       this.metrics.shoutAmplitude = 0;
       this.metrics.punchForce = 0;
+      this.metrics.punchMagnitude = 0;
 
       console.log('Arena SUSPENDED');
     },
@@ -338,13 +341,14 @@ export const useStateMachineStore = defineStore('stateMachine', {
     },
 
     // Handle punch detection
-    onPunchDetected(force: number): void {
+    onPunchDetected(force: number, magnitude: number): void {
       // If suspended, ignore all sensor input
       if (this.currentState === ArenaState.SUSPENDED) {
         return;
       }
 
       this.metrics.punchForce = force;
+      this.metrics.punchMagnitude = magnitude;
 
       if (this.currentState === ArenaState.FIGHT) {
         // Track activity
