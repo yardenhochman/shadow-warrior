@@ -267,18 +267,6 @@ class MicrophoneService {
   }
 
   updateConfig(config: Partial<ShoutDetectionConfig>): void {
-    const needsRestart =
-      this.config.enabled &&
-      (config.fftSize !== undefined ||
-        config.smoothingFactor !== undefined ||
-        config.updateIntervalMs !== undefined ||
-        config.filterEnabled !== undefined ||
-        config.filterLowHz !== undefined ||
-        config.filterHighHz !== undefined ||
-        config.echoCancellation !== undefined ||
-        config.noiseSuppression !== undefined ||
-        config.autoGainControl !== undefined);
-
     this.config = { ...this.config, ...config };
 
     // Update gain dynamically if changed (no restart needed)
@@ -287,8 +275,9 @@ class MicrophoneService {
       console.log('Gain updated to:', config.gain);
     }
 
-    // Restart if FFT, filter, or audio constraint settings changed while running
-    if (needsRestart) {
+    // Restart microphone if enabled (simpler than trying to detect which settings changed)
+    if (this.config.enabled) {
+      console.log('Microphone config changed, restarting service...');
       void this.stop().then(() => this.start());
     }
 

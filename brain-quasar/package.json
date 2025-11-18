@@ -6,7 +6,7 @@
   "author": "Avishai Ish-Shalom <avishai.ishshalom@gmail.com>",
   "type": "module",
   "private": true,
-  "buildNumber": 141,
+  "buildNumber": 142,
   "scripts": {
     "lint": "eslint -c ./eslint.config.js \"./src*/**/*.{ts,js,cjs,mjs,vue}\"",
     "format": "prettier --write \"**/*.{js,ts,vue,scss,html,md,json}\" --ignore-path .gitignore",
