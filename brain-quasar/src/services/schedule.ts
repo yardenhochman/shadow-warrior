@@ -88,8 +88,15 @@ class ScheduleService {
     try {
       console.log('Canceling all schedule alarms');
       await NativeSchedule.cancelAllAlarms();
+      console.log('Schedule alarms cancelled successfully');
     } catch (error) {
-      console.error('Failed to cancel alarms:', error);
+      // Ignore UNIMPLEMENTED errors - this just means no alarms were scheduled
+      const capacitorError = error as { code?: string };
+      if (capacitorError?.code === 'UNIMPLEMENTED') {
+        console.log('No native alarm implementation available (expected on web platform)');
+      } else {
+        console.error('Failed to cancel alarms:', error);
+      }
     }
   }
 }
