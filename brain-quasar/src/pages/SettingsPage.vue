@@ -210,6 +210,74 @@
               @update:model-value="updateAccelConfig"
             />
           </div>
+
+          <div class="q-mt-md">
+            <div class="text-subtitle2">Accelerometer Smoothing Alpha</div>
+            <q-slider
+              v-model="accelConfig.accelAlpha"
+              :min="0.1"
+              :max="0.9"
+              :step="0.05"
+              label
+              label-always
+              color="primary"
+              @update:model-value="updateAccelConfig"
+            />
+            <div class="text-caption text-grey q-mt-sm">
+              EWMA smoothing factor for accelerometer values. Lower = more smoothing, higher = more responsive to changes.
+            </div>
+          </div>
+
+          <div class="q-mt-md">
+            <div class="text-subtitle2">Baseline X (m/s²)</div>
+            <q-slider
+              v-model="accelConfig.baselineX"
+              :min="0"
+              :max="2"
+              :step="0.1"
+              label
+              label-always
+              color="primary"
+              @update:model-value="updateAccelConfig"
+            />
+            <div class="text-caption text-grey q-mt-sm">
+              Expected X-axis acceleration when device is at rest (typically 0).
+            </div>
+          </div>
+
+          <div class="q-mt-md">
+            <div class="text-subtitle2">Baseline Y (m/s²)</div>
+            <q-slider
+              v-model="accelConfig.baselineY"
+              :min="0"
+              :max="2"
+              :step="0.1"
+              label
+              label-always
+              color="primary"
+              @update:model-value="updateAccelConfig"
+            />
+            <div class="text-caption text-grey q-mt-sm">
+              Expected Y-axis acceleration when device is at rest (typically 0).
+            </div>
+          </div>
+
+          <div class="q-mt-md">
+            <div class="text-subtitle2">Baseline Z (m/s²)</div>
+            <q-slider
+              v-model="accelConfig.baselineZ"
+              :min="0"
+              :max="12"
+              :step="0.1"
+              label
+              label-always
+              color="primary"
+              @update:model-value="updateAccelConfig"
+            />
+            <div class="text-caption text-grey q-mt-sm">
+              Expected Z-axis acceleration when device is at rest (typically 9.81 for gravity).
+            </div>
+          </div>
         </q-card-section>
       </q-card>
 
@@ -586,6 +654,11 @@ const config = ref({
 const accelConfig = ref({
   threshold: 2.0,
   cooldownMs: 200,
+  baselineAlpha: 0.01,
+  baselineX: 0,
+  baselineY: 0,
+  baselineZ: 9.81,
+  accelAlpha: 0.3,
 });
 
 const micConfig = ref({
@@ -803,6 +876,11 @@ async function resetSettings() {
   accelConfig.value = {
     threshold: 2.0,
     cooldownMs: 200,
+    baselineAlpha: 0.01,
+    baselineX: 0,
+    baselineY: 0,
+    baselineZ: 9.81,
+    accelAlpha: 0.3,
   };
 
   micConfig.value = {

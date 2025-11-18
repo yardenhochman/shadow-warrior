@@ -31,11 +31,21 @@ public class AccelerometerPlugin extends Plugin {
         // Get configuration parameters
         float threshold = call.getFloat("threshold", 2.0f);
         int cooldownMs = call.getInt("cooldownMs", 200);
+        float baselineAlpha = call.getFloat("baselineAlpha", 0.01f);
+        float baselineX = call.getFloat("baselineX", 0.0f);
+        float baselineY = call.getFloat("baselineY", 0.0f);
+        float baselineZ = call.getFloat("baselineZ", 9.81f);
+        float accelAlpha = call.getFloat("accelAlpha", 0.3f);
         
         // Start the native foreground service
         Intent serviceIntent = new Intent(context, AccelerometerService.class);
         serviceIntent.putExtra("threshold", threshold);
         serviceIntent.putExtra("cooldownMs", (long) cooldownMs);
+        serviceIntent.putExtra("baselineAlpha", baselineAlpha);
+        serviceIntent.putExtra("baselineX", baselineX);
+        serviceIntent.putExtra("baselineY", baselineY);
+        serviceIntent.putExtra("baselineZ", baselineZ);
+        serviceIntent.putExtra("accelAlpha", accelAlpha);
         
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             context.startForegroundService(serviceIntent);
@@ -44,7 +54,7 @@ public class AccelerometerPlugin extends Plugin {
         }
         
         android.util.Log.d("AccelerometerPlugin", 
-            "Started native accelerometer monitoring - threshold: " + threshold + "G, cooldown: " + cooldownMs + "ms");
+            "Started native accelerometer monitoring - threshold: " + threshold + "G, cooldown: " + cooldownMs + "ms, baselineAlpha: " + baselineAlpha);
         call.resolve();
     }
 
@@ -64,6 +74,11 @@ public class AccelerometerPlugin extends Plugin {
     public void updateConfig(PluginCall call) {
         float threshold = call.getFloat("threshold", 2.0f);
         int cooldownMs = call.getInt("cooldownMs", 200);
+        float baselineAlpha = call.getFloat("baselineAlpha", 0.01f);
+        float baselineX = call.getFloat("baselineX", 0.0f);
+        float baselineY = call.getFloat("baselineY", 0.0f);
+        float baselineZ = call.getFloat("baselineZ", 9.81f);
+        float accelAlpha = call.getFloat("accelAlpha", 0.3f);
         
         // Send config update to service via broadcast or direct call
         // For simplicity, we'll restart the service with new config
@@ -71,6 +86,11 @@ public class AccelerometerPlugin extends Plugin {
         Intent serviceIntent = new Intent(context, AccelerometerService.class);
         serviceIntent.putExtra("threshold", threshold);
         serviceIntent.putExtra("cooldownMs", (long) cooldownMs);
+        serviceIntent.putExtra("baselineAlpha", baselineAlpha);
+        serviceIntent.putExtra("baselineX", baselineX);
+        serviceIntent.putExtra("baselineY", baselineY);
+        serviceIntent.putExtra("baselineZ", baselineZ);
+        serviceIntent.putExtra("accelAlpha", accelAlpha);
         
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             context.startForegroundService(serviceIntent);

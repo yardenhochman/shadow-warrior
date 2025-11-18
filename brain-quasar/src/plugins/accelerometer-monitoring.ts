@@ -12,9 +12,25 @@ export interface PunchEvent {
 }
 
 export interface AccelerometerPlugin {
-  startMonitoring(options: { threshold: number; cooldownMs: number }): Promise<void>;
+  startMonitoring(options: {
+    threshold: number;
+    cooldownMs: number;
+    baselineAlpha: number;
+    baselineX: number;
+    baselineY: number;
+    baselineZ: number;
+    accelAlpha: number;
+  }): Promise<void>;
   stopMonitoring(): Promise<void>;
-  updateConfig(options: { threshold: number; cooldownMs: number }): Promise<void>;
+  updateConfig(options: {
+    threshold: number;
+    cooldownMs: number;
+    baselineAlpha: number;
+    baselineX: number;
+    baselineY: number;
+    baselineZ: number;
+    accelAlpha: number;
+  }): Promise<void>;
 
   // Event listener for punch detection
   addListener(eventName: 'punchDetected', listenerFunc: (event: PunchEvent) => void): Promise<PluginListenerHandle>;

@@ -27,10 +27,42 @@
 
           <div class="row q-col-gutter-md">
             <div class="col-12 col-sm-6">
-              <EnergyBar label="Microphone (Shout)" :value="energyViz.shoutAmplitude.value" />
+              <div class="text-subtitle2 q-mb-sm">Microphone (Shout)</div>
+              <q-linear-progress
+                :value="energyViz.shoutAmplitude.value"
+                size="32px"
+                :color="getIntensityColor(energyViz.shoutAmplitude.value)"
+                class="q-mt-sm"
+                :instant-feedback="true"
+                rounded
+              >
+                <div class="absolute-full flex flex-center">
+                  <q-badge
+                    color="white"
+                    text-color="black"
+                    :label="`${Math.round(energyViz.shoutAmplitude.value * 100)}%`"
+                  />
+                </div>
+              </q-linear-progress>
             </div>
             <div class="col-12 col-sm-6">
-              <EnergyBar label="Accelerometer (Punch)" :value="energyViz.punchForce.value" />
+              <div class="text-subtitle2 q-mb-sm">Accelerometer (Punch)</div>
+              <q-linear-progress
+                :value="energyViz.punchForce.value"
+                size="32px"
+                :color="getIntensityColor(energyViz.punchForce.value)"
+                class="q-mt-sm"
+                :instant-feedback="true"
+                rounded
+              >
+                <div class="absolute-full flex flex-center">
+                  <q-badge
+                    color="white"
+                    text-color="black"
+                    :label="`${energyViz.punchMagnitude.value.toFixed(1)}G`"
+                  />
+                </div>
+              </q-linear-progress>
             </div>
           </div>
         </q-card-section>
@@ -49,6 +81,7 @@
               size="25px"
               color="orange"
               class="q-mt-sm"
+              :instant-feedback="true"
             >
               <div class="absolute-full flex flex-center">
                 <q-badge
@@ -68,6 +101,7 @@
               size="25px"
               color="red"
               class="q-mt-sm"
+              :instant-feedback="true"
             >
               <div class="absolute-full flex flex-center">
                 <q-badge
@@ -93,7 +127,7 @@
               <q-card flat bordered>
                 <q-card-section>
                   <div class="text-caption">Punch Force</div>
-                  <div class="text-h6">{{ (metrics.punchForce * 100).toFixed(0) }}%</div>
+                  <div class="text-h6">{{ metrics.punchMagnitude.toFixed(1) }}G</div>
                 </q-card-section>
               </q-card>
             </div>
@@ -334,7 +368,6 @@ import { ledControllerService, ControllerType, type WLEDController } from 'src/s
 import { speakerService } from 'src/services/speaker';
 import { useStateMachine } from 'src/composables/use-state-machine';
 import { useEnergyVisualization } from 'src/composables/use-energy-visualization';
-import EnergyBar from 'src/components/EnergyBar.vue';
 import MusicPlayer from 'src/components/MusicPlayer.vue';
 import type { BleDevice } from '@capacitor-community/bluetooth-le';
 import { eventBus, Events } from 'src/services/event-bus';
@@ -426,6 +459,12 @@ const suspendResumeButtonColor = computed(() => {
 const suspendResumeButtonIcon = computed(() => {
   return stateMachine.currentState === ArenaState.SUSPENDED ? 'play_arrow' : 'pause';
 });
+
+function getIntensityColor(value: number): string {
+  if (value < 0.3) return 'green';
+  if (value < 0.6) return 'orange';
+  return 'red';
+}
 
 async function startSensors() {
   let microphoneStarted = false;
