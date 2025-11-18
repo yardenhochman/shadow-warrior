@@ -738,11 +738,11 @@ function saveSettings() {
 
     console.log('Attempting to save settings...');
     console.log('Settings object:', settings);
-    
+
     const settingsJson = JSON.stringify(settings);
     console.log('Settings JSON length:', settingsJson.length, 'bytes');
     console.log('Settings JSON preview:', settingsJson.substring(0, 200));
-    
+
     localStorage.setItem('shadow-warrior-settings', settingsJson);
     console.log('Settings saved successfully to localStorage');
 
@@ -760,7 +760,7 @@ function saveSettings() {
     console.error('Failed to save settings - Error:', error);
     console.error('Failed to save settings - Error string:', String(error));
     console.error('Failed to save settings - Error JSON:', JSON.stringify(error, Object.getOwnPropertyNames(error)));
-    
+
     let errorMessage = 'Unknown error';
     if (error instanceof Error) {
       errorMessage = error.message;
@@ -769,7 +769,7 @@ function saveSettings() {
     } else {
       errorMessage = String(error);
     }
-    
+
     try {
       $q.notify({
         type: 'negative',
