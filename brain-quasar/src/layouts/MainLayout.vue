@@ -51,15 +51,20 @@
       </q-list>
     </q-drawer>
 
-    <q-page-container style="padding-bottom: env(safe-area-inset-bottom); padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right);">
-      <router-view />
-    </q-page-container>
+    <div class="layout-wrapper">
+      <q-page-container style="padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right);">
+        <router-view />
+      </q-page-container>
+    </div>
+
+    <ConsolePanel />
   </q-layout>
 </template>
 
 <script setup lang="ts">
 import { ref, computed } from 'vue';
 import { useMonitorModeStore } from 'src/stores/monitor-mode';
+import ConsolePanel from 'src/components/ConsolePanel.vue';
 import packageJson from '../../package.json';
 
 const leftDrawerOpen = ref(false);
@@ -80,3 +85,16 @@ function toggleLeftDrawer() {
   leftDrawerOpen.value = !leftDrawerOpen.value;
 }
 </script>
+
+<style scoped>
+.layout-wrapper {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+:deep(.q-page-container) {
+  flex: 1;
+  overflow-y: auto;
+}
+</style>
