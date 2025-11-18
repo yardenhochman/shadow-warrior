@@ -261,6 +261,60 @@
           </div>
 
           <div class="q-mt-md">
+            <div class="text-subtitle2">Gain Multiplier</div>
+            <q-slider
+              v-model="micConfig.gain"
+              :min="0.1"
+              :max="10.0"
+              :step="0.1"
+              label
+              label-always
+              color="primary"
+              @update:model-value="updateMicConfig"
+            />
+            <div class="text-caption text-grey q-mt-sm">
+              Amplify microphone input. Default 1.5x. Lower for loud environments, higher for quiet voices.
+            </div>
+          </div>
+
+          <div class="q-mt-md">
+            <div class="text-subtitle2">Audio Processing</div>
+            <div class="text-caption text-grey q-mb-sm">
+              Changes require microphone restart to apply
+            </div>
+
+            <q-toggle
+              v-model="micConfig.echoCancellation"
+              label="Echo Cancellation"
+              color="primary"
+              @update:model-value="updateMicConfig"
+            />
+            <div class="text-caption text-grey q-ml-md q-mb-sm">
+              Remove echo feedback (disable for raw input)
+            </div>
+
+            <q-toggle
+              v-model="micConfig.noiseSuppression"
+              label="Noise Suppression"
+              color="primary"
+              @update:model-value="updateMicConfig"
+            />
+            <div class="text-caption text-grey q-ml-md q-mb-sm">
+              Reduce background noise (may affect shout detection)
+            </div>
+
+            <q-toggle
+              v-model="micConfig.autoGainControl"
+              label="Auto Gain Control"
+              color="primary"
+              @update:model-value="updateMicConfig"
+            />
+            <div class="text-caption text-grey q-ml-md">
+              Automatic volume leveling (disable for manual gain control)
+            </div>
+          </div>
+
+          <div class="q-mt-md">
             <div class="row items-center">
               <div class="text-subtitle2">Enable Band-pass Filter (150-800 Hz)</div>
               <q-icon name="help_outline" class="q-ml-sm cursor-help">
@@ -538,6 +592,10 @@ const micConfig = ref({
   threshold: 0.3,
   smoothingFactor: 0.8,
   updateIntervalMs: 50,
+  gain: 1.5,
+  echoCancellation: false,
+  noiseSuppression: false,
+  autoGainControl: false,
   filterEnabled: true,
   filterLowHz: 150,
   filterHighHz: 800,
@@ -711,6 +769,10 @@ async function resetSettings() {
     threshold: 0.3,
     smoothingFactor: 0.8,
     updateIntervalMs: 50,
+    gain: 1.5,
+    echoCancellation: false,
+    noiseSuppression: false,
+    autoGainControl: false,
     filterEnabled: true,
     filterLowHz: 150,
     filterHighHz: 800,
