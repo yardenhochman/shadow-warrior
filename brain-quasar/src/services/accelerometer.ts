@@ -18,11 +18,11 @@ class AccelerometerService {
   private config: PunchDetectionConfig = {
     threshold: 2.0, // 2G threshold
     cooldownMs: 200, // 200ms between punches
-    baselineAlpha: 0.01, // Smoothing factor for baseline drift correction
+    baselineAlpha: 0.005, // Very slow smoothing factor for baseline drift correction
     baselineX: 0, // Initial X baseline
     baselineY: 0, // Initial Y baseline
     baselineZ: 9.81, // Initial Z baseline (gravity)
-    accelAlpha: 0.3, // EWMA smoothing factor for accelerometer values
+    accelAlpha: 0.4, // Moderate smoothing factor for accelerometer trend detection
     enabled: false,
   };
 

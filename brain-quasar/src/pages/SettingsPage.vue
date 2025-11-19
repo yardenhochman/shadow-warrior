@@ -212,6 +212,23 @@
           </div>
 
           <div class="q-mt-md">
+            <div class="text-subtitle2">Baseline Smoothing Alpha</div>
+            <q-slider
+              v-model="accelConfig.baselineAlpha"
+              :min="0.001"
+              :max="0.1"
+              :step="0.001"
+              label
+              label-always
+              color="primary"
+              @update:model-value="updateAccelConfig"
+            />
+            <div class="text-caption text-grey q-mt-sm">
+              EWMA factor for baseline drift correction. Very slow adaptation (0.005) prevents gradual drift from device movement while maintaining long-term stability.
+            </div>
+          </div>
+
+          <div class="q-mt-md">
             <div class="text-subtitle2">Accelerometer Smoothing Alpha</div>
             <q-slider
               v-model="accelConfig.accelAlpha"
@@ -224,7 +241,7 @@
               @update:model-value="updateAccelConfig"
             />
             <div class="text-caption text-grey q-mt-sm">
-              EWMA smoothing factor for accelerometer values. Lower = more smoothing, higher = more responsive to changes.
+              EWMA factor for accelerometer trend detection. Moderate smoothing (0.4) reduces noise while maintaining responsiveness for punch detection.
             </div>
           </div>
 
@@ -876,11 +893,11 @@ async function resetSettings() {
   accelConfig.value = {
     threshold: 2.0,
     cooldownMs: 200,
-    baselineAlpha: 0.01,
+    baselineAlpha: 0.005,
     baselineX: 0,
     baselineY: 0,
     baselineZ: 9.81,
-    accelAlpha: 0.3,
+    accelAlpha: 0.4,
   };
 
   micConfig.value = {
