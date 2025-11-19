@@ -43,13 +43,13 @@ public class AccelerometerService extends Service implements SensorEventListener
     private float baselineX = 0f;
     private float baselineY = 0f;
     private float baselineZ = 9.81f;
-    private float baselineAlpha = 0.01f; // Smoothing factor
+    private float baselineAlpha = 0.005f; // Very slow smoothing factor for baseline drift correction
     
     // EWMA smoothing for accelerometer values (trend detection)
     private float smoothedX = 0f;
     private float smoothedY = 0f;
     private float smoothedZ = 0f;
-    private float accelAlpha = 0.3f; // Smoothing factor for accelerometer values
+    private float accelAlpha = 0.4f; // Moderate smoothing factor for accelerometer trend detection
     private boolean initialized = false; // Track if smoothed values are initialized
     
     // Plugin instance for sending events
@@ -98,11 +98,11 @@ public class AccelerometerService extends Service implements SensorEventListener
         if (intent != null) {
             threshold = intent.getFloatExtra("threshold", DEFAULT_THRESHOLD);
             cooldownMs = intent.getLongExtra("cooldownMs", DEFAULT_COOLDOWN_MS);
-            baselineAlpha = intent.getFloatExtra("baselineAlpha", 0.01f);
+            baselineAlpha = intent.getFloatExtra("baselineAlpha", 0.005f);
             baselineX = intent.getFloatExtra("baselineX", 0.0f);
             baselineY = intent.getFloatExtra("baselineY", 0.0f);
             baselineZ = intent.getFloatExtra("baselineZ", 9.81f);
-            accelAlpha = intent.getFloatExtra("accelAlpha", 0.3f);
+            accelAlpha = intent.getFloatExtra("accelAlpha", 0.4f);
             android.util.Log.d("AccelerometerService", 
                 "Config - threshold: " + threshold + "G, cooldown: " + cooldownMs + "ms, baselineAlpha: " + baselineAlpha + ", accelAlpha: " + accelAlpha);
         }

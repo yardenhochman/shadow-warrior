@@ -31,11 +31,11 @@ public class AccelerometerPlugin extends Plugin {
         // Get configuration parameters
         float threshold = call.getFloat("threshold", 2.0f);
         int cooldownMs = call.getInt("cooldownMs", 200);
-        float baselineAlpha = call.getFloat("baselineAlpha", 0.01f);
+        float baselineAlpha = call.getFloat("baselineAlpha", 0.005f);
         float baselineX = call.getFloat("baselineX", 0.0f);
         float baselineY = call.getFloat("baselineY", 0.0f);
         float baselineZ = call.getFloat("baselineZ", 9.81f);
-        float accelAlpha = call.getFloat("accelAlpha", 0.3f);
+        float accelAlpha = call.getFloat("accelAlpha", 0.4f);
         
         // Start the native foreground service
         Intent serviceIntent = new Intent(context, AccelerometerService.class);
