@@ -263,49 +263,30 @@
             >
               <q-item-section avatar>
                 <q-icon
-                  :name="controller.type === ControllerType.WLED ? 'wifi' : 'bluetooth'"
-                  :color="ledControllerService.isControllerConnected(controller.id) ? 'positive' : 'grey'"
+                  name="wifi"
+                  color="positive"
                   size="sm"
                 />
               </q-item-section>
               <q-item-section>
                 <q-item-label class="text-body2">
-                  {{ controller.type === ControllerType.BLE
-                    ? ((controller.device as BleDevice).name || 'BLE Device')
-                    : ((controller.device as WLEDController).name || `WLED Controller`)
-                  }}
+                  {{ controller.device.name || 'WLED Controller' }}
                 </q-item-label>
                 <q-item-label caption class="text-caption">
-                  {{ controller.type === ControllerType.BLE
-                    ? (controller.device as BleDevice).deviceId.substring(0, 8) + '...'
-                    : (controller.device as WLEDController).ip
-                  }}
+                  {{ controller.device.ip }}
                 </q-item-label>
               </q-item-section>
               <q-item-section side>
-                <div class="row q-gutter-xs">
-                  <q-btn
-                    :icon="ledControllerService.isControllerConnected(controller.id) ? 'power_off' : 'power'"
-                    :color="ledControllerService.isControllerConnected(controller.id) ? 'negative' : 'positive'"
-                    size="sm"
-                    round
-                    flat
-                    @click="ledControllerService.isControllerConnected(controller.id) ? disconnectController(controller.id) : connectController(controller.id)"
-                    :loading="connectingController === controller.id || disconnectingController === controller.id"
-                  >
-                    <q-tooltip>{{ ledControllerService.isControllerConnected(controller.id) ? 'Disconnect' : 'Connect' }}</q-tooltip>
-                  </q-btn>
-                  <q-btn
-                    icon="delete"
-                    color="negative"
-                    size="sm"
-                    round
-                    flat
-                    @click="removeController(controller.id)"
-                  >
-                    <q-tooltip>Remove Controller</q-tooltip>
-                  </q-btn>
-                </div>
+                <q-btn
+                  icon="delete"
+                  color="negative"
+                  size="sm"
+                  round
+                  flat
+                  @click="removeController(controller.id)"
+                >
+                  <q-tooltip>Remove Controller</q-tooltip>
+                </q-btn>
               </q-item-section>
             </q-item>
           </q-list>
@@ -364,12 +345,11 @@ import { useStateMachineStore } from 'src/stores/state-machine';
 import { ArenaState } from 'src/types/state-machine';
 import { accelerometerService } from 'src/services/accelerometer';
 import { microphoneService } from 'src/services/microphone';
-import { ledControllerService, ControllerType, type WLEDController } from 'src/services/led-controller';
+import { ledControllerService } from 'src/services/led-controller';
 import { speakerService } from 'src/services/speaker';
 import { useStateMachine } from 'src/composables/use-state-machine';
 import { useEnergyVisualization } from 'src/composables/use-energy-visualization';
 import MusicPlayer from 'src/components/MusicPlayer.vue';
-import type { BleDevice } from '@capacitor-community/bluetooth-le';
 import { eventBus, Events } from 'src/services/event-bus';
 
 const stateMachine = useStateMachineStore();
@@ -377,26 +357,12 @@ useStateMachine();
 const energyViz = useEnergyVisualization();
 
 const sensorsRunning = ref(false);
-const ledConnected = ref(false);
 const cooldownInterval = ref<number | null>(null);
-const disconnectingController = ref<string | null>(null);
-const connectingController = ref<string | null>(null);
-const connectionCheckInterval = ref<number | null>(null);
 const newControllerAddress = ref('');
 const addingController = ref(false);
 const controllerListVersion = ref(0); // Force reactivity trigger
 
 // Event handlers for cleanup
-const controllerConnectedHandler = () => {
-  ledConnected.value = ledControllerService.getConnectedControllers().length > 0;
-  controllerListVersion.value++; // Force UI update
-};
-
-const controllerDisconnectedHandler = () => {
-  ledConnected.value = ledControllerService.getConnectedControllers().length > 0;
-  controllerListVersion.value++; // Force UI update
-};
-
 const controllerAddedHandler = () => {
   console.log('Controller added event received, forcing UI update');
   controllerListVersion.value++; // Trigger reactivity
@@ -443,7 +409,7 @@ const allControllers = computed(() => {
 const connectedCount = computed(() => {
   // Use controllerListVersion to force reactivity
   void controllerListVersion.value;
-  const count = ledControllerService.getConnectedControllers().length;
+  const count = allControllers.value.length;
   console.log('connectedCount computed:', count);
   return count;
 });
@@ -536,36 +502,18 @@ function addControllerByAddress() {
   try {
     // Add controller by address (IP for WLED)
     const controllerId = ledControllerService.addWledController(newControllerAddress.value);
-    console.log('Added controller at', newControllerAddress.value);
+    console.log('Added controller at', newControllerAddress.value, 'with ID:', controllerId);
 
     // Clear the input
     newControllerAddress.value = '';
-
-    // Automatically try to connect to the newly added controller
-    connectController(controllerId).catch(error => {
-      console.error('Failed to auto-connect to new controller:', error);
-    });
   } catch (error) {
     console.error('Failed to add controller:', error);
 
     // Check if it's an "already added" error
     if (error instanceof Error && error.message.includes('already added')) {
-      // Extract IP from the input to find the existing controller
+      // Extract IP from the input
       const cleanIp = newControllerAddress.value.replace(/^https?:\/\//, '');
-      const existingControllerId = `wled-${cleanIp}`;
-
-      // Check if it's connected
-      const isConnected = ledControllerService.isControllerConnected(existingControllerId);
-
-      if (isConnected) {
-        alert(`Controller at ${cleanIp} is already added and connected!`);
-      } else {
-        // Try to connect to the existing controller
-        alert(`Controller at ${cleanIp} is already configured. Attempting to connect...`);
-        connectController(existingControllerId).catch(connectError => {
-          console.error('Failed to connect to existing controller:', connectError);
-        });
-      }
+      alert(`Controller at ${cleanIp} is already added!`);
 
       // Clear the input
       newControllerAddress.value = '';
@@ -594,41 +542,10 @@ function toggleSuspendResume() {
   }
 }
 
-async function disconnectController(controllerId: string) {
-  disconnectingController.value = controllerId;
+function removeController(controllerId: string) {
   try {
-    await ledControllerService.disconnect(controllerId);
-    ledConnected.value = ledControllerService.getConnectedControllers().length > 0;
-  } catch (error) {
-    console.error('Failed to disconnect controller:', error);
-    alert(`Failed to disconnect controller: ${error instanceof Error ? error.message : String(error)}`);
-  } finally {
-    disconnectingController.value = null;
-  }
-}
-
-async function connectController(controllerId: string) {
-  connectingController.value = controllerId;
-  try {
-    await ledControllerService.connect(controllerId);
-    ledConnected.value = ledControllerService.getConnectedControllers().length > 0;
-  } catch (error) {
-    console.error('Failed to connect controller:', error);
-    alert(`Failed to connect controller: ${error instanceof Error ? error.message : String(error)}`);
-  } finally {
-    connectingController.value = null;
-  }
-}
-
-async function removeController(controllerId: string) {
-  try {
-    // Disconnect if connected
-    if (ledControllerService.isControllerConnected(controllerId)) {
-      await ledControllerService.disconnect(controllerId);
-    }
     // Remove the controller
-    await ledControllerService.removeController(controllerId);
-    ledConnected.value = ledControllerService.getConnectedControllers().length > 0;
+    ledControllerService.removeController(controllerId);
   } catch (error) {
     console.error('Failed to remove controller:', error);
     alert(`Failed to remove controller: ${error instanceof Error ? error.message : String(error)}`);
@@ -638,34 +555,13 @@ async function removeController(controllerId: string) {
 onMounted(async () => {
   console.log('DashboardPage onMounted - initializing services');
 
-  // Listen for controller connection events BEFORE initializing
-  // (initialize will load saved controllers and emit CONTROLLER_ADDED events)
-  eventBus.on(Events.CONTROLLER_CONNECTED, controllerConnectedHandler);
-  eventBus.on(Events.CONTROLLER_DISCONNECTED, controllerDisconnectedHandler);
+  // Listen for controller events
   eventBus.on(Events.CONTROLLER_ADDED, controllerAddedHandler);
   eventBus.on(Events.CONTROLLER_REMOVED, controllerRemovedHandler);
 
-  // Initialize services (this will load saved controllers and trigger CONTROLLER_ADDED events)
-  await ledControllerService.initialize();
+  // Initialize services (this will load saved controllers)
+  ledControllerService.initialize();
   console.log('LED controller service initialized');
-
-  ledConnected.value = ledControllerService.getConnectedControllers().length > 0;
-  console.log('Initial connected controllers:', ledConnected.value);
-
-  // Automatically connect to all pre-configured controllers
-  const allControllers = ledControllerService.getControllers();
-  console.log('Pre-configured controllers found:', allControllers.length);
-  if (allControllers.length > 0) {
-    console.log('Attempting to connect to', allControllers.length, 'pre-configured controllers...');
-    // Connect to all controllers in parallel
-    await Promise.allSettled(
-      allControllers.map(controller => ledControllerService.connect(controller.id))
-    );
-    ledConnected.value = ledControllerService.getConnectedControllers().length > 0;
-    console.log('After auto-connect, connected controllers:', ledConnected.value);
-  } else {
-    console.log('No pre-configured controllers found, skipping auto-connect');
-  }
 
   // Preload audio
   await speakerService.preloadAll();
@@ -677,24 +573,14 @@ onMounted(async () => {
       stateMachine.$patch({});
     }
   }, 1000);
-
-  // Update connection status periodically
-  connectionCheckInterval.value = window.setInterval(() => {
-    ledConnected.value = ledControllerService.getConnectedControllers().length > 0;
-  }, 2000);
 });
 
 onUnmounted(() => {
   if (cooldownInterval.value !== null) {
     clearInterval(cooldownInterval.value);
   }
-  if (connectionCheckInterval.value !== null) {
-    clearInterval(connectionCheckInterval.value);
-  }
 
   // Clean up event listeners
-  eventBus.off(Events.CONTROLLER_CONNECTED, controllerConnectedHandler);
-  eventBus.off(Events.CONTROLLER_DISCONNECTED, controllerDisconnectedHandler);
   eventBus.off(Events.CONTROLLER_ADDED, controllerAddedHandler);
   eventBus.off(Events.CONTROLLER_REMOVED, controllerRemovedHandler);
 });

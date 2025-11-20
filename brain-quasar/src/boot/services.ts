@@ -4,7 +4,6 @@ import { ledControllerService } from 'src/services/led-controller';
 import { speakerService } from 'src/services/speaker';
 import { uvLightService } from 'src/services/uv-light';
 import { scheduleService } from 'src/services/schedule';
-import { arenaWebSocketServer } from 'src/services/websocket-server';
 import { bleArenaPeripheral } from 'src/services/ble-arena-peripheral';
 
 // Helper function to add timeout to promises
@@ -29,10 +28,11 @@ export default boot(async () => {
     const initResults = await Promise.allSettled([
       // LED controller with 3 second timeout (network discovery can be slow)
       withTimeout(
-        (async () => {
+        (() => {
           console.log('[Boot] Initializing LED controller...');
-          await ledControllerService.initialize();
+          ledControllerService.initialize();
           console.log('LED controller service initialized');
+          return Promise.resolve();
         })(),
         3000,
         'LED controller'
@@ -64,26 +64,6 @@ export default boot(async () => {
         console.log('Schedule service initialized');
       })(),
 
-      // WebSocket server with 2 second timeout
-      withTimeout(
-        (async () => {
-          const wsServerEnabled =
-            localStorage.getItem('shadow-warrior-websocket-server-enabled') !== 'false';
-          console.log('[WebSocket Server] Enabled flag:', wsServerEnabled);
-          if (wsServerEnabled) {
-            arenaWebSocketServer.initialize();
-            console.log('[WebSocket Server] Starting server...');
-            await arenaWebSocketServer.start();
-            console.log('[WebSocket Server] Initialized and started successfully');
-          } else {
-            arenaWebSocketServer.initialize();
-            console.log('[WebSocket Server] Initialized but not started');
-          }
-        })(),
-        2000,
-        'WebSocket server'
-      ),
-
       // BLE Arena Peripheral (critical - no timeout)
       (async () => {
         const storedValue = localStorage.getItem('shadow-warrior-ble-peripheral-enabled');
@@ -106,7 +86,6 @@ export default boot(async () => {
         'Speaker',
         'UV light',
         'Schedule',
-        'WebSocket server',
         'BLE Peripheral',
       ][index];
 

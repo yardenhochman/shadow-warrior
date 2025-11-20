@@ -1,92 +1,32 @@
-// LED controller service for BLE/WiFi communication
-import { BleClient, type BleDevice } from '@capacitor-community/bluetooth-le';
-import { Capacitor } from '@capacitor/core';
+// LED controller service for WLED WiFi communication
 import { ZeroConf } from 'capacitor-zeroconf';
-import { eventBus, Events } from './event-bus';
+import { eventBus, Events, type LEDCommandPayload } from './event-bus';
+import { RealtimeEffectService, RealtimeEffectMode } from './effects/realtime-effect-service';
+import { ArenaState } from 'src/types/state-machine';
 
-// LED modes matching the Rust command handler
-export enum LEDMode {
-  IDLE = 'idle',
-  ENERGY_BAR = 'energy_bar',
-  ENERGY_PULSE = 'energy_pulse',
-  BREATHING = 'breathing',
-  ELECTRICITY = 'electricity',
-}
-
-// Controller types
-export enum ControllerType {
-  BLE = 'ble',
-  WLED = 'wled',
-}
-
-interface LEDCommand {
-  mode: LEDMode | string; // Accept both enum and string for flexibility
-  percentage?: number; // 0-100 for energy_bar
-}
-
-interface LEDControllerConfig {
-  deviceId?: string;
-  serviceUUID: string;
-  characteristicUUID: string; // RX characteristic for writing commands
-  autoReconnect: boolean;
-}
-
-// WLED specific interfaces
+// WLED controller interface
 export interface WLEDController {
   ip: string;
-  ws: WebSocket | null;
-  connected: boolean;
   name?: string;
 }
 
-interface WLEDState {
-  on: boolean;
-  bri: number; // brightness 0-255
-  seg: WLEDSegment[];
-}
-
-interface WLEDSegment {
-  fx: number; // effect ID
-  sx?: number; // speed
-  ix?: number; // intensity
-  c1?: number; // custom parameter 1
-  c2?: number; // custom parameter 2
-  c3?: number; // custom parameter 3
-  start?: number;
-  stop?: number;
-  pal?: number;
-}
-
-interface LEDControllerConfig {
-  deviceId?: string;
-  serviceUUID: string;
-  characteristicUUID: string; // RX characteristic for writing commands
-  autoReconnect: boolean;
-}
-
 class LEDControllerService {
-  private config: LEDControllerConfig = {
-    serviceUUID: 'd08d81bb-7270-45de-a475-5b52feb820b6', // Shadow Warrior service UUID
-    characteristicUUID: '8f97424f-8c2f-4a86-9e53-92059ccb1559', // RX characteristic for writing commands
-    autoReconnect: true,
-  };
-
-  private controllers: Map<string, { type: ControllerType; device: BleDevice | WLEDController }> = new Map();
-  private currentMode: LEDMode = LEDMode.IDLE;
+  private controllers: Map<string, WLEDController> = new Map();
   private readonly STORAGE_KEY = 'shadow-warrior-led-controllers';
+  private realtimeEffectService: RealtimeEffectService | null = null;
 
-  async initialize(): Promise<void> {
+  initialize(): void {
     try {
-      await BleClient.initialize();
-      console.log('LED controller BLE client initialized');
+      console.log('LED controller service initialized');
 
       // Load saved controllers from localStorage
       this.loadSavedControllers();
 
       // Listen for LED commands from event bus
-      eventBus.on(Events.LED_COMMAND, (command: LEDCommand) => {
-        void this.handleLEDCommand(command);
+      eventBus.on(Events.LED_COMMAND, (payload: LEDCommandPayload) => {
+        void this.handleLEDCommand(payload);
       });
+
     } catch (error) {
       console.error('Failed to initialize LED controller:', error);
       throw error;
@@ -105,42 +45,32 @@ class LEDControllerService {
 
       const savedControllers = JSON.parse(saved) as Array<{
         id: string;
-        type: ControllerType;
-        ip?: string;
+        ip: string;
         name?: string;
-        deviceId?: string;
-        deviceName?: string;
       }>;
 
       console.log('Loading saved controllers:', savedControllers.length, 'controllers from storage');
 
       for (const saved of savedControllers) {
-        if (saved.type === ControllerType.WLED && saved.ip) {
+        if (saved.ip) {
           // Restore WLED controller
           const wledController: WLEDController = {
             ip: saved.ip,
-            ws: null,
-            connected: false,
             name: saved.name || `WLED ${saved.ip}`,
           };
-          this.controllers.set(saved.id, { type: ControllerType.WLED, device: wledController });
+          this.controllers.set(saved.id, wledController);
           console.log('Restored WLED controller:', saved.id);
-        } else if (saved.type === ControllerType.BLE && saved.deviceId) {
-          // Restore BLE controller reference (will need to reconnect)
-          const bleDevice: BleDevice = {
-            deviceId: saved.deviceId,
-            name: saved.deviceName || 'Unknown BLE Device',
-          };
-          this.controllers.set(saved.id, { type: ControllerType.BLE, device: bleDevice });
-          console.log('Restored BLE controller reference:', saved.id);
         }
       }
 
       console.log('Restored %d controllers from storage', this.controllers.size);
 
+      // Create realtime effect service with restored controllers
+      this.initializeRealtimeEffectService();
+
       // Emit event for each restored controller to trigger UI updates
-      for (const [id, { type }] of this.controllers.entries()) {
-        eventBus.emit(Events.CONTROLLER_ADDED, { id, type });
+      for (const id of this.controllers.keys()) {
+        eventBus.emit(Events.CONTROLLER_ADDED, { id, type: 'wled' });
       }
     } catch (error) {
       console.error('Failed to load saved controllers:', error);
@@ -150,25 +80,11 @@ class LEDControllerService {
   // Save controllers to localStorage
   private saveControllers(): void {
     try {
-      const toSave = Array.from(this.controllers.entries()).map(([id, { type, device }]) => {
-        if (type === ControllerType.WLED) {
-          const wled = device as WLEDController;
-          return {
-            id,
-            type,
-            ip: wled.ip,
-            name: wled.name,
-          };
-        } else {
-          const ble = device as BleDevice;
-          return {
-            id,
-            type,
-            deviceId: ble.deviceId,
-            deviceName: ble.name,
-          };
-        }
-      });
+      const toSave = Array.from(this.controllers.entries()).map(([id, wled]) => ({
+        id,
+        ip: wled.ip,
+        name: wled.name,
+      }));
 
       localStorage.setItem(this.STORAGE_KEY, JSON.stringify(toSave));
       console.log('Saved %d controllers to storage', toSave.length);
@@ -177,31 +93,11 @@ class LEDControllerService {
     }
   }
 
-  async scan(timeoutMs = 8000): Promise<{ type: ControllerType; device: BleDevice | WLEDController }[]> {
-    const controllers: { type: ControllerType; device: BleDevice | WLEDController }[] = [];
+  async scan(timeoutMs = 8000): Promise<WLEDController[]> {
+    const controllers: WLEDController[] = [];
 
     try {
-      // Initialize BLE client first
-      // For Android 12+ (API 31+): androidNeverForLocation means we don't need location
-      // For Android 11 and below (API 30-): Location permission AND location services must be enabled
-      console.log('Initializing BLE client...');
-      await BleClient.initialize({ androidNeverForLocation: true });
-
-      console.log('Starting BLE scan...');
-      console.log('Note: On Android 11 and below, ensure Location Services are enabled in Settings');
-
-      await BleClient.requestLEScan(
-        {
-          namePrefix: 'ShadowLED',
-          allowDuplicates: true,
-        },
-        (result) => {
-          controllers.push({ type: ControllerType.BLE, device: result.device });
-          console.log('Found BLE LED controller:', result.device.name);
-        }
-      );
-
-      // Start mDNS discovery for WLED controllers (optional, may not work on all networks)
+      // Start mDNS discovery for WLED controllers
       console.log('Starting mDNS scan for WLED controllers...');
       console.log('Note: mDNS discovery may not work on all networks. Use manual IP entry if needed.');
 
@@ -248,12 +144,10 @@ class LEDControllerService {
 
               const wledController: WLEDController = {
                 ip: wledIP,
-                ws: null,
-                connected: false,
                 name: service.name || `WLED-${wledIP}`,
               };
 
-              controllers.push({ type: ControllerType.WLED, device: wledController });
+              controllers.push(wledController);
               console.log('✓ Added WLED controller:', wledController.name, 'at', wledController.ip);
             } else if (!wledIP) {
               console.warn('WLED service found but no IP address available:', service.name);
@@ -273,9 +167,6 @@ class LEDControllerService {
       console.log(`Waiting ${timeoutMs}ms for device responses...`);
       await new Promise((resolve) => setTimeout(resolve, timeoutMs));
 
-      console.log('Stopping BLE scan...');
-      await BleClient.stopLEScan();
-
       if (mdnsWatching) {
         try {
           console.log(`Unwatching mDNS... (found ${discoveredWledIPs.size} unique WLED IPs)`);
@@ -286,46 +177,23 @@ class LEDControllerService {
         }
       }
 
-      console.log('Scan complete, found %d controllers', controllers.length);
-      console.log('- BLE controllers:', controllers.filter(c => c.type === ControllerType.BLE).length);
-      console.log('- WLED controllers:', controllers.filter(c => c.type === ControllerType.WLED).length);
+      console.log('Scan complete, found %d WLED controllers', controllers.length);
 
       return controllers;
     } catch (error) {
-      console.error('Failed to scan for LED controllers:', error);
-
-      // Provide helpful error message for Android 11 and below
-      if (Capacitor.getPlatform() === 'android') {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        const enhancedError = new Error(
-          'Bluetooth scan failed. On Android 11 and below, make sure:\n' +
-          '1. Location permission is granted\n' +
-          '2. Location Services are turned ON in Settings\n' +
-          '3. Bluetooth is enabled\n\n' +
-          `Original error: ${errorMessage}`
-        );
-        throw enhancedError;
-      }
-
+      console.error('Failed to scan for WLED controllers:', error);
       throw error;
     }
   }
 
   // Add discovered controllers to the service
-  addDiscoveredControllers(discoveredControllers: { type: ControllerType; device: BleDevice | WLEDController }[]): void {
+  addDiscoveredControllers(discoveredControllers: WLEDController[]): void {
     let added = false;
-    for (const { type, device } of discoveredControllers) {
-      let controllerId: string;
-      if (type === ControllerType.BLE) {
-        const bleDevice = device as BleDevice;
-        controllerId = `ble-${bleDevice.deviceId}`;
-      } else {
-        const wledDevice = device as WLEDController;
-        controllerId = `wled-${wledDevice.ip}`;
-      }
+    for (const device of discoveredControllers) {
+      const controllerId = `wled-${device.ip}`;
 
       if (!this.controllers.has(controllerId)) {
-        this.controllers.set(controllerId, { type, device });
+        this.controllers.set(controllerId, device);
         console.log('Added discovered controller:', controllerId);
         added = true;
       }
@@ -334,6 +202,7 @@ class LEDControllerService {
     // Save to localStorage if any controllers were added
     if (added) {
       this.saveControllers();
+      this.initializeRealtimeEffectService();
     }
   }
 
@@ -349,321 +218,236 @@ class LEDControllerService {
 
     const wledController: WLEDController = {
       ip: cleanIp,
-      ws: null,
-      connected: false,
       name: `WLED ${cleanIp}`,
     };
 
-    this.controllers.set(controllerId, { type: ControllerType.WLED, device: wledController });
+    this.controllers.set(controllerId, wledController);
     console.log('Added manual WLED controller:', controllerId);
 
     // Save to localStorage
     this.saveControllers();
 
+    // Reinitialize effect service with new controller
+    this.initializeRealtimeEffectService();
+
     // Emit event for UI updates
-    eventBus.emit(Events.CONTROLLER_ADDED, { id: controllerId, type: ControllerType.WLED });
+    eventBus.emit(Events.CONTROLLER_ADDED, { id: controllerId, type: 'wled' });
 
     return controllerId;
   }
 
-  async connect(controllerId: string): Promise<void> {
-    const controller = this.controllers.get(controllerId);
-    if (!controller) {
-      throw new Error(`Controller ${controllerId} not found`);
-    }
 
-    try {
-      if (controller.type === ControllerType.BLE) {
-        const bleDevice = controller.device as BleDevice;
-        await BleClient.connect(bleDevice.deviceId, () => {
-          console.log('BLE LED controller disconnected:', bleDevice.deviceId);
-          eventBus.emit(Events.CONTROLLER_DISCONNECTED, { id: controllerId, type: ControllerType.BLE });
 
-          // Auto-reconnect if enabled
-          if (this.config.autoReconnect) {
-            setTimeout(() => {
-              void this.connect(controllerId);
-            }, 5000);
-          }
-        });
+  private async handleLEDCommand(payload: LEDCommandPayload): Promise<void> {
+    console.log('LED command received:', payload.arenaState, 'trigger:', payload.trigger, 'controllers:', this.controllers.size);
 
-        console.log('Connected to BLE LED controller:', bleDevice.deviceId);
-        eventBus.emit(Events.CONTROLLER_CONNECTED, { id: controllerId, type: ControllerType.BLE });
+    // Send command to all controllers (not just connected ones, since UDP works independently)
+    const commands = Array.from(this.controllers.entries())
+      .map(([controllerId, controller]) => {
+        console.log(`Sending LED command to controller ${controllerId} (${controller.ip})`);
+        return this.sendCommandToController(controllerId, payload);
+      });
 
-      } else if (controller.type === ControllerType.WLED) {
-        const wledDevice = controller.device as WLEDController;
-        // Always use ws:// for WLED (it doesn't support SSL)
-        // WLED typically runs on port 80 by default
-        const wsUrl = `ws://${wledDevice.ip}:80/ws`;
-        console.log('Attempting to connect to WLED at:', wsUrl);
-
-        wledDevice.ws = new WebSocket(wsUrl);
-
-        await new Promise<void>((resolve, reject) => {
-          if (!wledDevice.ws) return reject(new Error('WebSocket not created'));
-
-          const connectionTimeout = setTimeout(() => {
-            wledDevice.ws?.close();
-            reject(new Error(`Connection timeout to WLED at ${wledDevice.ip}`));
-          }, 5000); // 5 second timeout
-
-          wledDevice.ws.onopen = () => {
-            clearTimeout(connectionTimeout);
-            wledDevice.connected = true;
-            console.log('Connected to WLED controller:', wledDevice.ip);
-            eventBus.emit(Events.CONTROLLER_CONNECTED, { id: controllerId, type: ControllerType.WLED });
-            resolve();
-          };
-
-          wledDevice.ws.onerror = (error) => {
-            clearTimeout(connectionTimeout);
-            console.error('WLED WebSocket error:', error);
-            reject(new Error(`Failed to connect to WLED at ${wledDevice.ip}. Make sure WLED is running and accessible.`));
-          };
-
-          wledDevice.ws.onclose = (event) => {
-            clearTimeout(connectionTimeout);
-            console.log('WLED controller disconnected:', wledDevice.ip, 'Code:', event.code, 'Reason:', event.reason);
-            wledDevice.connected = false;
-            wledDevice.ws = null;
-            eventBus.emit(Events.CONTROLLER_DISCONNECTED, { id: controllerId, type: ControllerType.WLED });
-
-            // Auto-reconnect if enabled and not a manual disconnect
-            if (this.config.autoReconnect && event.code !== 1000) {
-              setTimeout(() => {
-                void this.connect(controllerId);
-              }, 5000);
-            }
-          };
-        });
-      }
-
-      // Send initial idle command
-      await this.sendCommandToController(controllerId, { mode: LEDMode.IDLE });
-    } catch (error) {
-      console.error('Failed to connect to LED controller:', error);
-      throw error;
-    }
+    await Promise.allSettled(commands);
   }
 
-  async disconnect(controllerId: string): Promise<void> {
+  private async sendCommandToController(controllerId: string, payload: LEDCommandPayload): Promise<void> {
     const controller = this.controllers.get(controllerId);
     if (!controller) {
       return;
     }
 
     try {
-      if (controller.type === ControllerType.BLE) {
-        const bleDevice = controller.device as BleDevice;
-        await BleClient.disconnect(bleDevice.deviceId);
-        console.log('Disconnected from BLE LED controller:', bleDevice.deviceId);
-        eventBus.emit(Events.CONTROLLER_DISCONNECTED, { id: controllerId, type: ControllerType.BLE });
-      } else if (controller.type === ControllerType.WLED) {
-        const wledDevice = controller.device as WLEDController;
-        if (wledDevice.ws) {
-          wledDevice.ws.close();
-          wledDevice.ws = null;
-          wledDevice.connected = false;
-          console.log('Disconnected from WLED controller:', wledDevice.ip);
-          eventBus.emit(Events.CONTROLLER_DISCONNECTED, { id: controllerId, type: ControllerType.WLED });
-        }
-      }
-    } catch (error) {
-      console.error('Failed to disconnect from LED controller:', error);
-    }
-  }
-
-  private async handleLEDCommand(command: LEDCommand): Promise<void> {
-    // Send command to all connected controllers
-    const promises = Array.from(this.controllers.entries())
-      .filter(([, controller]) => {
-        if (controller.type === ControllerType.BLE) {
-          // For BLE, we don't track connection status in the device object
-          return true; // Assume connected if in map
-        } else if (controller.type === ControllerType.WLED) {
-          return (controller.device as WLEDController).connected;
-        }
-        return false;
-      })
-      .map(([controllerId]) => this.sendCommandToController(controllerId, command));
-
-    await Promise.allSettled(promises);
-  }
-
-  private async sendCommandToController(controllerId: string, command: LEDCommand): Promise<void> {
-    const controller = this.controllers.get(controllerId);
-    if (!controller) {
-      return;
-    }
-
-    try {
-      if (controller.type === ControllerType.BLE) {
-        const bleDevice = controller.device as BleDevice;
-        await this.sendBLECommand(bleDevice, command);
-      } else if (controller.type === ControllerType.WLED) {
-        const wledDevice = controller.device as WLEDController;
-        this.sendWLEDCommand(wledDevice, command);
-      }
+      await this.sendWLEDCommand(payload);
     } catch (error) {
       console.error('Failed to send LED command to controller:', controllerId, error);
     }
   }
 
-  private async sendBLECommand(device: BleDevice, command: LEDCommand): Promise<void> {
-    // Create command string based on mode
-    let commandString: string;
+  private async sendWLEDCommand(payload: LEDCommandPayload): Promise<void> {
+    console.log(`sendWLEDCommand state: ${payload.arenaState}`);
 
-    // Normalize mode to string for comparison
-    const mode = typeof command.mode === 'string' ? command.mode : command.mode;
+    try {
+      // Map arena state to realtime effect mode
+      switch (payload.arenaState) {
+        case ArenaState.IDLE:
+          // Stop realtime effects for this controller
+          if (this.realtimeEffectService?.isRunning()) {
+            await this.realtimeEffectService.clearStrip();
+            await this.realtimeEffectService.stop();
+          }
+          // Set WLED to breathing effect (red)
+          await this.setWLEDEffect({
+            on: true,
+            bri: 40,
+            seg: [{
+              col: [[255, 0, 0], [0, 0, 0], [86, 68, 0]], // Red color
+              pal: 4,
+              fx: 2, // Breathing effect ID
+              sx: 40, // Speed (default)
+              ix: 128, // Intensity (default)
+            }]
+          });
+          break;
 
-    switch (mode) {
-      case 'idle':
-        commandString = 'idle';
-        break;
-      case 'energy_bar':
-        commandString = `energy_bar ${command.percentage || 0}`;
-        break;
-      case 'energy_pulse':
-        commandString = 'energy_pulse';
-        break;
-      case 'breathing':
-        commandString = 'breathing';
-        break;
-      case 'electricity':
-        commandString = 'electricity';
-        break;
-      case 'off':
-        commandString = 'off';
-        break;
-      default:
-        console.error('Unknown LED mode:', command.mode);
-        return;
+        case ArenaState.COOLDOWN:
+        case ArenaState.SUSPENDED:
+          // Stop realtime effects and turn off LEDs
+          if (this.realtimeEffectService?.isRunning()) {
+            await this.realtimeEffectService.clearStrip();
+            await this.realtimeEffectService.stop();
+          }
+          // Turn off LEDs explicitly
+          await this.setWLEDEffect({ on: false });
+          break;
+
+        case ArenaState.WARMING: {
+          // Warmup mode with realtime effects
+          if (!this.realtimeEffectService) {
+            console.warn('RealtimeEffectService not initialized');
+            break;
+          }
+
+          // Update state with warming progress BEFORE starting/switching mode
+          const warmingProgress = payload.currentPower ?? 0; // Use nullish coalescing to allow 0
+          console.log(`Updating warming state: currentPower=${payload.currentPower}, warmingProgress=${warmingProgress}`);
+          this.realtimeEffectService.updateState({
+            warmingProgress: warmingProgress
+          });
+
+          if (!this.realtimeEffectService.isRunning()) {
+            // Enable UDP realtime mode in WLED first
+            await this.enableUDPRealtimeMode();
+            await this.realtimeEffectService.start(RealtimeEffectMode.WARMUP);
+          } else {
+            this.realtimeEffectService.switchMode(RealtimeEffectMode.WARMUP);
+          }
+          break;
+        }        case ArenaState.FIGHT:
+          // Fight mode with realtime effects
+          if (!this.realtimeEffectService) {
+            console.warn('RealtimeEffectService not initialized');
+            break;
+          }
+          
+          // Update energy level from current power (for power decay updates)
+          if (payload.currentPower !== undefined) {
+            this.realtimeEffectService.updateState({
+              energyLevel: payload.currentPower
+            });
+          }
+          
+          if (!this.realtimeEffectService.isRunning()) {
+            // Enable UDP realtime mode in WLED first
+            await this.enableUDPRealtimeMode();
+            await this.realtimeEffectService.start(RealtimeEffectMode.FIGHT);
+          } else {
+            this.realtimeEffectService.switchMode(RealtimeEffectMode.FIGHT);
+          }
+
+          // Update state based on trigger type
+          if (payload.trigger === 'punch_detected' && payload.triggerAmplitude !== undefined) {
+            this.realtimeEffectService.updateState({
+              punchDetected: true,
+              punchMagnitude: payload.triggerAmplitude * 10 // Scale 0-1 to 0-10
+            });
+          } else if (payload.trigger === 'shout_detected' && payload.triggerAmplitude !== undefined) {
+            this.realtimeEffectService.updateState({
+              shoutAmplitude: payload.triggerAmplitude
+            });
+          }
+          break;
+
+        case ArenaState.VICTORY:
+          // Victory mode - could add special effect mode later
+          if (!this.realtimeEffectService) {
+            console.warn('RealtimeEffectService not initialized');
+            break;
+          }
+          if (!this.realtimeEffectService.isRunning()) {
+            await this.realtimeEffectService.start(RealtimeEffectMode.FIGHT);
+          }
+          this.realtimeEffectService.updateState({
+            shoutAmplitude: 1.0 // Max effect for victory
+          });
+          break;
+
+        default:
+          console.warn('Unknown arena state for WLED:', payload.arenaState);
+      }
+
+      console.log('Sent WLED realtime command for arena state:', payload.arenaState, 'trigger:', payload.trigger);
+    } catch (error) {
+      console.error('Failed to send WLED realtime command:', error);
     }
-
-    // Convert string to UTF-8 bytes
-    const encoder = new TextEncoder();
-    const data = encoder.encode(commandString);
-
-    // Convert to DataView for BLE write
-    const dataView = new DataView(data.buffer);
-
-    await BleClient.write(
-      device.deviceId,
-      this.config.serviceUUID,
-      this.config.characteristicUUID,
-      dataView
-    );
-
-    this.currentMode = mode as LEDMode;
-    console.log('Sent BLE LED command:', commandString, 'to', device.deviceId);
   }
 
-  private sendWLEDCommand(wledDevice: WLEDController, command: LEDCommand): void {
-    if (!wledDevice.ws || !wledDevice.connected) {
-      console.warn('WLED controller not connected, ignoring command:', command);
-      return;
+  /**
+   * Set WLED effect using JSON API
+   * @param ip WLED controller IP address
+   * @param state WLED state object (partial)
+   */
+  private async setWLEDEffect(state: Record<string, unknown>): Promise<void> {
+    for (const controller of this.controllers.values()) {
+      try {
+        const url = `http://${controller.ip}/json/state`;
+        console.log(`Setting WLED effect via JSON API: ${url}`, state);
+
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(state),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`HTTP ${response.status}: ${response.statusText} - ${errorText}`);
+        }
+
+        const result = await response.json();
+        console.log(`WLED effect set for ${controller.ip}:`, result);
+      } catch (error) {
+        console.error(`Failed to set WLED effect for ${controller.ip}:`, error);
+        throw error;
+      }
     }
+  }
 
-    // Map LEDMode to WLED effect
-    let wledCommand: WLEDState;
-
-    // Normalize mode to string for comparison
-    const mode = typeof command.mode === 'string' ? command.mode : command.mode;
-    const power = Math.round((command.percentage || 0) * 2.55);
-    switch (mode) {
-      case 'idle':
-        // Candle Multi effect for idle - red, low power
-        wledCommand = {
+  /**
+   * Enable UDP realtime mode by turning off WLED's built-in effects
+   */
+  private async enableUDPRealtimeMode(): Promise<void> {
+    console.log('Enabling UDP realtime mode - turning off WLED effects');
+    for (const controller of this.controllers.values()) {
+      try {
+        const url = `http://${controller.ip}/json/state`;
+        // Turn on the strip and set effect to Solid (0) to allow UDP control
+        const state = {
           on: true,
-          bri: 50, // Low brightness
+          bri: 255,
           seg: [{
-            fx: 102, // Candle Multi effect
-            sx: 128, // Medium speed
-            ix: 128, // Medium intensity
-            c1: 255, // Red
-            c2: 0,   // Green
-            c3: 0    // Blue
+            fx: 0, // Solid effect (no animation)
+            col: [[0, 0, 0]] // Black, will be overridden by UDP
           }]
         };
-        break;
-      case 'energy_bar':
-        // Solid color with brightness based on percentage
-        wledCommand = {
-          on: true,
-          bri: power, // 0-100 to 0-255
-          seg: [{ fx: 83, ix: power, stop: Math.ceil(255*power/100) }] // Solid effect
-        };
-        break;
-      case 'energy_pulse':
-        // Pulse effect for energy/victory
-        wledCommand = {
-          on: true,
-          bri: 255,
-          seg: [{ fx: 2, sx: 200, ix: 200 }] // Pulse effect, fast
-        };
-        break;
-      case 'breathing':
-        // Breathing effect for warming mode
-        wledCommand = {
-          on: true,
-          bri: 255,
-          seg: [{ fx: 1, sx: 150, ix: 150 }] // Breathing effect, medium-slow
-        };
-        break;
-      case 'electricity':
-        // Lightning/electricity effect for fight mode
-        wledCommand = {
-          on: true,
-          bri: 255,
-          seg: [{ fx: 43, sx: 220, ix: 255, pal: 50 }] // Lightning effect (fx 43), high intensity
-        };
-        break;
-      case 'off':
-        // Turn off the lights
-        wledCommand = {
-          on: false,
-          bri: 0,
-          seg: [], // Empty segments when off
-        };
-        break;
-      default:
-        console.error('Unknown LED mode:', command.mode);
-        return;
+
+        console.log(`Enabling UDP realtime for ${controller.ip}`);
+        await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(state),
+        });
+      } catch (error) {
+        console.warn(`Failed to enable UDP realtime for ${controller.ip}:`, error);
+      }
     }
-
-    wledDevice.ws.send(JSON.stringify(wledCommand));
-    this.currentMode = mode as LEDMode;
-    console.log('Sent WLED command:', wledCommand, 'to', wledDevice.ip);
   }
 
-  isControllerConnected(controllerId: string): boolean {
-    const controller = this.controllers.get(controllerId);
-    if (!controller) {
-      return false;
-    }
-
-    if (controller.type === ControllerType.WLED) {
-      return (controller.device as WLEDController).connected;
-    }
-
-    // For BLE, we can't easily check connection status, assume connected if in map
-    return true;
-  }
-
-  getConnectedControllers(): string[] {
-    return Array.from(this.controllers.entries())
-      .filter(([controllerId]) => this.isControllerConnected(controllerId))
-      .map(([controllerId]) => controllerId);
-  }
-
-  getCurrentMode(): LEDMode {
-    return this.currentMode;
-  }
-
-  getControllers(): { id: string; type: ControllerType; device: BleDevice | WLEDController }[] {
-    const controllers = Array.from(this.controllers.entries()).map(([id, { type, device }]) => ({
+  getControllers(): { id: string; device: WLEDController }[] {
+    const controllers = Array.from(this.controllers.entries()).map(([id, device]) => ({
       id,
-      type,
       device,
     }));
     console.log('getControllers returning:', controllers.length, 'controllers');
@@ -671,14 +455,11 @@ class LEDControllerService {
   }
 
   // Remove a controller
-  async removeController(controllerId: string): Promise<void> {
+  removeController(controllerId: string): void {
     const controller = this.controllers.get(controllerId);
     if (!controller) {
       return;
     }
-
-    // Disconnect first if connected
-    await this.disconnect(controllerId);
 
     // Remove from map
     this.controllers.delete(controllerId);
@@ -686,6 +467,28 @@ class LEDControllerService {
 
     // Save to localStorage
     this.saveControllers();
+
+    // Reinitialize effect service without removed controller
+    this.initializeRealtimeEffectService();
+  }
+
+  /**
+   * Initialize or reinitialize the realtime effect service with current controllers
+   */
+  private initializeRealtimeEffectService(): void {
+    // Stop existing service if any
+    if (this.realtimeEffectService) {
+      void this.realtimeEffectService.stopAll();
+    }
+
+    // Create new service with current controller IPs
+    const controllerHosts = Array.from(this.controllers.values()).map((controller) => ({
+      host: controller.ip,
+      port: 21324,
+    }));
+
+    this.realtimeEffectService = new RealtimeEffectService(controllerHosts);
+    console.log('RealtimeEffectService initialized with', controllerHosts.length, 'controllers');
   }
 }
 

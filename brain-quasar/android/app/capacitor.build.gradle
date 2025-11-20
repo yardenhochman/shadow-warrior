@@ -13,6 +13,7 @@ dependencies {
     implementation project(':capacitor-community-native-audio')
     implementation project(':capacitor-filesystem')
     implementation project(':capawesome-capacitor-file-picker')
+    implementation project(':capacitor-udp-socket')
     implementation project(':capacitor-zeroconf')
 
 }

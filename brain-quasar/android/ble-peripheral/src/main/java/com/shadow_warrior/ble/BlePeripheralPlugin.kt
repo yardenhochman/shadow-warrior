@@ -1,6 +1,7 @@
 package com.shadow_warrior.ble
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.bluetooth.*
 import android.bluetooth.le.AdvertiseCallback
 import android.bluetooth.le.AdvertiseData
@@ -10,6 +11,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.ParcelUuid
+import androidx.annotation.RequiresPermission
 import androidx.core.app.ActivityCompat
 import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
@@ -36,6 +38,7 @@ class BlePeripheralPlugin : Plugin() {
     private var bluetoothManager: BluetoothManager? = null
     private var bluetoothAdapter: BluetoothAdapter? = null
     private var advertiser: BluetoothLeAdvertiser? = null
+    private val connectedDevices: MutableSet<BluetoothDevice> = mutableSetOf()
 
     override fun load() {
         bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
@@ -45,6 +48,7 @@ class BlePeripheralPlugin : Plugin() {
     }
 
     @PluginMethod
+    @RequiresPermission(allOf = [Manifest.permission.BLUETOOTH_ADVERTISE, Manifest.permission.BLUETOOTH_CONNECT])
     public fun startAdvertising(call: PluginCall) {
         android.util.Log.d("BlePeripheralPlugin", "startAdvertising called!")
         val serviceName = call.getString("serviceName") ?: "Shadow Warrior Arena"
@@ -127,6 +131,7 @@ class BlePeripheralPlugin : Plugin() {
     }
 
     @PluginMethod
+    @SuppressLint("MissingPermission")
     public fun stopAdvertising(call: PluginCall) {
         try {
             // Stop advertising callback
@@ -141,6 +146,7 @@ class BlePeripheralPlugin : Plugin() {
     }
 
     @PluginMethod
+    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     public fun sendData(call: PluginCall) {
         val dataArray = call.getArray("data")
         val txCharUuid = call.getString("txCharUuid") ?: "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"
@@ -164,8 +170,23 @@ class BlePeripheralPlugin : Plugin() {
 
             if (txChar != null) {
                 txChar.value = byteArray
-                val notified = gattServer?.notifyCharacteristicChanged(null, txChar, false) ?: false
-                android.util.Log.d("BlePeripheralPlugin", "Characteristic notification sent: $notified")
+
+                // Notify all connected devices
+                if (connectedDevices.isEmpty()) {
+                    android.util.Log.d("BlePeripheralPlugin", "No connected devices to notify")
+                } else {
+                    var notifiedCount = 0
+                    for (device in connectedDevices) {
+                        try {
+                            val success = gattServer?.notifyCharacteristicChanged(device, txChar, false) ?: false
+                            if (success) notifiedCount++
+                            android.util.Log.d("BlePeripheralPlugin", "Notified device ${device.address}: $success")
+                        } catch (e: Exception) {
+                            android.util.Log.e("BlePeripheralPlugin", "Failed to notify device ${device.address}: ${e.message}")
+                        }
+                    }
+                    android.util.Log.d("BlePeripheralPlugin", "Characteristic notification sent to $notifiedCount/${connectedDevices.size} devices")
+                }
                 call.resolve()
             } else {
                 android.util.Log.e("BlePeripheralPlugin", "TX characteristic not found: $txCharUuid")
@@ -213,6 +234,16 @@ class BlePeripheralPlugin : Plugin() {
 
     fun emitEvent(eventName: String, data: JSObject) {
         notifyListeners(eventName, data)
+    }
+
+    fun addConnectedDevice(device: BluetoothDevice) {
+        connectedDevices.add(device)
+        android.util.Log.d("BlePeripheralPlugin", "Device added to connected set: ${device.address}, total: ${connectedDevices.size}")
+    }
+
+    fun removeConnectedDevice(device: BluetoothDevice) {
+        connectedDevices.remove(device)
+        android.util.Log.d("BlePeripheralPlugin", "Device removed from connected set: ${device.address}, total: ${connectedDevices.size}")
     }
 
     public fun hasPermissionPublic(permission: String): Boolean {

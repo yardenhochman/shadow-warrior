@@ -1,14 +1,8 @@
 import BlePeripheral from 'src/plugins/ble-peripheral';
 import { useStateMachineStore } from 'src/stores/state-machine';
-import type { PluginListenerHandle } from '@capacitor/core';
 
 const UART_SERVICE_UUID = '6E400001-B5A3-F393-E0A9-E50E24DCCA9E';
 const UART_TX_CHAR_UUID = '6E400003-B5A3-F393-E0A9-E50E24DCCA9E';
-
-interface DeviceConnectionEvent {
-  deviceAddress: string;
-  deviceName: string;
-}
 
 class BleArenaPeripheral {
   private isAdvertising = false;
@@ -16,36 +10,14 @@ class BleArenaPeripheral {
   private connectedDevices: Set<string> = new Set();
   private arenaName = 'Shadow Warrior Arena';
   private enabled = false;
-  private listeners: PluginListenerHandle[] = [];
 
   async initialize(arenaName: string, enabled: boolean): Promise<void> {
     this.arenaName = arenaName;
     this.enabled = enabled;
 
-    // Set up event listeners for device connections using Capacitor's plugin API
-    const blePeripheralAny = BlePeripheral as unknown as {
-      addListener: (eventName: string, callback: (data: DeviceConnectionEvent) => void) => Promise<PluginListenerHandle>;
-    };
-
-    const connectedListener = await blePeripheralAny.addListener(
-      'onDeviceConnected',
-      (data: DeviceConnectionEvent) => {
-        console.log('[BLE Peripheral] Device connected:', data.deviceAddress);
-        this.connectedDevices.add(data.deviceAddress);
-        console.log('[BLE Peripheral] Connected devices:', this.connectedDevices.size);
-      }
-    );
-    this.listeners.push(connectedListener);
-
-    const disconnectedListener = await blePeripheralAny.addListener(
-      'onDeviceDisconnected',
-      (data: DeviceConnectionEvent) => {
-        console.log('[BLE Peripheral] Device disconnected:', data.deviceAddress);
-        this.connectedDevices.delete(data.deviceAddress);
-        console.log('[BLE Peripheral] Connected devices:', this.connectedDevices.size);
-      }
-    );
-    this.listeners.push(disconnectedListener);
+    // TODO: Try to set up event listeners if plugin supports them
+    // For now, we'll use a workaround - assume at least one connected device when advertising
+    // The BLE peripheral plugin will handle device connections natively
 
     if (enabled) {
       await this.startAdvertising();
@@ -85,9 +57,10 @@ class BleArenaPeripheral {
   startStreaming(): void {
     if (this.streamInterval !== null) return;
 
+    console.log('[BLE Peripheral] Starting data stream...');
     this.streamInterval = window.setInterval(() => {
-      if (this.connectedDevices.size === 0) return;
-
+      // Stream data whenever advertising is active
+      // The native plugin will handle sending to connected devices
       void (async () => {
         try {
           const state = this.encodeArenaState();

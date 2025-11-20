@@ -1,9 +1,11 @@
 package com.shadow_warrior.ble
 
+import android.Manifest
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattServerCallback
 import android.util.Log
+import androidx.annotation.RequiresPermission
 import com.getcapacitor.JSObject
 
 class ArenaGattServerCallback(private val plugin: BlePeripheralPlugin) : BluetoothGattServerCallback() {
@@ -11,6 +13,7 @@ class ArenaGattServerCallback(private val plugin: BlePeripheralPlugin) : Bluetoo
         private const val TAG = "ArenaGattServer"
     }
 
+    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     override fun onConnectionStateChange(device: BluetoothDevice?, status: Int, newState: Int) {
         super.onConnectionStateChange(device, status, newState)
 
@@ -28,15 +31,22 @@ class ArenaGattServerCallback(private val plugin: BlePeripheralPlugin) : Bluetoo
         when (newState) {
             BluetoothGatt.STATE_CONNECTED -> {
                 Log.d(TAG, "Device connected: ${device?.address}")
+                if (device != null) {
+                    plugin.addConnectedDevice(device)
+                }
                 plugin.emitEvent("onDeviceConnected", obj)
             }
             BluetoothGatt.STATE_DISCONNECTED -> {
                 Log.d(TAG, "Device disconnected: ${device?.address}")
+                if (device != null) {
+                    plugin.removeConnectedDevice(device)
+                }
                 plugin.emitEvent("onDeviceDisconnected", obj)
             }
         }
     }
 
+    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     override fun onCharacteristicReadRequest(
         device: BluetoothDevice?,
         requestId: Int,
@@ -69,6 +79,7 @@ class ArenaGattServerCallback(private val plugin: BlePeripheralPlugin) : Bluetoo
         }
     }
 
+    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     override fun onCharacteristicWriteRequest(
         device: BluetoothDevice?,
         requestId: Int,
@@ -114,6 +125,7 @@ class ArenaGattServerCallback(private val plugin: BlePeripheralPlugin) : Bluetoo
         }
     }
 
+    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     override fun onDescriptorWriteRequest(
         device: BluetoothDevice?,
         requestId: Int,

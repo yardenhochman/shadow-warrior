@@ -36,5 +36,6 @@ Cooldown -> Idle
 # Dev
 
 We are using Android phone (do not build IOS)
-
-Build command: `npx quasar build -m capacitor -T android`
+Use `./build_and_deploy.sh`
+To build use `npm run build && npx cap sync android`
+MAKE SURE YOU'RE IN THE `brain-quasar` subdirectory
