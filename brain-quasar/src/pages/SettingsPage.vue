@@ -162,19 +162,6 @@
             />
           </div>
 
-          <div class="q-mt-md">
-            <div class="text-subtitle2">Presence Detection Threshold</div>
-            <q-slider
-              v-model="config.presenceDetectionThreshold"
-              :min="0.1"
-              :max="1.0"
-              :step="0.05"
-              label
-              label-always
-              color="primary"
-              @update:model-value="updateConfig"
-            />
-          </div>
         </q-card-section>
       </q-card>
 
@@ -300,13 +287,27 @@
 
       <!-- Microphone Configuration -->
       <q-card class="q-mb-md">
+
         <q-card-section>
+          <div class="q-mt-md">
+            <div class="text-subtitle2">Presence Detection Threshold</div>
+            <q-slider
+              v-model="micConfig.presenceDetectionThreshold"
+              :min="0.1"
+              :max="1.0"
+              :step="0.05"
+              label
+              label-always
+              color="primary"
+              @update:model-value="updateConfig"
+            />
+          </div>
           <div class="text-h6">Microphone Configuration</div>
 
           <div class="q-mt-md">
             <div class="text-subtitle2">Shout Threshold</div>
             <q-slider
-              v-model="micConfig.threshold"
+              v-model="micConfig.shoutThreshold"
               :min="0.1"
               :max="1.0"
               :step="0.05"
@@ -448,48 +449,6 @@
                 @update:model-value="updateMicConfig"
               />
             </div>
-          </div>
-        </q-card-section>
-      </q-card>
-
-      <!-- UV Light Configuration -->
-      <q-card class="q-mb-md">
-        <q-card-section>
-          <div class="text-h6">UV Light Configuration</div>
-
-          <q-toggle
-            v-model="uvConfig.enabled"
-            label="Enable UV Light Control"
-            color="primary"
-            @update:model-value="updateUVConfig"
-          />
-
-          <div v-if="uvConfig.enabled" class="q-mt-md">
-            <q-input
-              v-model="uvConfig.relayUrl"
-              label="Relay URL"
-              hint="e.g., http://192.168.1.100"
-              outlined
-              @update:model-value="updateUVConfig"
-            />
-
-            <q-input
-              v-model="uvConfig.onEndpoint"
-              label="ON Endpoint"
-              hint="e.g., /relay/on"
-              outlined
-              class="q-mt-md"
-              @update:model-value="updateUVConfig"
-            />
-
-            <q-input
-              v-model="uvConfig.offEndpoint"
-              label="OFF Endpoint"
-              hint="e.g., /relay/off"
-              outlined
-              class="q-mt-md"
-              @update:model-value="updateUVConfig"
-            />
           </div>
         </q-card-section>
       </q-card>
@@ -645,7 +604,6 @@ import { ref, onMounted } from 'vue';
 import { useStateMachineStore } from 'src/stores/state-machine';
 import { accelerometerService } from 'src/services/accelerometer';
 import { microphoneService } from 'src/services/microphone';
-import { uvLightService } from 'src/services/uv-light';
 import { scheduleService } from 'src/services/schedule';
 import { useQuasar } from 'quasar';
 import { bleArenaPeripheral } from 'src/services/ble-arena-peripheral';
@@ -665,7 +623,6 @@ const config = ref({
   warmingShoutScale: 10,
   fightPunchScale: 10,
   fightShoutScale: 2,
-  presenceDetectionThreshold: 0.3,
 });
 
 const accelConfig = ref({
@@ -679,7 +636,8 @@ const accelConfig = ref({
 });
 
 const micConfig = ref({
-  threshold: 0.3,
+  presenceDetectionThreshold: 0.3,
+  shoutThreshold: 0.3,
   smoothingFactor: 0.8,
   updateIntervalMs: 50,
   gain: 1.5,
@@ -691,12 +649,6 @@ const micConfig = ref({
   filterHighHz: 800,
 });
 
-const uvConfig = ref({
-  enabled: false,
-  relayUrl: 'http://192.168.1.100',
-  onEndpoint: '/relay/on',
-  offEndpoint: '/relay/off',
-});
 
 const scheduleConfig = ref({
   enabled: false,
@@ -729,7 +681,6 @@ function updateConfig() {
     warmingShoutScale: config.value.warmingShoutScale,
     fightPunchScale: config.value.fightPunchScale,
     fightShoutScale: config.value.fightShoutScale,
-    presenceDetectionThreshold: config.value.presenceDetectionThreshold,
   });
 }
 
@@ -767,10 +718,6 @@ function updateAccelConfig() {
 
 function updateMicConfig() {
   microphoneService.updateConfig(micConfig.value);
-}
-
-function updateUVConfig() {
-  uvLightService.updateConfig(uvConfig.value);
 }
 
 async function updateScheduleConfig() {
@@ -820,7 +767,6 @@ function saveSettings() {
       stateMachine: config.value,
       accelerometer: accelConfig.value,
       microphone: micConfig.value,
-      uvLight: uvConfig.value,
       schedule: scheduleConfig.value,
       httpServer: httpServerConfig.value,
       ble: bleConfig.value,
@@ -887,7 +833,6 @@ async function resetSettings() {
     warmingShoutScale: 4,
     fightPunchScale: 4,
     fightShoutScale: 0.5,
-    presenceDetectionThreshold: 0.3,
   };
 
   accelConfig.value = {
@@ -901,7 +846,8 @@ async function resetSettings() {
   };
 
   micConfig.value = {
-    threshold: 0.3,
+    presenceDetectionThreshold: 0.3,
+    shoutThreshold: 0.3,
     smoothingFactor: 0.8,
     updateIntervalMs: 50,
     gain: 1.5,
@@ -911,13 +857,6 @@ async function resetSettings() {
     filterEnabled: true,
     filterLowHz: 150,
     filterHighHz: 800,
-  };
-
-  uvConfig.value = {
-    enabled: false,
-    relayUrl: 'http://192.168.1.100',
-    onEndpoint: '/relay/on',
-    offEndpoint: '/relay/off',
   };
 
   scheduleConfig.value = {
@@ -942,7 +881,6 @@ async function resetSettings() {
   updateConfig();
   updateAccelConfig();
   updateMicConfig();
-  updateUVConfig();
   await updateScheduleConfig();
   updateHttpServerConfig();
 
@@ -977,11 +915,6 @@ async function loadSettings() {
         updateMicConfig();
       }
 
-      if (settings.uvLight) {
-        uvConfig.value = settings.uvLight;
-        updateUVConfig();
-      }
-
       if (settings.schedule) {
         scheduleConfig.value = settings.schedule;
         await updateScheduleConfig();
@@ -1010,7 +943,6 @@ async function loadSettings() {
     config.value.warmingShoutScale = stateMachine.config.warmingShoutScale;
     config.value.fightPunchScale = stateMachine.config.fightPunchScale;
     config.value.fightShoutScale = stateMachine.config.fightShoutScale;
-    config.value.presenceDetectionThreshold = stateMachine.config.presenceDetectionThreshold;
     cooldownMinutes.value = stateMachine.config.cooldownDuration / 60000;
     warmingSeconds.value = stateMachine.config.warmingTimeout / 1000;
     fightMinutes.value = stateMachine.config.fightTimeout / 60000;

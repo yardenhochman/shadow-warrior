@@ -333,6 +333,78 @@
         </q-card-section>
       </q-card>
 
+      <!-- UV Light Hosts -->
+      <q-card class="q-mt-md">
+        <q-card-section>
+          <div class="text-h6 q-mb-md">UV Light Controllers</div>
+
+          <q-list v-if="uvLightHosts.length > 0">
+            <q-item
+              v-for="(host, index) in uvLightHosts"
+              :key="index"
+              class="q-pa-sm"
+            >
+              <q-item-section avatar>
+                <q-icon
+                  name="lightbulb"
+                  color="purple"
+                  size="sm"
+                />
+              </q-item-section>
+              <q-item-section>
+                <q-item-label class="text-body2">
+                  UV Smart Plug
+                </q-item-label>
+                <q-item-label caption class="text-caption">
+                  {{ host }}
+                </q-item-label>
+              </q-item-section>
+              <q-item-section side>
+                <q-btn
+                  icon="delete"
+                  color="negative"
+                  size="sm"
+                  round
+                  flat
+                  @click="removeUVHost(host)"
+                >
+                  <q-tooltip>Remove UV Host</q-tooltip>
+                </q-btn>
+              </q-item-section>
+            </q-item>
+          </q-list>
+
+          <div v-else class="text-center q-pa-md q-mb-md">
+            <q-icon name="lightbulb" size="3em" color="grey" />
+            <div class="text-subtitle1 q-mt-sm text-grey">No UV controllers configured</div>
+          </div>
+
+          <!-- Add UV Host Section -->
+          <q-separator class="q-my-md" />
+          <div class="text-subtitle2 q-mb-sm">Add UV Controller</div>
+          <div class="row q-gutter-sm">
+            <div class="col">
+              <q-input
+                v-model="newUVHost"
+                label="UV Controller Address (IP)"
+                placeholder="192.168.1.200"
+                outlined
+                dense
+              />
+            </div>
+            <div class="col-auto">
+              <q-btn
+                label="Add"
+                color="primary"
+                @click="addUVHost"
+                :loading="addingUVHost"
+                :disable="!newUVHost || addingUVHost"
+              />
+            </div>
+          </div>
+        </q-card-section>
+      </q-card>
+
       <!-- Music Player -->
       <MusicPlayer class="q-mt-md" />
     </div>
@@ -347,6 +419,7 @@ import { accelerometerService } from 'src/services/accelerometer';
 import { microphoneService } from 'src/services/microphone';
 import { ledControllerService } from 'src/services/led-controller';
 import { speakerService } from 'src/services/speaker';
+import { uvLightService } from 'src/services/uv-light';
 import { useStateMachine } from 'src/composables/use-state-machine';
 import { useEnergyVisualization } from 'src/composables/use-energy-visualization';
 import MusicPlayer from 'src/components/MusicPlayer.vue';
@@ -361,6 +434,9 @@ const cooldownInterval = ref<number | null>(null);
 const newControllerAddress = ref('');
 const addingController = ref(false);
 const controllerListVersion = ref(0); // Force reactivity trigger
+const newUVHost = ref('');
+const addingUVHost = ref(false);
+const uvHostListVersion = ref(0); // Force reactivity trigger
 
 // Event handlers for cleanup
 const controllerAddedHandler = () => {
@@ -371,6 +447,16 @@ const controllerAddedHandler = () => {
 const controllerRemovedHandler = () => {
   console.log('Controller removed event received, forcing UI update');
   controllerListVersion.value++; // Trigger reactivity
+};
+
+const uvHostAddedHandler = () => {
+  console.log('UV host added event received, forcing UI update');
+  uvHostListVersion.value++; // Trigger reactivity
+};
+
+const uvHostRemovedHandler = () => {
+  console.log('UV host removed event received, forcing UI update');
+  uvHostListVersion.value++; // Trigger reactivity
 };
 
 const metrics = computed(() => stateMachine.metrics);
@@ -412,6 +498,14 @@ const connectedCount = computed(() => {
   const count = allControllers.value.length;
   console.log('connectedCount computed:', count);
   return count;
+});
+
+const uvLightHosts = computed(() => {
+  // Use uvHostListVersion to force reactivity when hosts are added/removed
+  void uvHostListVersion.value;
+  const hosts = uvLightService.getHosts();
+  console.log('uvLightHosts computed:', hosts.length, 'hosts');
+  return hosts;
 });
 
 const suspendResumeButtonLabel = computed(() => {
@@ -552,12 +646,46 @@ function removeController(controllerId: string) {
   }
 }
 
+function addUVHost() {
+  if (!newUVHost.value) return;
+
+  addingUVHost.value = true;
+  try {
+    uvLightService.addHost(newUVHost.value);
+    console.log('Added UV host:', newUVHost.value);
+    newUVHost.value = '';
+  } catch (error) {
+    console.error('Failed to add UV host:', error);
+    
+    if (error instanceof Error && error.message.includes('already added')) {
+      const cleanIp = newUVHost.value.replace(/^https?:\/\//, '');
+      alert(`UV host ${cleanIp} is already added!`);
+      newUVHost.value = '';
+    } else {
+      alert(`Failed to add UV host: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  } finally {
+    addingUVHost.value = false;
+  }
+}
+
+function removeUVHost(host: string) {
+  try {
+    uvLightService.removeHost(host);
+  } catch (error) {
+    console.error('Failed to remove UV host:', error);
+    alert(`Failed to remove UV host: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 onMounted(async () => {
   console.log('DashboardPage onMounted - initializing services');
 
   // Listen for controller events
   eventBus.on(Events.CONTROLLER_ADDED, controllerAddedHandler);
   eventBus.on(Events.CONTROLLER_REMOVED, controllerRemovedHandler);
+  eventBus.on('uv-light:host-added', uvHostAddedHandler);
+  eventBus.on('uv-light:host-removed', uvHostRemovedHandler);
 
   // Initialize services (this will load saved controllers)
   ledControllerService.initialize();
@@ -583,6 +711,8 @@ onUnmounted(() => {
   // Clean up event listeners
   eventBus.off(Events.CONTROLLER_ADDED, controllerAddedHandler);
   eventBus.off(Events.CONTROLLER_REMOVED, controllerRemovedHandler);
+  eventBus.off('uv-light:host-added', uvHostAddedHandler);
+  eventBus.off('uv-light:host-removed', uvHostRemovedHandler);
 });
 </script>
 

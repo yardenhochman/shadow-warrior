@@ -3,7 +3,8 @@ import { eventBus, Events } from './event-bus';
 import { Capacitor } from '@capacitor/core';
 
 interface ShoutDetectionConfig {
-  threshold: number; // Amplitude threshold for shout detection (0-1)
+  shoutThreshold: number; // Amplitude threshold for shout detection (0-1)
+  presenceDetectionThreshold: number; // Amplitude threshold for presence detection (0-1)
   smoothingFactor: number; // FFT smoothing (0-1)
   fftSize: number; // FFT size for frequency analysis
   updateIntervalMs: number; // How often to check audio levels
@@ -21,7 +22,8 @@ interface ShoutDetectionConfig {
 
 class MicrophoneService {
   private config: ShoutDetectionConfig = {
-    threshold: 0.3, // 30% threshold
+    shoutThreshold: 0.3, // 30% threshold
+    presenceDetectionThreshold: 0.1, // 10% presence detection
     smoothingFactor: 0.8,
     fftSize: 2048,
     updateIntervalMs: 50, // 20 Hz update rate
@@ -249,8 +251,12 @@ class MicrophoneService {
       console.log('Microphone amplitude:', amplitude, 'RMS:', rms);
     }
 
+    if (amplitude > this.config.presenceDetectionThreshold) {
+      eventBus.emit(Events.PRESENCE_DETECTED, {});
+    }
+
     // Emit shout event if above threshold
-    if (amplitude > this.config.threshold) {
+    if (amplitude > this.config.shoutThreshold) {
       eventBus.emit(Events.SHOUT_DETECTED, {
         amplitude,
         timestamp: Date.now(),

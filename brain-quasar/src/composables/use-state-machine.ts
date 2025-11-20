@@ -14,6 +14,10 @@ export function useStateMachine() {
     store.onPunchDetected(payload.force, payload.magnitude);
   };
 
+  const handlePresence = () => {
+    store.onPresenceDetected();
+  }
+
   const handleShout = (payload: { amplitude: number }) => {
     store.onShoutDetected(payload.amplitude);
   };
@@ -68,6 +72,7 @@ export function useStateMachine() {
   onMounted(() => {
     eventBus.on(Events.PUNCH_DETECTED, handlePunch);
     eventBus.on(Events.SHOUT_DETECTED, handleShout);
+    eventBus.on(Events.PRESENCE_DETECTED, handlePresence);
     eventBus.on(Events.STATE_TRANSITION_REQUESTED, handleTransitionRequest);
     eventBus.on(Events.STATE_CHANGED, handleStateChange);
     eventBus.on(Events.SCHEDULE_SUSPEND_REQUESTED, handleScheduleSuspend);

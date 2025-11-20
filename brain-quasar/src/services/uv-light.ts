@@ -4,20 +4,14 @@ import { eventBus, Events } from './event-bus';
 
 interface UVLightConfig {
   enabled: boolean;
-  relayUrl?: string; // URL of the WiFi relay (e.g., http://192.168.1.100)
-  onEndpoint?: string; // Endpoint to turn on (e.g., /relay/on)
-  offEndpoint?: string; // Endpoint to turn off (e.g., /relay/off)
-  statusEndpoint?: string; // Endpoint to get status (e.g., /relay/status)
+  hosts: string[]; // List of UV smart plugs hosts
   timeout?: number; // Request timeout in ms
 }
 
 class UVLightService {
   private config: UVLightConfig = {
     enabled: false,
-    relayUrl: 'http://192.168.1.100',
-    onEndpoint: '/relay/on',
-    offEndpoint: '/relay/off',
-    statusEndpoint: '/relay/status',
+    hosts: [],
     timeout: 5000,
   };
 
@@ -25,7 +19,7 @@ class UVLightService {
 
   constructor() {
     // Listen for UV light commands from event bus
-    eventBus.on(Events.UV_LIGHT_COMMAND, (command: { action: 'on' | 'off' | 'toggle' }) => {
+    eventBus.on(Events.UV_LIGHT_COMMAND, (command: { action: 'on' | 'off'  }) => {
       void this.handleCommand(command);
     });
   }
@@ -49,79 +43,38 @@ class UVLightService {
     }
   }
 
-  private async handleCommand(command: { action: 'on' | 'off' | 'toggle' }): Promise<void> {
-    switch (command.action) {
-      case 'on':
-        await this.turnOn();
-        break;
-      case 'off':
-        await this.turnOff();
-        break;
-      case 'toggle':
-        await this.toggle();
-        break;
-    }
-  }
-
-  async turnOn(): Promise<void> {
-    if (!this.config.enabled || !this.config.relayUrl) {
+  private async handleCommand(command: { action: 'on' | 'off' }): Promise<void> {
+    if (!this.config.enabled) {
       console.warn('UV light control not enabled');
       return;
     }
-
-    try {
-      const url = `${this.config.relayUrl}${this.config.onEndpoint}`;
-      const timeout = this.config.timeout ?? 5000;
-      await axios.post(url, null, { timeout });
-      this.isOn = true;
-      console.log('UV light turned on');
-    } catch (error) {
-      console.error('Failed to turn on UV light:', error);
-      throw error;
+    const params = new URLSearchParams();
+    params.append('cmnd', `Power ${command.action.toUpperCase()}`);
+    const promises = [];
+    for (const host of this.config.hosts) {
+      promises.push(fetch(`http://${host}/cm?${params}`));
     }
+    await Promise.all(promises);
   }
 
-  async turnOff(): Promise<void> {
-    if (!this.config.enabled || !this.config.relayUrl) {
-      console.warn('UV light control not enabled');
-      return;
+
+  async getStatus(): Promise<Array<boolean>> {
+    if (!this.config.enabled) {
+      return [];
     }
 
     try {
-      const url = `${this.config.relayUrl}${this.config.offEndpoint}`;
-      const timeout = this.config.timeout ?? 5000;
-      await axios.post(url, null, { timeout });
-      this.isOn = false;
-      console.log('UV light turned off');
-    } catch (error) {
-      console.error('Failed to turn off UV light:', error);
-      throw error;
-    }
-  }
+      const statusPromises = Promise.all(this.config.hosts.map(async (host) => {
+        const response = await axios.get(`http://${host}/cm?cmnd=Power`, {
+          timeout: this.config.timeout ?? 5000,
+        });
+        const powerState = response.data?.Power;
+        return powerState === 'ON';
+      }));
 
-  async toggle(): Promise<void> {
-    if (this.isOn) {
-      await this.turnOff();
-    } else {
-      await this.turnOn();
-    }
-  }
+      const results = await statusPromises;
 
-  async getStatus(): Promise<boolean> {
-    if (!this.config.enabled || !this.config.relayUrl || !this.config.statusEndpoint) {
-      return false;
-    }
-
-    try {
-      const url = `${this.config.relayUrl}${this.config.statusEndpoint}`;
-      const timeout = this.config.timeout ?? 5000;
-      const response = await axios.get(url, { timeout });
-
-      // Assume response contains { status: 'on' | 'off' } or { relay: true | false }
-      const status = response.data.status === 'on' || response.data.relay === true;
-      this.isOn = status;
-
-      return status;
+      return results;
     } catch (error) {
       console.error('Failed to get UV light status:', error);
       throw error;
@@ -143,6 +96,43 @@ class UVLightService {
 
   getState(): boolean {
     return this.isOn;
+  }
+
+  getHosts(): string[] {
+    return [...this.config.hosts];
+  }
+
+  addHost(host: string): void {
+    // Clean up the host address
+    const cleanHost = host.replace(/^https?:\/\//, '').trim();
+    
+    if (!cleanHost) {
+      throw new Error('Invalid host address');
+    }
+
+    // Check if already exists
+    if (this.config.hosts.includes(cleanHost)) {
+      throw new Error(`UV light host ${cleanHost} is already added`);
+    }
+
+    this.config.hosts.push(cleanHost);
+    console.log(`Added UV light host: ${cleanHost}`);
+    
+    // Emit event for UI updates
+    eventBus.emit('uv-light:host-added', { host: cleanHost });
+  }
+
+  removeHost(host: string): void {
+    const index = this.config.hosts.indexOf(host);
+    if (index === -1) {
+      throw new Error(`UV light host ${host} not found`);
+    }
+
+    this.config.hosts.splice(index, 1);
+    console.log(`Removed UV light host: ${host}`);
+    
+    // Emit event for UI updates
+    eventBus.emit('uv-light:host-removed', { host });
   }
 }
 
