@@ -51,7 +51,6 @@ export const useStateMachineStore = defineStore('stateMachine', {
       warmingShoutScale: 10, // Power multiplier for warming shouts
       fightPunchScale: 10, // Power multiplier for fight punches
       fightShoutScale: 2, // Power multiplier for fight shouts (0.2x of punches)
-      presenceDetectionThreshold: 0.3, // Shout amplitude threshold for IDLE -> WARMING
       schedule: {
         enabled: false,
         dailyActiveStart: '09:00',
@@ -176,6 +175,9 @@ export const useStateMachineStore = defineStore('stateMachine', {
         trigger: 'transition',
         currentPower: 0
       });
+
+      // Turn off UV lights when idle
+      eventBus.emit(Events.UV_LIGHT_COMMAND, { action: 'off' });
     },
 
     onEnterWarming(): void {
@@ -198,6 +200,9 @@ export const useStateMachineStore = defineStore('stateMachine', {
         trigger: 'transition',
         currentPower: 0
       });
+
+      // Turn on UV lights
+      eventBus.emit(Events.UV_LIGHT_COMMAND, { action: 'on' });
     },
 
     onEnterFight(): void {
@@ -239,6 +244,9 @@ export const useStateMachineStore = defineStore('stateMachine', {
         action: 'play',
         track: 'fight',
       });
+
+      // Turn on UV lights
+      eventBus.emit(Events.UV_LIGHT_COMMAND, { action: 'on' });
     },
 
     onEnterVictory(): void {
@@ -294,6 +302,8 @@ export const useStateMachineStore = defineStore('stateMachine', {
         currentPower: 0
       });
       eventBus.emit(Events.SPEAKER_COMMAND, { action: 'stop' });
+
+      // Turn off UV lights
       eventBus.emit(Events.UV_LIGHT_COMMAND, { action: 'off' });
 
       // Reset metrics
@@ -305,6 +315,17 @@ export const useStateMachineStore = defineStore('stateMachine', {
 
       console.log('Arena SUSPENDED');
     },
+    onPresenceDetected(): void {
+      // If suspended, ignore all sensor input
+      if (this.currentState === ArenaState.SUSPENDED) {
+        return;
+      }
+
+      if (this.currentState === ArenaState.IDLE) {
+        // Presence detected in idle, transition to warming
+        this.transition(ArenaState.WARMING);
+      }
+    },
 
     // Handle shout detection
     onShoutDetected(amplitude: number): void {
@@ -315,10 +336,7 @@ export const useStateMachineStore = defineStore('stateMachine', {
 
       this.metrics.shoutAmplitude = amplitude;
 
-      if (this.currentState === ArenaState.IDLE && amplitude > this.config.presenceDetectionThreshold) {
-        // Significant shout detected in idle, transition to warming
-        this.transition(ArenaState.WARMING);
-      } else if (this.currentState === ArenaState.WARMING) {
+      if (this.currentState === ArenaState.WARMING) {
         // Accumulate warming power based on shout amplitude and scale factor
         const powerGain = amplitude * this.config.warmingShoutScale;
         this.metrics.warmingPower = Math.min(

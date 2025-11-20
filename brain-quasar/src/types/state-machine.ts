@@ -35,7 +35,6 @@ export interface StateConfig {
   warmingShoutScale: number; // Power gain multiplier for shouts during warming (default 10)
   fightPunchScale: number; // Power gain multiplier for punches during fight (default 10)
   fightShoutScale: number; // Power gain multiplier for shouts during fight (default 2, which is 0.2x of punch)
-  presenceDetectionThreshold: number; // Shout amplitude threshold to trigger IDLE -> WARMING transition (default 0.3)
   schedule: ScheduleConfig; // Schedule configuration
 }
 

@@ -65,6 +65,7 @@ export const Events = {
   // Sensor events
   PUNCH_DETECTED: 'sensor:punch',
   SHOUT_DETECTED: 'sensor:shout',
+  PRESENCE_DETECTED: 'sensor:presence',
 
   // Device events
   LED_COMMAND: 'device:led',
