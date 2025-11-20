@@ -14,6 +14,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(NativeAudioExtended.class);
         registerPlugin(BlePeripheralPlugin.class);
         registerPlugin(AccelerometerPlugin.class);
+        registerPlugin(LEDEffectPlugin.class);
 
         super.onCreate(savedInstanceState);
         android.util.Log.d("MainActivity", "onCreate called - Native accelerometer implementation");

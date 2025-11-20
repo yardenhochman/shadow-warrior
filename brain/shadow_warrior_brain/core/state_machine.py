@@ -1,7 +1,7 @@
 """
-Shadow Warrior State Machine
+Shadow Warrior Arena State Machine
 
-Manages the training session states and transitions with hooks for custom behavior.
+Manages the arena states and transitions with hooks for custom behavior.
 """
 
 import asyncio
@@ -15,66 +15,69 @@ from shadow_warrior_brain.core.logging_config import get_logger
 logger = get_logger(__name__)
 
 
-class SessionState(Enum):
-    """Training session states"""
+class ArenaState(Enum):
+    """Arena states"""
+    SUSPENDED = "suspended"
     IDLE = "idle"
-    WARMING_UP = "warming_up"
+    WARMING = "warming"
     FIGHT = "fight"
-    VICTORY = "victory"
+    COOLDOWN = "cooldown"
 
 
 @dataclass
 class StateTransition:
     """Represents a state transition"""
-    from_state: SessionState
-    to_state: SessionState
+    from_state: ArenaState
+    to_state: ArenaState
     timestamp: datetime
     metadata: Optional[Dict[str, Any]] = None
 
 
 class StateMachine:
     """
-    State machine for Shadow Warrior training sessions
+    State machine for Shadow Warrior arena
     
     State transitions:
-    - IDLE -> WARMING_UP
-    - WARMING_UP -> {IDLE, FIGHT}
-    - FIGHT -> {VICTORY, WARMING_UP}
-    - VICTORY -> IDLE
+    - SUSPENDED -> IDLE
+    - IDLE -> WARMING
+    - WARMING -> {IDLE, FIGHT}
+    - FIGHT -> {COOLDOWN, WARMING}
+    - COOLDOWN -> IDLE
     """
     
     # Valid state transitions
-    VALID_TRANSITIONS: Dict[SessionState, List[SessionState]] = {
-        SessionState.IDLE: [SessionState.WARMING_UP],
-        SessionState.WARMING_UP: [SessionState.IDLE, SessionState.FIGHT],
-        SessionState.FIGHT: [SessionState.VICTORY, SessionState.WARMING_UP],
-        SessionState.VICTORY: [SessionState.IDLE]
+    VALID_TRANSITIONS: Dict[ArenaState, List[ArenaState]] = {
+        ArenaState.SUSPENDED: [ArenaState.IDLE],
+        ArenaState.IDLE: [ArenaState.WARMING],
+        ArenaState.WARMING: [ArenaState.IDLE, ArenaState.FIGHT],
+        ArenaState.FIGHT: [ArenaState.COOLDOWN, ArenaState.WARMING],
+        ArenaState.COOLDOWN: [ArenaState.IDLE],
     }
     
-    def __init__(self, initial_state: SessionState = SessionState.IDLE):
+    def __init__(self, initial_state: ArenaState = ArenaState.SUSPENDED):
         self.current_state = initial_state
         self.state_start_time = datetime.now()
         self.transition_history: List[StateTransition] = []
         
         # Transition hooks - functions called on state changes
-        self._on_enter_hooks: Dict[SessionState, List[Callable]] = {
-            state: [] for state in SessionState
+        self._on_enter_hooks: Dict[ArenaState, List[Callable]] = {
+            state: [] for state in ArenaState
         }
-        self._on_exit_hooks: Dict[SessionState, List[Callable]] = {
-            state: [] for state in SessionState
+        self._on_exit_hooks: Dict[ArenaState, List[Callable]] = {
+            state: [] for state in ArenaState
         }
         self._on_transition_hooks: List[Callable] = []
         
         # State duration tracking
-        self._state_durations: Dict[SessionState, float] = {}
+        self._state_durations: Dict[ArenaState, float] = {}
         
         logger.info(f"State machine initialized in {self.current_state.value} state")
     
-    def can_transition_to(self, target_state: SessionState) -> bool:
+    def can_transition_to(self, target_state: ArenaState) -> bool:
         """Check if transition to target state is valid"""
         return target_state in self.VALID_TRANSITIONS.get(self.current_state, [])
     
-    async def transition_to(self, target_state: SessionState, metadata: Optional[Dict[str, Any]] = None) -> bool:
+    async def transition_to(self, target_state: ArenaState, metadata: Optional[Dict[str, Any]] = None) -> bool:
         """
         Transition to a new state if valid
         
@@ -122,7 +125,7 @@ class StateMachine:
         
         return True
     
-    async def force_transition_to(self, target_state: SessionState, metadata: Optional[Dict[str, Any]] = None) -> bool:
+    async def force_transition_to(self, target_state: ArenaState, metadata: Optional[Dict[str, Any]] = None) -> bool:
         """
         Force transition to any state (bypasses validation)
         Use with caution - mainly for emergency stops or admin overrides
@@ -164,12 +167,12 @@ class StateMachine:
         return True
     
     # Hook registration methods
-    def on_enter(self, state: SessionState, hook: Callable):
+    def on_enter(self, state: ArenaState, hook: Callable):
         """Register a hook to be called when entering a specific state"""
         self._on_enter_hooks[state].append(hook)
         logger.debug(f"Registered enter hook for {state.value} state")
     
-    def on_exit(self, state: SessionState, hook: Callable):
+    def on_exit(self, state: ArenaState, hook: Callable):
         """Register a hook to be called when exiting a specific state"""
         self._on_exit_hooks[state].append(hook)
         logger.debug(f"Registered exit hook for {state.value} state")
@@ -180,7 +183,7 @@ class StateMachine:
         logger.debug("Registered transition hook")
     
     # Hook execution methods
-    async def _call_enter_hooks(self, state: SessionState, from_state: SessionState):
+    async def _call_enter_hooks(self, state: ArenaState, from_state: ArenaState):
         """Call all enter hooks for a state"""
         for hook in self._on_enter_hooks[state]:
             try:
@@ -191,7 +194,7 @@ class StateMachine:
             except Exception as e:
                 logger.error(f"Error in enter hook for {state.value}: {e}")
     
-    async def _call_exit_hooks(self, state: SessionState):
+    async def _call_exit_hooks(self, state: ArenaState):
         """Call all exit hooks for a state"""
         for hook in self._on_exit_hooks[state]:
             try:
@@ -214,7 +217,7 @@ class StateMachine:
                 logger.error(f"Error in transition hook: {e}")
     
     # Status and query methods
-    def get_current_state(self) -> SessionState:
+    def get_current_state(self) -> ArenaState:
         """Get the current state"""
         return self.current_state
     
@@ -222,7 +225,7 @@ class StateMachine:
         """Get duration in current state (seconds)"""
         return (datetime.now() - self.state_start_time).total_seconds()
     
-    def get_valid_transitions(self) -> List[SessionState]:
+    def get_valid_transitions(self) -> List[ArenaState]:
         """Get list of valid states we can transition to from current state"""
         return self.VALID_TRANSITIONS.get(self.current_state, [])
     
@@ -232,11 +235,11 @@ class StateMachine:
             return self.transition_history[-limit:]
         return self.transition_history.copy()
     
-    def get_state_statistics(self) -> Dict[SessionState, Dict[str, Any]]:
+    def get_state_statistics(self) -> Dict[ArenaState, Dict[str, Any]]:
         """Get statistics about state usage"""
         stats = {}
         
-        for state in SessionState:
+        for state in ArenaState:
             # Count transitions into this state
             transitions_in = sum(1 for t in self.transition_history if t.to_state == state)
             

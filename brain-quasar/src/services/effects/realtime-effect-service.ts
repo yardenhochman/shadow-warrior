@@ -1,13 +1,9 @@
-// Realtime Effect Service - Manages 30 FPS render loop and UDP transmission for multiple controllers
+// Realtime Effect Service - Manages LED effect rendering via native Android service
 
 import { UDPService } from '../udp';
-import { EffectCompositor, type CompositorLayer } from './compositor';
-import type { EffectConfig, SensorState } from './types';
-import { EnergyBarGenerator } from './generators/energy-bar';
-import { PulseGenerator } from './generators/pulse';
-import { ElectricCurrentGenerator } from './generators/electric-current';
-import { EnergyPulseGenerator } from './generators/energy-pulse';
+import type { EffectConfig } from './types';
 import { eventBus, Events } from '../event-bus';
+import { LEDEffectPlugin } from './led-effect-plugin';
 
 export enum RealtimeEffectMode {
   WARMUP = 'warmup',
@@ -22,18 +18,12 @@ export class RealtimeEffectService {
   };
 
   private mode: RealtimeEffectMode;
-  private compositor: EffectCompositor;
-  private currentState: SensorState = {};
-
-  // Generators (shared across all controllers)
-  private energyBarGen: EnergyBarGenerator;
-  private pulseGen: PulseGenerator;
-  private electricCurrentGen: ElectricCurrentGenerator;
-  private energyPulseGen: EnergyPulseGenerator;
 
   // Per-controller state
   private controllers = new Map<string, UDPService>();
-  private renderInterval: number | null = null;
+
+  // Native service state
+  private nativeServiceActive = false;
 
   constructor(
     controllerHosts: Array<{ host: string; port?: number }> = [],
@@ -43,13 +33,6 @@ export class RealtimeEffectService {
       this.config = { ...this.config, ...config };
     }
 
-    this.compositor = new EffectCompositor(this.config.ledCount);
-
-    // Initialize generators
-    this.energyBarGen = new EnergyBarGenerator(this.config.ledCount);
-    this.pulseGen = new PulseGenerator(this.config.ledCount);
-    this.electricCurrentGen = new ElectricCurrentGenerator(this.config.ledCount);
-    this.energyPulseGen = new EnergyPulseGenerator(this.config.ledCount);
     this.mode = RealtimeEffectMode.NONE;
     console.log('RealtimeEffectService created with', controllerHosts.length, 'controllers');
     this.controllers = new Map<string, UDPService>();
@@ -58,14 +41,6 @@ export class RealtimeEffectService {
       const controllerId = `${host}:${port}`;
       this.controllers.set(controllerId, new UDPService({ host, port }));
     }
-  }
-
-  /**
-   * Update sensor state (called by state machine/sensors)
-   */
-  updateState(state: Partial<SensorState>): void {
-    this.currentState = { ...this.currentState, ...state };
-    console.log('RealtimeEffectService state updated:', JSON.stringify(this.currentState));
   }
 
   /**
@@ -93,16 +68,23 @@ export class RealtimeEffectService {
       throw error;
     }
 
-    // Render first frame immediately
-    await this.renderFrame()
+    // Start native background service - handles all rendering and UDP transmission natively
+    try {
+      await LEDEffectPlugin.startEffectService({
+        mode: mode as 'warmup' | 'fight',
+        controllers: Array.from(this.controllers.values()).map(controller => ({
+          host: controller.config?.host || '127.0.0.1',
+          port: controller.config?.port || 21324,
+        })),
+      });
+      this.nativeServiceActive = true;
+      console.log('Native LED effect service started - rendering on background thread');
+    } catch (error) {
+      console.error('Failed to start native LED effect service:', error);
+      throw error;
+    }
 
-    // Start render loop
-    const frameTime = 1000 / this.config.fps;
-    this.renderInterval = window.setInterval(() => {
-      void this.renderFrame();
-    }, frameTime);
-
-    console.log(`Realtime effects started: ${mode} mode at ${this.config.fps} FPS`);
+    console.log(`Realtime effects started: ${mode} mode (native rendering at ${this.config.fps} FPS)`);
     eventBus.emit(Events.REALTIME_EFFECTS_STARTED, { mode });
 
   }
@@ -121,10 +103,17 @@ export class RealtimeEffectService {
    * Stop all controllers
    */
   async stopAll(): Promise<void> {
-    if (this.renderInterval !== null) {
-      clearInterval(this.renderInterval);
-      this.renderInterval = null;
+    // Stop native background service
+    if (this.nativeServiceActive) {
+      try {
+        await LEDEffectPlugin.stopEffectService();
+        this.nativeServiceActive = false;
+        console.log('Native LED effect service stopped');
+      } catch (error) {
+        console.warn('Failed to stop native LED effect service:', error);
+      }
     }
+
     const stopPromises = Array.from(this.controllers.values()).map(async (controller) => {
       await controller.disconnect();
     });
@@ -149,25 +138,32 @@ export class RealtimeEffectService {
   }
 
   /**
-   * Switch effect mode for a specific controller
+   * Switch effect mode by restarting the native service with new mode
    */
-  switchMode(mode: RealtimeEffectMode): void {
-    this.mode = mode;
-    // Reset generators for clean transition
-    this.energyBarGen.reset();
-    this.pulseGen.reset();
-    this.electricCurrentGen.reset();
-    this.energyPulseGen.reset();
+  async switchMode(mode: RealtimeEffectMode): Promise<void> {
+    if (mode === this.mode) {
+      console.log(`Already in ${mode} mode, skipping mode switch`);
+      return;
+    }
 
-    console.log(`Switched to ${mode} mode`);
-    eventBus.emit(Events.REALTIME_EFFECTS_MODE_CHANGED, { mode });
+    try {
+      // Stop the current service
+      await this.stopAll();
+      // Restart with new mode
+      await this.start(mode);
+      console.log(`Switched to ${mode} mode`);
+      eventBus.emit(Events.REALTIME_EFFECTS_MODE_CHANGED, { mode });
+    } catch (error) {
+      console.error('Failed to switch mode:', error);
+      throw error;
+    }
   }
 
   /**
    * Check if a specific controller is running
   */
- isRunning(): boolean {
-    return this.mode !== RealtimeEffectMode.NONE && this.renderInterval !== null;
+  isRunning(): boolean {
+    return this.mode !== RealtimeEffectMode.NONE && this.nativeServiceActive;
   }
 
   /**
@@ -178,59 +174,59 @@ export class RealtimeEffectService {
   }
 
   /**
-   * Render and send a single frame to a specific controller
+   * Send punch event to native service
    */
-  private async renderFrame(): Promise<void> {
-    if (this.mode === RealtimeEffectMode.NONE) {
-      return;
-    }
-    try {
-      // Build layer stack based on current mode
-      const layers = this.buildLayers(this.mode);
-
-      if (layers.length === 0) {
-        console.warn('No layers built for mode:', this.mode);
-        return;
+  sendPunchEvent(intensity: number): void {
+    if (this.nativeServiceActive) {
+      try {
+        LEDEffectPlugin.updateEffectState({
+          type: 'punch',
+          data: JSON.stringify({ intensity }),
+        }).catch((error) => {
+          console.warn('Failed to send punch event to native service:', error);
+        });
+      } catch (error) {
+        console.warn('Error sending punch event:', error);
       }
-
-      // Compose frame
-      const frame = this.compositor.compose(layers, this.currentState);
-      console.debug(`Frame composed: ${frame.pixels.length} bytes, first 6 RGB values: [${Array.from(frame.pixels.slice(0, 6)).join(', ')}]`);
-      // Send via UDP
-      const promises = [];
-      for (const controller of this.controllers.values()) {
-        promises.push(controller.sendFrame(frame.pixels));
-      }
-      const results = await Promise.allSettled(promises);
-      const failures = results.filter(r => r.status === 'rejected');
-      if (failures.length > 0) {
-        console.error(`${failures.length} controllers failed to send frame`);
-      }
-    } catch (error) {
-      console.error(`Frame render error`, error);
-      // Don't stop on single frame error, but log it
     }
   }
 
   /**
-   * Build compositor layers based on mode
+   * Send shout event to native service
    */
-  private buildLayers(mode: RealtimeEffectMode): CompositorLayer[] {
-    switch (mode) {
-      case RealtimeEffectMode.WARMUP:
-        return [
-          { generator: this.energyBarGen, alpha: 1.0 }, // Base: Energy bar
-          { generator: this.pulseGen, alpha: 0.6 },     // Overlay: Shout pulses
-        ];
-
-      case RealtimeEffectMode.FIGHT:
-        return [
-          { generator: this.electricCurrentGen, alpha: 1.0 }, // Base: Electric current
-          { generator: this.energyPulseGen, alpha: 0.8 },     // Overlay: Punch pulses
-        ];
-
-      default:
-        return [];
+  sendShoutEvent(intensity: number): void {
+    if (this.nativeServiceActive) {
+      try {
+        LEDEffectPlugin.updateEffectState({
+          type: 'shout',
+          data: JSON.stringify({ intensity }),
+        }).catch((error) => {
+          console.warn('Failed to send shout event to native service:', error);
+        });
+      } catch (error) {
+        console.warn('Error sending shout event:', error);
+      }
     }
   }
+
+  /**
+   * Send power level to native service (0-100)
+   */
+  sendPowerLevel(power: number): void {
+    if (this.nativeServiceActive) {
+      try {
+        // Normalize to 0-1 range for native service
+        const normalizedPower = Math.max(0, Math.min(1, power / 100));
+        LEDEffectPlugin.updateEffectState({
+          type: 'power',
+          data: JSON.stringify({ intensity: normalizedPower }),
+        }).catch((error) => {
+          console.warn('Failed to send power level to native service:', error);
+        });
+      } catch (error) {
+        console.warn('Error sending power level:', error);
+      }
+    }
+  }
+
 }

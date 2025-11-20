@@ -2,8 +2,10 @@
 Application configuration
 """
 
-from pydantic_settings import BaseSettings
+import yaml
+from typing import List
 
+from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     """Application settings"""
@@ -42,11 +44,24 @@ class Settings(BaseSettings):
     # Data retention
     acceleration_data_retention: int = 1000  # Number of recent samples to keep
     audio_level_retention: int = 100  # Number of recent audio levels to keep
+
+    # Arena configuration
+    wled_controllers: List[str] = []
+    tasmota_plugs: List[str] = []
     
     class Config:
         env_file = ".env"
         case_sensitive = False
 
+def load_settings() -> Settings:
+    """Load settings from .env and config.yaml."""
+    yaml_config = {}
+    try:
+        with open("config.yaml", "r") as f:
+            yaml_config = yaml.safe_load(f)
+    except FileNotFoundError:
+        pass  # It's okay if the file doesn't exist
 
-# Global settings instance
-settings = Settings()
+    return Settings(**yaml_config)
+
+settings = load_settings()
