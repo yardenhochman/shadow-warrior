@@ -38,11 +38,11 @@ export class EffectCompositor {
       this.tempBuffer.pixels.set(frame.pixels);
 
       const alpha = layer.alpha ?? 1.0;
-      if (alpha < 1.0) {
-        this.baseBuffer.blendFrom(this.tempBuffer, alpha);
-      } else {
-        // Full opacity - copy directly
-        this.baseBuffer.copyFrom(this.tempBuffer);
+
+      // Always use additive blending for LED effects (Math.max per channel)
+      for (let i = 0; i < this.baseBuffer.pixels.length; i++) {
+        const blendedValue = this.tempBuffer.pixels[i]! * alpha;
+        this.baseBuffer.pixels[i] = Math.max(this.baseBuffer.pixels[i]!, blendedValue);
       }
     }
 

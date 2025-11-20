@@ -315,6 +315,13 @@ class LEDControllerService {
             warmingProgress: warmingProgress
           });
 
+          // Update shout amplitude if this is a shout trigger
+          if (payload.trigger === 'shout_detected' && payload.triggerAmplitude !== undefined) {
+            this.realtimeEffectService.updateState({
+              shoutAmplitude: payload.triggerAmplitude
+            });
+          }
+
           if (!this.realtimeEffectService.isRunning()) {
             // Enable UDP realtime mode in WLED first
             await this.enableUDPRealtimeMode();
@@ -329,14 +336,14 @@ class LEDControllerService {
             console.warn('RealtimeEffectService not initialized');
             break;
           }
-          
+
           // Update energy level from current power (for power decay updates)
           if (payload.currentPower !== undefined) {
             this.realtimeEffectService.updateState({
               energyLevel: payload.currentPower
             });
           }
-          
+
           if (!this.realtimeEffectService.isRunning()) {
             // Enable UDP realtime mode in WLED first
             await this.enableUDPRealtimeMode();
