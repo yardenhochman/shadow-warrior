@@ -16,10 +16,8 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
-from shadow_warrior_brain.api import status
-from shadow_warrior_brain.services.ble_manager import BLEManager
-from shadow_warrior_brain.services.audio_manager import AudioManager
-from shadow_warrior_brain.services.session_manager import SessionManager
+from shadow_warrior_brain.api import status, arena
+from shadow_warrior_brain.services.arena_manager import ArenaManager
 from shadow_warrior_brain.core.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -32,18 +30,13 @@ async def lifespan(app: FastAPI):
     logger.info("Starting Shadow Warrior Brain Controller...")
 
     # Initialize services
-    ble_manager = BLEManager()
-    audio_manager = AudioManager()
-    session_manager = SessionManager(ble_manager, audio_manager)
+    arena_manager = ArenaManager()
 
     # Store managers in app state
-    app.state.ble_manager = ble_manager
-    app.state.audio_manager = audio_manager
-    app.state.session_manager = session_manager
-
+    app.state.arena_manager = arena_manager
+    
     # Start background tasks
-    asyncio.create_task(ble_manager.start_scanning())
-    asyncio.create_task(audio_manager.start_monitoring())
+    # none for now
 
     logger.info("Brain Controller started successfully")
 
@@ -58,9 +51,7 @@ async def lifespan(app: FastAPI):
     # Give SSE connections a brief moment to close gracefully
     await asyncio.sleep(0.1)
 
-    await session_manager.cleanup()
-    await ble_manager.cleanup()
-    await audio_manager.cleanup()
+    await arena_manager.cleanup()
     logger.info("Brain Controller shutdown complete")
 
 
@@ -72,8 +63,9 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Include API routes - single monitoring endpoint
+# Include API routes
 app.include_router(status.router, prefix="/api", tags=["monitoring"])
+app.include_router(arena.router, prefix="/api", tags=["arena"])
 
 # Mount static files
 static_path = Path(__file__).parent / "static"

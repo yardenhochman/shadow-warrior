@@ -57,6 +57,17 @@
                 android:value="Boxing training system with BLE communication, audio feedback, and motion tracking" />
         </service>
 
+        <!-- LED Effect rendering foreground service (keeps rendering when screen is off) -->
+        <service
+            android:name=".LEDEffectService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="LED effect rendering service for punching bag feedback" />
+        </service>
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
@@ -116,6 +127,9 @@
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
     <!-- Bluetooth feature -->
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
+
+    <!-- WakeLock permission for LED effect rendering -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <!-- Media -->
         <!-- Required for modern Android versions -->

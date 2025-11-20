@@ -308,40 +308,31 @@ class LEDControllerService {
             break;
           }
 
-          // Update state with warming progress BEFORE starting/switching mode
-          const warmingProgress = payload.currentPower ?? 0; // Use nullish coalescing to allow 0
-          console.log(`Updating warming state: currentPower=${payload.currentPower}, warmingProgress=${warmingProgress}`);
-          this.realtimeEffectService.updateState({
-            warmingProgress: warmingProgress
-          });
-
-          // Update shout amplitude if this is a shout trigger
-          if (payload.trigger === 'shout_detected' && payload.triggerAmplitude !== undefined) {
-            this.realtimeEffectService.updateState({
-              shoutAmplitude: payload.triggerAmplitude
-            });
-          }
-
           if (!this.realtimeEffectService.isRunning()) {
             // Enable UDP realtime mode in WLED first
             await this.enableUDPRealtimeMode();
             await this.realtimeEffectService.start(RealtimeEffectMode.WARMUP);
           } else {
-            this.realtimeEffectService.switchMode(RealtimeEffectMode.WARMUP);
+            await this.realtimeEffectService.switchMode(RealtimeEffectMode.WARMUP);
+          }
+
+          // Send power level updates for energy bar effect
+          if (payload.currentPower !== undefined) {
+            this.realtimeEffectService.sendPowerLevel(payload.currentPower);
+          }
+
+          // Send shout event if this is a shout trigger
+          if (payload.trigger === 'shout_detected' && payload.triggerAmplitude !== undefined) {
+            this.realtimeEffectService.sendShoutEvent(payload.triggerAmplitude);
           }
           break;
-        }        case ArenaState.FIGHT:
+        }
+
+        case ArenaState.FIGHT:
           // Fight mode with realtime effects
           if (!this.realtimeEffectService) {
             console.warn('RealtimeEffectService not initialized');
             break;
-          }
-
-          // Update energy level from current power (for power decay updates)
-          if (payload.currentPower !== undefined) {
-            this.realtimeEffectService.updateState({
-              energyLevel: payload.currentPower
-            });
           }
 
           if (!this.realtimeEffectService.isRunning()) {
@@ -349,21 +340,17 @@ class LEDControllerService {
             await this.enableUDPRealtimeMode();
             await this.realtimeEffectService.start(RealtimeEffectMode.FIGHT);
           } else {
-            this.realtimeEffectService.switchMode(RealtimeEffectMode.FIGHT);
+            await this.realtimeEffectService.switchMode(RealtimeEffectMode.FIGHT);
           }
 
-          // Update state based on trigger type
+          // Send event based on trigger type
           if (payload.trigger === 'punch_detected' && payload.triggerAmplitude !== undefined) {
-            this.realtimeEffectService.updateState({
-              punchDetected: true,
-              punchMagnitude: payload.triggerAmplitude * 10 // Scale 0-1 to 0-10
-            });
+            this.realtimeEffectService.sendPunchEvent(payload.triggerAmplitude * 10); // Scale 0-1 to 0-10
           } else if (payload.trigger === 'shout_detected' && payload.triggerAmplitude !== undefined) {
-            this.realtimeEffectService.updateState({
-              shoutAmplitude: payload.triggerAmplitude
-            });
+            this.realtimeEffectService.sendShoutEvent(payload.triggerAmplitude);
           }
           break;
+
 
         case ArenaState.VICTORY:
           // Victory mode - could add special effect mode later
@@ -374,9 +361,8 @@ class LEDControllerService {
           if (!this.realtimeEffectService.isRunning()) {
             await this.realtimeEffectService.start(RealtimeEffectMode.FIGHT);
           }
-          this.realtimeEffectService.updateState({
-            shoutAmplitude: 1.0 // Max effect for victory
-          });
+          // Send max intensity shout event for victory
+          this.realtimeEffectService.sendShoutEvent(1.0);
           break;
 
         default:
@@ -390,34 +376,55 @@ class LEDControllerService {
   }
 
   /**
-   * Set WLED effect using JSON API
+   * Set WLED effect using JSON API with timeout protection
    * @param ip WLED controller IP address
    * @param state WLED state object (partial)
    */
   private async setWLEDEffect(state: Record<string, unknown>): Promise<void> {
+    const HTTP_TIMEOUT_MS = 5000; // 5 second timeout per request
+
     for (const controller of this.controllers.values()) {
       try {
         const url = `http://${controller.ip}/json/state`;
         console.log(`Setting WLED effect via JSON API: ${url}`, state);
 
-        const response = await fetch(url, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(state),
-        });
+        // Create abort controller for timeout
+        const abortController = new AbortController();
+        const timeoutId = setTimeout(() => abortController.abort(), HTTP_TIMEOUT_MS);
 
-        if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(`HTTP ${response.status}: ${response.statusText} - ${errorText}`);
+        try {
+          const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(state),
+            signal: abortController.signal,
+          });
+
+          clearTimeout(timeoutId);
+
+          if (!response.ok) {
+            console.warn(`WLED HTTP error for ${controller.ip}: ${response.status} ${response.statusText}`);
+            // Don't throw - continue to next controller
+            continue;
+          }
+
+          const result = await response.json();
+          console.log(`WLED effect set for ${controller.ip}:`, result);
+        } catch (fetchError) {
+          clearTimeout(timeoutId);
+          if (fetchError instanceof Error && fetchError.name === 'AbortError') {
+            console.warn(`WLED request timeout for ${controller.ip} (>${HTTP_TIMEOUT_MS}ms)`);
+          } else {
+            console.warn(`Failed to set WLED effect for ${controller.ip}:`, fetchError);
+          }
+          // Don't throw - continue to next controller
+          continue;
         }
-
-        const result = await response.json();
-        console.log(`WLED effect set for ${controller.ip}:`, result);
       } catch (error) {
-        console.error(`Failed to set WLED effect for ${controller.ip}:`, error);
-        throw error;
+        console.error(`Unexpected error setting WLED effect for ${controller.ip}:`, error);
+        // Don't throw - this is a non-critical operation
       }
     }
   }
@@ -427,6 +434,8 @@ class LEDControllerService {
    */
   private async enableUDPRealtimeMode(): Promise<void> {
     console.log('Enabling UDP realtime mode - turning off WLED effects');
+    const HTTP_TIMEOUT_MS = 5000; // 5 second timeout per request
+
     for (const controller of this.controllers.values()) {
       try {
         const url = `http://${controller.ip}/json/state`;
@@ -441,13 +450,36 @@ class LEDControllerService {
         };
 
         console.log(`Enabling UDP realtime for ${controller.ip}`);
-        await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(state),
-        });
+
+        // Create abort controller for timeout
+        const abortController = new AbortController();
+        const timeoutId = setTimeout(() => abortController.abort(), HTTP_TIMEOUT_MS);
+
+        try {
+          const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(state),
+            signal: abortController.signal,
+          });
+
+          clearTimeout(timeoutId);
+
+          if (!response.ok) {
+            console.warn(`Failed to enable UDP realtime for ${controller.ip}: HTTP ${response.status}`);
+          } else {
+            console.log(`UDP realtime enabled for ${controller.ip}`);
+          }
+        } catch (fetchError) {
+          clearTimeout(timeoutId);
+          if (fetchError instanceof Error && fetchError.name === 'AbortError') {
+            console.warn(`UDP realtime request timeout for ${controller.ip} (>${HTTP_TIMEOUT_MS}ms)`);
+          } else {
+            console.warn(`Failed to enable UDP realtime for ${controller.ip}:`, fetchError);
+          }
+        }
       } catch (error) {
-        console.warn(`Failed to enable UDP realtime for ${controller.ip}:`, error);
+        console.error(`Unexpected error enabling UDP realtime for ${controller.ip}:`, error);
       }
     }
   }
