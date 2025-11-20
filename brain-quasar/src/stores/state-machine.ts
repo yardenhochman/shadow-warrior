@@ -26,8 +26,6 @@ interface StateMachineState {
     inactivity: number | null; // Timer for checking fight inactivity
     decay: number | null;
   };
-  lastEffectTrigger: number;
-  accumulatedPower: number;
 }
 
 export const useStateMachineStore = defineStore('stateMachine', {
@@ -72,8 +70,6 @@ export const useStateMachineStore = defineStore('stateMachine', {
       inactivity: null,
       decay: null,
     },
-    lastEffectTrigger: 0,
-    accumulatedPower: 0,
   }),
 
   getters: {
@@ -173,18 +169,18 @@ export const useStateMachineStore = defineStore('stateMachine', {
       this.metrics.shoutAmplitude = 0;
       this.metrics.punchForce = 0;
       this.metrics.punchMagnitude = 0;
-      this.lastEffectTrigger = 0;
-      this.accumulatedPower = 0;
 
       // Send LED command for idle mode
-      eventBus.emit(Events.LED_COMMAND, { mode: 'idle' });
+      eventBus.emit(Events.LED_COMMAND, {
+        arenaState: ArenaState.IDLE,
+        trigger: 'transition',
+        currentPower: 0
+      });
     },
 
     onEnterWarming(): void {
       this.warmingStartTime = Date.now();
       this.metrics.warmingPower = 0;
-      this.lastEffectTrigger = 0;
-      this.accumulatedPower = 0;
 
       // Start the power decay loop
       this.startDecayLoop();
@@ -196,16 +192,18 @@ export const useStateMachineStore = defineStore('stateMachine', {
         }
       }, this.config.warmingTimeout);
 
-      // Send LED command for breathing mode (warming up)
-      eventBus.emit(Events.LED_COMMAND, { mode: 'breathing' });
+      // Send LED command for warming mode
+      eventBus.emit(Events.LED_COMMAND, {
+        arenaState: ArenaState.WARMING,
+        trigger: 'transition',
+        currentPower: 0
+      });
     },
 
     onEnterFight(): void {
       this.fightStartTime = Date.now();
       this.lastActivityTime = Date.now();
       this.metrics.fightPower = 0;
-      this.lastEffectTrigger = 0;
-      this.accumulatedPower = 0;
 
       // Start the power decay loop
       this.startDecayLoop();
@@ -229,8 +227,12 @@ export const useStateMachineStore = defineStore('stateMachine', {
         }
       }, 1000) as unknown as number;
 
-      // Send LED command for electricity mode (fight mode)
-      eventBus.emit(Events.LED_COMMAND, { mode: 'electricity' });
+      // Send LED command for fight mode
+      eventBus.emit(Events.LED_COMMAND, {
+        arenaState: ArenaState.FIGHT,
+        trigger: 'transition',
+        currentPower: 0
+      });
 
       // Start music
       eventBus.emit(Events.SPEAKER_COMMAND, {
@@ -240,8 +242,12 @@ export const useStateMachineStore = defineStore('stateMachine', {
     },
 
     onEnterVictory(): void {
-      // Send LED command for energy pulse (victory pattern)
-      eventBus.emit(Events.LED_COMMAND, { mode: 'energy_pulse' });
+      // Send LED command for victory mode
+      eventBus.emit(Events.LED_COMMAND, {
+        arenaState: ArenaState.VICTORY,
+        trigger: 'transition',
+        currentPower: 100
+      });
 
       // Play victory music
       eventBus.emit(Events.SPEAKER_COMMAND, {
@@ -261,7 +267,11 @@ export const useStateMachineStore = defineStore('stateMachine', {
       this.cooldownStartTime = Date.now();
 
       // Turn off LEDs and music
-      eventBus.emit(Events.LED_COMMAND, { mode: 'idle' });
+      eventBus.emit(Events.LED_COMMAND, {
+        arenaState: ArenaState.COOLDOWN,
+        trigger: 'transition',
+        currentPower: 0
+      });
       eventBus.emit(Events.SPEAKER_COMMAND, { action: 'stop' });
 
       // Set timer to return to idle after cooldown duration
@@ -278,7 +288,11 @@ export const useStateMachineStore = defineStore('stateMachine', {
       this.stopDecayLoop();
 
       // Turn off all devices
-      eventBus.emit(Events.LED_COMMAND, { mode: 'off' });
+      eventBus.emit(Events.LED_COMMAND, {
+        arenaState: ArenaState.SUSPENDED,
+        trigger: 'transition',
+        currentPower: 0
+      });
       eventBus.emit(Events.SPEAKER_COMMAND, { action: 'stop' });
       eventBus.emit(Events.UV_LIGHT_COMMAND, { action: 'off' });
 
@@ -312,8 +326,13 @@ export const useStateMachineStore = defineStore('stateMachine', {
           this.metrics.warmingPower + powerGain
         );
 
-        // Accumulate power for effect triggering with 100ms debounce
-        this.triggerEffectDebounced(powerGain);
+        // Send LED command for shout detected
+        eventBus.emit(Events.LED_COMMAND, {
+          arenaState: ArenaState.WARMING,
+          trigger: 'shout_detected',
+          triggerAmplitude: amplitude,
+          currentPower: this.metrics.warmingPower
+        });
 
         // Check if threshold reached
         if (this.metrics.warmingPower >= this.config.warmingThreshold) {
@@ -330,8 +349,13 @@ export const useStateMachineStore = defineStore('stateMachine', {
           this.metrics.fightPower + powerGain
         );
 
-        // Accumulate power for effect triggering with 100ms debounce
-        this.triggerEffectDebounced(powerGain);
+        // Send LED command for shout detected
+        eventBus.emit(Events.LED_COMMAND, {
+          arenaState: ArenaState.FIGHT,
+          trigger: 'shout_detected',
+          triggerAmplitude: amplitude,
+          currentPower: this.metrics.fightPower
+        });
 
         // Bar can fill to 100% but fight continues until timeout or inactivity
       }
@@ -361,61 +385,19 @@ export const useStateMachineStore = defineStore('stateMachine', {
           this.metrics.fightPower + powerGain
         );
 
-        // Accumulate power for effect triggering with 100ms debounce
-        this.triggerEffectDebounced(powerGain);
+        // Send LED command for punch detected
+        eventBus.emit(Events.LED_COMMAND, {
+          arenaState: ArenaState.FIGHT,
+          trigger: 'punch_detected',
+          triggerAmplitude: force,
+          currentPower: this.metrics.fightPower
+        });
 
         // Bar can fill to 100% but fight continues until timeout or inactivity
       }
 
       // Emit metrics update
       eventBus.emit(Events.METRICS_UPDATED, this.metrics);
-    },
-
-    // Trigger LED effect with 100ms debounce based on accumulated power
-    triggerEffectDebounced(powerGain: number): void {
-      const now = Date.now();
-      this.accumulatedPower += powerGain;
-
-      // Debounce: only trigger effect if 100ms has passed since last trigger
-      if (now - this.lastEffectTrigger >= 100) {
-        this.lastEffectTrigger = now;
-
-        // Determine which effect to trigger based on current state and accumulated power
-        if (this.currentState === ArenaState.WARMING) {
-          // Map accumulated power to appropriate warming effect
-          // Higher power = more intense effect
-          if (this.accumulatedPower >= 15) {
-            // High intensity shout - electricity effect
-            eventBus.emit(Events.LED_COMMAND, { mode: 'electricity' });
-          } else if (this.accumulatedPower >= 8) {
-            // Medium intensity - energy pulse
-            eventBus.emit(Events.LED_COMMAND, { mode: 'energy_pulse' });
-          } else {
-            // Low intensity - breathing
-            eventBus.emit(Events.LED_COMMAND, { mode: 'breathing' });
-          }
-
-          console.log('Warming effect triggered with accumulated power:', this.accumulatedPower);
-        } else if (this.currentState === ArenaState.FIGHT) {
-          // Map accumulated power to appropriate fight effect
-          // Higher power = more intense effect
-          if (this.accumulatedPower >= 40) {
-            // High power punch/shout - electricity effect
-            eventBus.emit(Events.LED_COMMAND, { mode: 'electricity' });
-          } else if (this.accumulatedPower >= 10) {
-            // Medium power - energy pulse
-            eventBus.emit(Events.LED_COMMAND, { mode: 'energy_pulse' });
-          } else {
-            // Low power - electricity (default fight mode)
-            eventBus.emit(Events.LED_COMMAND, { mode: 'electricity' });
-          }
-
-          console.log('Fight effect triggered with accumulated power:', this.accumulatedPower);
-        }
-
-        // Reset accumulated power after triggering effect
-        this.accumulatedPower = 0;
-      }
     },
 
     // Update configuration
@@ -444,10 +426,26 @@ export const useStateMachineStore = defineStore('stateMachine', {
         if (this.currentState === ArenaState.WARMING) {
           const decayAmount = this.config.warmingDecayRate * decayInterval;
           this.metrics.warmingPower = Math.max(0, this.metrics.warmingPower - decayAmount);
+          
+          // Emit LED command for power decay
+          eventBus.emit(Events.LED_COMMAND, {
+            arenaState: ArenaState.WARMING,
+            trigger: 'power_decay',
+            currentPower: this.metrics.warmingPower
+          });
+          
           eventBus.emit(Events.METRICS_UPDATED, this.metrics);
         } else if (this.currentState === ArenaState.FIGHT) {
           const decayAmount = this.config.fightDecayRate * decayInterval;
           this.metrics.fightPower = Math.max(0, this.metrics.fightPower - decayAmount);
+          
+          // Emit LED command for power decay
+          eventBus.emit(Events.LED_COMMAND, {
+            arenaState: ArenaState.FIGHT,
+            trigger: 'power_decay',
+            currentPower: this.metrics.fightPower
+          });
+          
           eventBus.emit(Events.METRICS_UPDATED, this.metrics);
         }
       }, 100) as unknown as number;

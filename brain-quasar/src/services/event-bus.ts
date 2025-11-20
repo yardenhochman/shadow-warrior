@@ -1,6 +1,16 @@
 // Event bus for decoupled component communication
 // Using mitt-like pattern for lightweight event emitting
 
+import type { ArenaState } from 'src/types/state-machine';
+
+// LED Command payload type
+export interface LEDCommandPayload {
+  arenaState: ArenaState;
+  trigger: 'transition' | 'punch_detected' | 'shout_detected';
+  triggerAmplitude?: number; // 0-1 for shouts/punches
+  currentPower?: number; // 0-100 for warming/fight power
+}
+
 type EventHandler<T = unknown> = (payload: T) => void;
 
 class EventBus {
@@ -83,4 +93,9 @@ export const Events = {
   MUSIC_PLAYLIST_UPDATED: 'music:playlist-updated',
   MUSIC_TRACK_LOADED: 'music:track-loaded',
   MUSIC_ERROR: 'music:error',
+
+  // Realtime effects events
+  REALTIME_EFFECTS_STARTED: 'effects:realtime-started',
+  REALTIME_EFFECTS_STOPPED: 'effects:realtime-stopped',
+  REALTIME_EFFECTS_MODE_CHANGED: 'effects:mode-changed',
 } as const;

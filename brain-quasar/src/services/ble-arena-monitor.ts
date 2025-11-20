@@ -108,14 +108,30 @@ class BleArenaMonitor {
     if (!this.device) return;
 
     try {
+      console.log('[BLE Monitor] Starting notifications for', this.device.deviceId);
+
+      let notificationCount = 0;
+
+      // Start notifications with callback that receives data
       await BleClient.startNotifications(
         this.device.deviceId,
         UART_SERVICE_UUID,
         UART_TX_CHAR_UUID,
-        (value) => {
-          const data = new Uint8Array(value.buffer);
-          const state = this.decodeState(data);
-          this.updateUI(state);
+        (dataView: DataView) => {
+          try {
+            notificationCount++;
+            if (notificationCount % 10 === 0) {
+              console.log(`[BLE Monitor] Notification #${notificationCount}`);
+            }
+
+            const dataArray = new Uint8Array(dataView.buffer, dataView.byteOffset, dataView.byteLength);
+            console.log('[BLE Monitor] Received', dataArray.length, 'bytes');
+            const state = this.decodeState(dataArray);
+            console.log('[BLE Monitor] Decoded state:', state.currentState);
+            this.updateUI(state);
+          } catch (err) {
+            console.error('[BLE Monitor] Callback error:', err);
+          }
         }
       );
 
