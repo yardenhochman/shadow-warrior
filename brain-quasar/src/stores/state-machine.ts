@@ -426,26 +426,26 @@ export const useStateMachineStore = defineStore('stateMachine', {
         if (this.currentState === ArenaState.WARMING) {
           const decayAmount = this.config.warmingDecayRate * decayInterval;
           this.metrics.warmingPower = Math.max(0, this.metrics.warmingPower - decayAmount);
-          
+
           // Emit LED command for power decay
           eventBus.emit(Events.LED_COMMAND, {
             arenaState: ArenaState.WARMING,
             trigger: 'power_decay',
             currentPower: this.metrics.warmingPower
           });
-          
+
           eventBus.emit(Events.METRICS_UPDATED, this.metrics);
         } else if (this.currentState === ArenaState.FIGHT) {
           const decayAmount = this.config.fightDecayRate * decayInterval;
           this.metrics.fightPower = Math.max(0, this.metrics.fightPower - decayAmount);
-          
+
           // Emit LED command for power decay
           eventBus.emit(Events.LED_COMMAND, {
             arenaState: ArenaState.FIGHT,
             trigger: 'power_decay',
             currentPower: this.metrics.fightPower
           });
-          
+
           eventBus.emit(Events.METRICS_UPDATED, this.metrics);
         }
       }, 100) as unknown as number;

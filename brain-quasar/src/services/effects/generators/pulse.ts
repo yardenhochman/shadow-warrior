@@ -67,13 +67,13 @@ export class PulseGenerator implements EffectGenerator {
           const gaussian = Math.exp(-(distance * distance) / (2 * (pulseWidth / 3) ** 2));
           const brightness = 255 * gaussian * fade * pulse.intensity;
 
-          // White pulse
+          // Red pulse
           const [r, g, b] = this.buffer.getPixel(j);
           this.buffer.setPixel(
             j,
             Math.max(r, brightness),
-            Math.max(g, brightness),
-            Math.max(b, brightness)
+            g,
+            b
           );
         }
       }
