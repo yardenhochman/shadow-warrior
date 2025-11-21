@@ -323,6 +323,7 @@ class LEDControllerService {
 
           // Send shout event if this is a shout trigger
           if (payload.trigger === 'shout_detected' && payload.triggerAmplitude !== undefined) {
+            console.log('LED Controller: Shout detected in WARMING, amplitude=%f', payload.triggerAmplitude);
             this.realtimeEffectService.sendShoutEvent(payload.triggerAmplitude);
           }
           break;

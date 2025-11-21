@@ -195,8 +195,10 @@ export class RealtimeEffectService {
    * Send shout event to native service
    */
   sendShoutEvent(intensity: number): void {
+    console.log('sendShoutEvent called: intensity=%f, nativeServiceActive=%s', intensity, this.nativeServiceActive);
     if (this.nativeServiceActive) {
       try {
+        console.log('Sending shout event to native service with intensity: %f', intensity);
         LEDEffectPlugin.updateEffectState({
           type: 'shout',
           data: JSON.stringify({ intensity }),
@@ -206,6 +208,8 @@ export class RealtimeEffectService {
       } catch (error) {
         console.warn('Error sending shout event:', error);
       }
+    } else {
+      console.warn('Cannot send shout event - native service not active');
     }
   }
 
