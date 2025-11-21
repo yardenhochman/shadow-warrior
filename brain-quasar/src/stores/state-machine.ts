@@ -345,6 +345,7 @@ export const useStateMachineStore = defineStore('stateMachine', {
         );
 
         // Send LED command for shout detected
+        console.log('StateMachine: Shout detected in WARMING, amplitude=%f, powerGain=%f', amplitude, powerGain);
         eventBus.emit(Events.LED_COMMAND, {
           arenaState: ArenaState.WARMING,
           trigger: 'shout_detected',

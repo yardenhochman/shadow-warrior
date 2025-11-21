@@ -257,12 +257,14 @@ class MicrophoneService {
 
     // Emit shout event if above threshold
     if (amplitude > this.config.shoutThreshold) {
+      console.log('Microphone: Shout DETECTED! amplitude=%f, threshold=%f', amplitude, this.config.shoutThreshold);
       eventBus.emit(Events.SHOUT_DETECTED, {
         amplitude,
         timestamp: Date.now(),
       });
-
-      console.log('Shout detected: amplitude=%f', amplitude);
+    } else if (amplitude > 0.1) {
+      // Log near-threshold detections for debugging
+      console.log('Microphone: Shout near threshold, amplitude=%f (threshold=%f)', amplitude, this.config.shoutThreshold);
     }
 
     // Always emit metrics update for visualization
