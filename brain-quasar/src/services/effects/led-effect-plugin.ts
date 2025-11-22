@@ -19,14 +19,6 @@ export interface LEDEffectPluginInterface extends Plugin {
   stopEffectService(): Promise<void>;
 
   /**
-   * Render a single frame (called from native service on background thread)
-   * Returns frame data as base64 encoded pixel data
-   */
-  renderFrame(options: {
-    mode: 'warmup' | 'fight';
-  }): Promise<{ frameData: string }>;
-
-  /**
    * Update LED effect state
    */
   updateEffectState(options: {
@@ -58,10 +50,6 @@ const LEDEffectPlugin = registerPlugin<LEDEffectPluginInterface>('LEDEffectPlugi
     async stopEffectService() {
       await Promise.resolve();
       console.warn('LED Effect Plugin: Web platform does not support background service');
-    },
-    async renderFrame() {
-      await Promise.resolve();
-      return { frameData: '' };
     },
     async updateEffectState() {
       await Promise.resolve();
