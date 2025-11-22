@@ -1,6 +1,5 @@
 // Realtime Effect Service - Manages LED effect rendering via native Android service
 
-import { UDPService } from '../udp';
 import type { EffectConfig } from './types';
 import { eventBus, Events } from '../event-bus';
 import { LEDEffectPlugin } from './led-effect-plugin';
@@ -20,13 +19,13 @@ export class RealtimeEffectService {
   private mode: RealtimeEffectMode;
 
   // Per-controller state
-  private controllers = new Map<string, UDPService>();
+  private controllers = new Array<string>();
 
   // Native service state
   private nativeServiceActive = false;
 
   constructor(
-    controllerHosts: Array<{ host: string; port?: number }> = [],
+    controllerHosts: Array<string> = [],
     config?: Partial<EffectConfig>
   ) {
     if (config) {
@@ -35,46 +34,22 @@ export class RealtimeEffectService {
 
     this.mode = RealtimeEffectMode.NONE;
     console.log('RealtimeEffectService created with', controllerHosts.length, 'controllers');
-    this.controllers = new Map<string, UDPService>();
-    for (const controllerHost of controllerHosts) {
-      const { host, port = 21324 } = controllerHost;
-      const controllerId = `${host}:${port}`;
-      this.controllers.set(controllerId, new UDPService({ host, port }));
-    }
+    this.controllers = controllerHosts;
   }
 
   /**
    * Start realtime effect rendering for a specific controller
    */
   async start(mode: RealtimeEffectMode): Promise<void> {
-    try {
-      // Create dedicated UDP service for this controller
-      await Promise.all(
-        Array.from(this.controllers.values()).map(async (controller) => {
-          if (this.mode !== RealtimeEffectMode.NONE) {
-            console.warn(`Controller ${controller.config?.host}:${controller.config?.port} already running, skipping start`);
-            return;
-          }
 
-          await controller.connect();
-        })
-      );
-      this.mode = mode;
-
-    } catch (error) {
-      // Clean up on error
-      await this.stopAll();
-      console.error('Failed to start realtime effects:', error);
-      throw error;
-    }
-
+    this.mode = mode;
     // Start native background service - handles all rendering and UDP transmission natively
     try {
       await LEDEffectPlugin.startEffectService({
         mode: mode as 'warmup' | 'fight',
         controllers: Array.from(this.controllers.values()).map(controller => ({
-          host: controller.config?.host || '127.0.0.1',
-          port: controller.config?.port || 21324,
+          host: controller,
+          port: 21324,
         })),
       });
       this.nativeServiceActive = true;
@@ -114,27 +89,10 @@ export class RealtimeEffectService {
       }
     }
 
-    const stopPromises = Array.from(this.controllers.values()).map(async (controller) => {
-      await controller.disconnect();
-    });
 
-    await Promise.allSettled(stopPromises);
     this.mode = RealtimeEffectMode.NONE;
     console.log('All realtime effects stopped');
     eventBus.emit(Events.REALTIME_EFFECTS_STOPPED, { all: true });
-  }
-
-  /**
-   * Clear the LED strip by sending a black frame to all controllers
-   */
-  async clearStrip(): Promise<void> {
-    console.log('Clearing LED strip with black frame');
-    const clearPromises = Array.from(this.controllers.values()).map(async (controller) => {
-      if (controller.connected()) {
-        await controller.sendBlackFrame(this.config.ledCount);
-      }
-    });
-    await Promise.allSettled(clearPromises);
   }
 
   /**
@@ -164,13 +122,6 @@ export class RealtimeEffectService {
   */
   isRunning(): boolean {
     return this.mode !== RealtimeEffectMode.NONE && this.nativeServiceActive;
-  }
-
-  /**
-   * Get list of running controllers
-   */
-  getRunningControllers(): string[] {
-    return Array.from(this.controllers.keys());
   }
 
   /**

@@ -273,7 +273,6 @@ class LEDControllerService {
         case ArenaState.IDLE:
           // Stop realtime effects for this controller
           if (this.realtimeEffectService?.isRunning()) {
-            await this.realtimeEffectService.clearStrip();
             await this.realtimeEffectService.stop();
           }
           // Set WLED to breathing effect (red)
@@ -294,7 +293,6 @@ class LEDControllerService {
         case ArenaState.SUSPENDED:
           // Stop realtime effects and turn off LEDs
           if (this.realtimeEffectService?.isRunning()) {
-            await this.realtimeEffectService.clearStrip();
             await this.realtimeEffectService.stop();
           }
           // Turn off LEDs explicitly
@@ -522,10 +520,7 @@ class LEDControllerService {
     }
 
     // Create new service with current controller IPs
-    const controllerHosts = Array.from(this.controllers.values()).map((controller) => ({
-      host: controller.ip,
-      port: 21324,
-    }));
+    const controllerHosts = Array.from(this.controllers.values()).map((controller) => controller.ip);
 
     this.realtimeEffectService = new RealtimeEffectService(controllerHosts);
     console.log('RealtimeEffectService initialized with', controllerHosts.length, 'controllers');
