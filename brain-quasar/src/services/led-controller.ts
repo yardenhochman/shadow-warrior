@@ -371,6 +371,8 @@ class LEDControllerService {
           // Stop realtime effects for this controller
           if (this.realtimeEffectService?.isRunning()) {
             await this.realtimeEffectService.stop();
+            // Wait for controller to get out of realtime mode
+            await new Promise(resolve => setTimeout(resolve, 2000));
           }
           // Set WLED to breathing effect (red)
           await this.setWLEDEffect({
