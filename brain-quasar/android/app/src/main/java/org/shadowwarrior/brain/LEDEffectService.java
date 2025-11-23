@@ -188,7 +188,7 @@ public class LEDEffectService extends Service {
         Log.d(TAG, "Stopping LED effect rendering");
 
         // Send black frame to clear LEDs
-        if (effectGenerator != null && !transmitters.isEmpty()) {
+        if (!transmitters.isEmpty()) {
             try {
                 byte[] blackFrame = effectGenerator.generateBlackFrame();
                 for (UDPFrameTransmitter transmitter : transmitters) {
