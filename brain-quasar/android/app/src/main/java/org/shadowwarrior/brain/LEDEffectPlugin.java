@@ -77,11 +77,8 @@ public class LEDEffectPlugin extends Plugin {
             Intent serviceIntent = new Intent(context, LEDEffectService.class);
             serviceIntent.setAction("STOP_EFFECT");
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(serviceIntent);
-            } else {
-                context.startService(serviceIntent);
-            }
+            // Use regular startService for stop action since we're not keeping foreground
+            context.stopService(serviceIntent);
 
             Log.d(TAG, "Stopped LED effect service");
             call.resolve();
@@ -108,11 +105,8 @@ public class LEDEffectPlugin extends Plugin {
             serviceIntent.putExtra("updateType", type);
             serviceIntent.putExtra("data", call.getString("data", ""));
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(serviceIntent);
-            } else {
-                context.startService(serviceIntent);
-            }
+            // Use regular startService for state updates since service is already foreground
+            context.startService(serviceIntent);
 
             Log.d(TAG, "Updated LED effect state: " + type);
             call.resolve();
