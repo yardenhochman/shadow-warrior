@@ -263,8 +263,8 @@
             >
               <q-item-section avatar>
                 <q-icon
-                  name="wifi"
-                  color="positive"
+                  :name="controller.device.isConnected ? 'wifi' : 'wifi_off'"
+                  :color="controller.device.isConnected ? 'positive' : 'warning'"
                   size="sm"
                 />
               </q-item-section>
@@ -274,19 +274,39 @@
                 </q-item-label>
                 <q-item-label caption class="text-caption">
                   {{ controller.device.ip }}
+                  <span
+                    v-if="controller.device.lastConnectivityCheck"
+                    class="q-ml-sm text-grey-7"
+                  >
+                    • checked {{ formatTimeAgo(controller.device.lastConnectivityCheck) }}
+                  </span>
                 </q-item-label>
               </q-item-section>
               <q-item-section side>
-                <q-btn
-                  icon="delete"
-                  color="negative"
-                  size="sm"
-                  round
-                  flat
-                  @click="removeController(controller.id)"
-                >
-                  <q-tooltip>Remove Controller</q-tooltip>
-                </q-btn>
+                <div class="row q-gutter-xs">
+                  <q-btn
+                    v-if="!controller.device.isConnected"
+                    icon="refresh"
+                    color="info"
+                    size="sm"
+                    round
+                    flat
+                    :loading="reconnectingControllers.has(controller.id)"
+                    @click="reconnectController(controller.id)"
+                  >
+                    <q-tooltip>Reconnect Controller</q-tooltip>
+                  </q-btn>
+                  <q-btn
+                    icon="delete"
+                    color="negative"
+                    size="sm"
+                    round
+                    flat
+                    @click="removeController(controller.id)"
+                  >
+                    <q-tooltip>Remove Controller</q-tooltip>
+                  </q-btn>
+                </div>
               </q-item-section>
             </q-item>
           </q-list>
@@ -437,6 +457,7 @@ const controllerListVersion = ref(0); // Force reactivity trigger
 const newUVHost = ref('');
 const addingUVHost = ref(false);
 const uvHostListVersion = ref(0); // Force reactivity trigger
+const reconnectingControllers = ref(new Set<string>()); // Track reconnecting controllers
 
 // Event handlers for cleanup
 const controllerAddedHandler = () => {
@@ -524,6 +545,31 @@ function getIntensityColor(value: number): string {
   if (value < 0.3) return 'green';
   if (value < 0.6) return 'orange';
   return 'red';
+}
+
+function formatTimeAgo(timestamp: number): string {
+  const now = Date.now();
+  const diffMs = now - timestamp;
+
+  // Less than a minute
+  if (diffMs < 60000) {
+    return 'just now';
+  }
+
+  // Less than an hour
+  if (diffMs < 3600000) {
+    const minutes = Math.floor(diffMs / 60000);
+    return `${minutes}m ago`;
+  }
+
+  // Less than a day
+  if (diffMs < 86400000) {
+    const hours = Math.floor(diffMs / 3600000);
+    return `${hours}h ago`;
+  }
+
+  // Otherwise show date
+  return 'long ago';
 }
 
 async function startSensors() {
@@ -643,6 +689,32 @@ function removeController(controllerId: string) {
   } catch (error) {
     console.error('Failed to remove controller:', error);
     alert(`Failed to remove controller: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+async function reconnectController(controllerId: string) {
+  try {
+    // Mark as reconnecting
+    reconnectingControllers.value.add(controllerId);
+
+    // Test connectivity
+    const isConnected = await ledControllerService.reconnectController(controllerId);
+
+    // Show result
+    const controller = allControllers.value.find((c) => c.id === controllerId);
+    if (controller) {
+      if (isConnected) {
+        console.log(`✓ Successfully reconnected to ${controller.device.name}`);
+        // The UI will update automatically through the event emitted by testControllerConnectivity
+      } else {
+        console.error(`Failed to reconnect to ${controller.device.name}`);
+      }
+    }
+  } catch (error) {
+    console.error('Error reconnecting to controller:', error);
+  } finally {
+    // Remove from reconnecting set
+    reconnectingControllers.value.delete(controllerId);
   }
 }
 
