@@ -8,6 +8,8 @@ import { ArenaState } from 'src/types/state-machine';
 export interface WLEDController {
   ip: string;
   name?: string;
+  isConnected?: boolean;
+  lastConnectivityCheck?: number; // Timestamp of last check
 }
 
 class LEDControllerService {
@@ -68,9 +70,11 @@ class LEDControllerService {
       // Create realtime effect service with restored controllers
       this.initializeRealtimeEffectService();
 
-      // Emit event for each restored controller to trigger UI updates
+      // Test connectivity for each restored controller and emit events
       for (const id of this.controllers.keys()) {
         eventBus.emit(Events.CONTROLLER_ADDED, { id, type: 'wled' });
+        // Test connectivity in the background
+        void this.testControllerConnectivity(id);
       }
     } catch (error) {
       console.error('Failed to load saved controllers:', error);
@@ -219,6 +223,7 @@ class LEDControllerService {
     const wledController: WLEDController = {
       ip: cleanIp,
       name: `WLED ${cleanIp}`,
+      isConnected: false, // Start as disconnected until tested
     };
 
     this.controllers.set(controllerId, wledController);
@@ -230,10 +235,102 @@ class LEDControllerService {
     // Reinitialize effect service with new controller
     this.initializeRealtimeEffectService();
 
+    // Test connectivity in the background
+    void this.testControllerConnectivity(controllerId);
+
     // Emit event for UI updates
     eventBus.emit(Events.CONTROLLER_ADDED, { id: controllerId, type: 'wled' });
 
     return controllerId;
+  }
+
+  /**
+   * Test WLED controller connectivity by querying its HTTP API
+   * Updates the controller's isConnected status and saves to localStorage
+   */
+  async testControllerConnectivity(controllerId: string): Promise<boolean> {
+    const controller = this.controllers.get(controllerId);
+    if (!controller) {
+      return false;
+    }
+
+    const HTTP_TIMEOUT_MS = 3000; // 3 second timeout for connectivity test
+    try {
+      const url = `http://${controller.ip}/json/info`;
+      console.log(`Testing WLED connectivity for ${controllerId} (${controller.ip})`);
+
+      // Create abort controller for timeout
+      const abortController = new AbortController();
+      const timeoutId = setTimeout(() => abortController.abort(), HTTP_TIMEOUT_MS);
+
+      try {
+        const response = await fetch(url, {
+          method: 'GET',
+          signal: abortController.signal,
+        });
+
+        clearTimeout(timeoutId);
+
+        if (response.ok) {
+          const data = await response.json();
+          controller.isConnected = true;
+          controller.lastConnectivityCheck = Date.now();
+          console.log(`✓ WLED controller ${controllerId} is connected:`, data.name || data.ver);
+          this.saveControllers();
+
+          // Send Android effect with green color to indicate successful connection
+          await this.setWLEDEffect({
+            on: true,
+            bri: 100,
+            seg: [{
+              col: [[0, 255, 0]], // Green color
+              pal: 0, // Palette 0
+              fx: 122, // Android effect ID
+              sx: 128, // Speed (default)
+              ix: 128, // Intensity (default)
+            }]
+          });
+
+          eventBus.emit(Events.CONTROLLER_ADDED, { id: controllerId, type: 'wled' }); // Force UI update
+          return true;
+        } else {
+          console.warn(`WLED controller ${controllerId} returned HTTP ${response.status}`);
+          controller.isConnected = false;
+          controller.lastConnectivityCheck = Date.now();
+          this.saveControllers();
+          eventBus.emit(Events.CONTROLLER_ADDED, { id: controllerId, type: 'wled' }); // Force UI update
+          return false;
+        }
+      } catch (fetchError) {
+        clearTimeout(timeoutId);
+        if (fetchError instanceof Error && fetchError.name === 'AbortError') {
+          console.warn(`WLED connectivity test timeout for ${controllerId} (>${HTTP_TIMEOUT_MS}ms)`);
+        } else {
+          console.warn(`WLED connectivity test failed for ${controllerId}:`, fetchError);
+        }
+        controller.isConnected = false;
+        controller.lastConnectivityCheck = Date.now();
+        this.saveControllers();
+        eventBus.emit(Events.CONTROLLER_ADDED, { id: controllerId, type: 'wled' }); // Force UI update
+        return false;
+      }
+    } catch (error) {
+      console.error(`Unexpected error testing WLED connectivity for ${controllerId}:`, error);
+      controller.isConnected = false;
+      controller.lastConnectivityCheck = Date.now();
+      this.saveControllers();
+      eventBus.emit(Events.CONTROLLER_ADDED, { id: controllerId, type: 'wled' }); // Force UI update
+      return false;
+    }
+  }
+
+  /**
+   * Reconnect to a WLED controller by testing connectivity
+   * Useful for manual reconnection attempts
+   */
+  async reconnectController(controllerId: string): Promise<boolean> {
+    console.log(`Attempting to reconnect to controller ${controllerId}`);
+    return this.testControllerConnectivity(controllerId);
   }
 
 
