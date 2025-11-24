@@ -13,10 +13,10 @@ public class EnergyPulseEffect implements LEDEffect {
     private float pulseDuration = 0.5f; // How long pulse lasts (seconds)
     private float alpha = 1.0f;
 
-    // Color: default to blue, but configurable
-    private int colorR = 100;
-    private int colorG = 150;
-    private int colorB = 255;
+    // Color: default to redish, but configurable
+    private int colorR = 250;
+    private int colorG = 10;
+    private int colorB = 10;
 
     public EnergyPulseEffect() {
     }
