@@ -336,32 +336,6 @@ class LEDControllerService {
 
 
   private async handleLEDCommand(payload: LEDCommandPayload): Promise<void> {
-    console.log('LED command received:', payload.arenaState, 'trigger:', payload.trigger, 'controllers:', this.controllers.size);
-
-    // Send command to all controllers (not just connected ones, since UDP works independently)
-    const commands = Array.from(this.controllers.entries())
-      .map(([controllerId, controller]) => {
-        console.log(`Sending LED command to controller ${controllerId} (${controller.ip})`);
-        return this.sendCommandToController(controllerId, payload);
-      });
-
-    await Promise.allSettled(commands);
-  }
-
-  private async sendCommandToController(controllerId: string, payload: LEDCommandPayload): Promise<void> {
-    const controller = this.controllers.get(controllerId);
-    if (!controller) {
-      return;
-    }
-
-    try {
-      await this.sendWLEDCommand(payload);
-    } catch (error) {
-      console.error('Failed to send LED command to controller:', controllerId, error);
-    }
-  }
-
-  private async sendWLEDCommand(payload: LEDCommandPayload): Promise<void> {
     console.log(`sendWLEDCommand state: ${payload.arenaState}`);
 
     try {
@@ -407,7 +381,7 @@ class LEDControllerService {
 
           if (!this.realtimeEffectService.isRunning()) {
             // Enable UDP realtime mode in WLED first
-            await this.enableUDPRealtimeMode();
+            // await this.enableUDPRealtimeMode();
             await this.realtimeEffectService.start(RealtimeEffectMode.WARMUP);
           } else {
             await this.realtimeEffectService.switchMode(RealtimeEffectMode.WARMUP);
@@ -435,7 +409,7 @@ class LEDControllerService {
 
           if (!this.realtimeEffectService.isRunning()) {
             // Enable UDP realtime mode in WLED first
-            await this.enableUDPRealtimeMode();
+            // await this.enableUDPRealtimeMode();
             await this.realtimeEffectService.start(RealtimeEffectMode.FIGHT);
           } else {
             await this.realtimeEffectService.switchMode(RealtimeEffectMode.FIGHT);
@@ -473,58 +447,58 @@ class LEDControllerService {
     }
   }
 
-  /**
+  private async sendWLEDControllerCommand(controller: WLEDController, state: Record<string, unknown>): Promise<void> {
+    const HTTP_TIMEOUT_MS = 5000; // 5 second timeout per request
+    
+    const url = `http://${controller.ip}/json/state`;
+    console.log(`Setting WLED effect via JSON API: ${url}`, state);
+
+    // Create abort controller for timeout
+    const abortController = new AbortController();
+    const timeoutId = setTimeout(() => abortController.abort(), HTTP_TIMEOUT_MS);
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(state),
+        signal: abortController.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        console.warn(`WLED HTTP error for ${controller.ip}: ${response.status} ${response.statusText}`);
+        // Don't throw - continue to next controller
+        return;
+      }
+
+      const result = await response.json();
+      console.log(`WLED effect set for ${controller.ip}:`, result);
+    } catch (fetchError) {
+      clearTimeout(timeoutId);
+      if (fetchError instanceof Error && fetchError.name === 'AbortError') {
+        console.warn(`WLED request timeout for ${controller.ip} (>${HTTP_TIMEOUT_MS}ms)`);
+      } else {
+        console.warn(`Failed to set WLED effect for ${controller.ip}:`, fetchError);
+      }
+      // Don't throw - continue to next controller
+      return;
+    }
+  }
+    /**
    * Set WLED effect using JSON API with timeout protection
    * @param ip WLED controller IP address
    * @param state WLED state object (partial)
    */
   private async setWLEDEffect(state: Record<string, unknown>): Promise<void> {
-    const HTTP_TIMEOUT_MS = 5000; // 5 second timeout per request
-
+    const promises: Promise<void>[] = [];
     for (const controller of this.controllers.values()) {
-      try {
-        const url = `http://${controller.ip}/json/state`;
-        console.log(`Setting WLED effect via JSON API: ${url}`, state);
-
-        // Create abort controller for timeout
-        const abortController = new AbortController();
-        const timeoutId = setTimeout(() => abortController.abort(), HTTP_TIMEOUT_MS);
-
-        try {
-          const response = await fetch(url, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(state),
-            signal: abortController.signal,
-          });
-
-          clearTimeout(timeoutId);
-
-          if (!response.ok) {
-            console.warn(`WLED HTTP error for ${controller.ip}: ${response.status} ${response.statusText}`);
-            // Don't throw - continue to next controller
-            continue;
-          }
-
-          const result = await response.json();
-          console.log(`WLED effect set for ${controller.ip}:`, result);
-        } catch (fetchError) {
-          clearTimeout(timeoutId);
-          if (fetchError instanceof Error && fetchError.name === 'AbortError') {
-            console.warn(`WLED request timeout for ${controller.ip} (>${HTTP_TIMEOUT_MS}ms)`);
-          } else {
-            console.warn(`Failed to set WLED effect for ${controller.ip}:`, fetchError);
-          }
-          // Don't throw - continue to next controller
-          continue;
-        }
-      } catch (error) {
-        console.error(`Unexpected error setting WLED effect for ${controller.ip}:`, error);
-        // Don't throw - this is a non-critical operation
-      }
+      promises.push(this.sendWLEDControllerCommand(controller, state));
     }
+    await Promise.all(promises);
   }
 
   /**
