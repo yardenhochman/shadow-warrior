@@ -9,12 +9,12 @@ use mdns_sd::{ServiceDaemon, ServiceEvent};
 
 use crate::services::database_manager::SharedDatabaseManager;
 use crate::services::ble_manager::BleManager;
-use crate::core::SharedEventBus;
+use crate::core::{Event, SharedEventBus};
 
 pub struct DiscoveryManager {
     db: SharedDatabaseManager,
     ble: Arc<BleManager>,
-    _event_bus: SharedEventBus,
+    event_bus: SharedEventBus,
     is_scanning: Arc<RwLock<bool>>,
 }
 
@@ -23,7 +23,7 @@ impl DiscoveryManager {
         Self {
             db,
             ble,
-            _event_bus: event_bus,
+            event_bus,
             is_scanning: Arc::new(RwLock::new(false)),
         }
     }
@@ -41,14 +41,16 @@ impl DiscoveryManager {
         let ble = self.ble.clone();
         let is_scanning = self.is_scanning.clone();
         
+        let event_bus = self.event_bus.clone();
+
         tokio::spawn(async move {
             // 1. mDNS scan for WLED (_wled._tcp)
-            if let Err(e) = Self::scan_mdns(db.clone()).await {
+            if let Err(e) = Self::scan_mdns(db.clone(), event_bus.clone()).await {
                 error!("mDNS scan failed: {}", e);
             }
 
             // 2. SSDP/UPnP Scan for WLED and Tasmota
-            if let Err(e) = Self::scan_ssdp(db.clone()).await {
+            if let Err(e) = Self::scan_ssdp(db.clone(), event_bus.clone()).await {
                 error!("SSDP scan failed: {}", e);
             }
 
@@ -66,7 +68,7 @@ impl DiscoveryManager {
         Ok(())
     }
 
-    async fn scan_mdns(db: SharedDatabaseManager) -> Result<()> {
+    async fn scan_mdns(db: SharedDatabaseManager, event_bus: SharedEventBus) -> Result<()> {
         info!("Scanning for WLED devices via mDNS (_wled._tcp)...");
         let mdns = ServiceDaemon::new()?;
         let receiver = mdns.browse("_wled._tcp.local.")?;
@@ -92,6 +94,7 @@ impl DiscoveryManager {
                                     error!("Failed to save mDNS WLED device: {}", e);
                                 } else {
                                     info!("Registered WLED {} at {}:{}", name, host, port);
+                                    event_bus.publish(Event::WledConnected { ip: host.clone() });
                                 }
                             }
                         }
@@ -107,7 +110,7 @@ impl DiscoveryManager {
         Ok(())
     }
 
-    async fn scan_ssdp(db: SharedDatabaseManager) -> Result<()> {
+    async fn scan_ssdp(db: SharedDatabaseManager, event_bus: SharedEventBus) -> Result<()> {
         info!("Scanning for SSDP devices...");
         
         let search_target = SearchTarget::RootDevice;
@@ -124,9 +127,9 @@ impl DiscoveryManager {
                     debug!("Found SSDP device: USN={}, Location={}, Server={:?}", usn, location, server);
                     
                     if location.contains("wled") || server.as_ref().map_or(false, |s| s.to_lowercase().contains("wled")) {
-                        Self::register_discovered_device(&db, "WLED Device", "wled", &location).await;
+                        Self::register_discovered_device(&db, "WLED Device", "wled", &location, Some(&event_bus)).await;
                     } else if location.contains("tasmota") || usn.to_lowercase().contains("tasmota") {
-                        Self::register_discovered_device(&db, "Tasmota Plug", "tasmota", &location).await;
+                        Self::register_discovered_device(&db, "Tasmota Plug", "tasmota", &location, None).await;
                     }
                 }
                 Err(e) => warn!("SSDP response error: {}", e),
@@ -142,7 +145,7 @@ impl DiscoveryManager {
             Ok(devices) => {
                 for (name, address) in devices {
                     info!("Found BLE device: {} ({})", name, address);
-                    Self::register_discovered_device(&db, &name, "punching_bag", &format!("ble://{}", address)).await;
+                    Self::register_discovered_device(&db, &name, "punching_bag", &format!("ble://{}", address), None).await;
                 }
             }
             Err(e) => error!("BLE scan failed: {}", e),
@@ -150,7 +153,7 @@ impl DiscoveryManager {
         Ok(())
     }
 
-    async fn register_discovered_device(db: &SharedDatabaseManager, name: &str, device_type: &str, location: &str) {
+    async fn register_discovered_device(db: &SharedDatabaseManager, name: &str, device_type: &str, location: &str, event_bus: Option<&SharedEventBus>) {
         // Parse host/port from location URL (e.g., http://192.168.1.50:80/xml or ble://address)
         let (host, port) = if location.starts_with("ble://") {
             (location.trim_start_matches("ble://").to_string(), 0)
@@ -160,10 +163,15 @@ impl DiscoveryManager {
                 Err(_) => return,
             }
         };
-        
+
         info!("Registering discovered {} at {}:{}", device_type, host, port);
-        if let Err(e) = db.add_device(name, device_type, &host, port, None).await {
-            error!("Failed to save discovered device: {}", e);
+        match db.add_device(name, device_type, &host, port, None).await {
+            Ok(_) => {
+                if let Some(bus) = event_bus {
+                    bus.publish(Event::WledConnected { ip: host.clone() });
+                }
+            }
+            Err(e) => error!("Failed to save discovered device: {}", e),
         }
     }
 }

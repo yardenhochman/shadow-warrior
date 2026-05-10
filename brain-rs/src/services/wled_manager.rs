@@ -21,6 +21,7 @@ pub struct WledManager {
     controllers: Arc<RwLock<Vec<WledController>>>,
     udp_sockets: Arc<RwLock<Vec<UdpSocket>>>,
     realtime_task_handle: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
+    current_state: Arc<RwLock<ArenaState>>,
 }
 
 impl WledManager {
@@ -38,6 +39,7 @@ impl WledManager {
             controllers: Arc::new(RwLock::new(Vec::new())),
             udp_sockets: Arc::new(RwLock::new(Vec::new())),
             realtime_task_handle: Arc::new(RwLock::new(None)),
+            current_state: Arc::new(RwLock::new(ArenaState::Idle)),
         }
     }
 
@@ -99,6 +101,83 @@ impl WledManager {
                 last_error: None,
             })
             .collect()
+    }
+
+    /// Add a newly discovered controller, flash green for 2s, then apply current state effect.
+    pub async fn add_controller(&self, ip: String) -> Result<()> {
+        {
+            let mut controllers = self.controllers.write().await;
+            if controllers.iter().any(|c| c.ip == ip) {
+                return Ok(());
+            }
+            controllers.push(WledController { ip: ip.clone(), num_leds: 150 });
+        }
+        self.rebuild_sockets().await?;
+
+        // Flash solid green
+        let green_payload = serde_json::json!({
+            "on": true, "bri": 255, "transition": 0,
+            "seg": [{ "id": 0, "fx": 0, "col": [[0, 255, 0]] }]
+        });
+        let url = format!("http://{}/json/state", ip);
+        if let Err(e) = self.http_client.post(&url).json(&green_payload).send().await {
+            warn!("Green flash failed for {}: {}", ip, e);
+        } else {
+            info!("Flashed green on new controller {}", ip);
+        }
+
+        // After 2s, apply current arena state effect to all controllers
+        let http_client = self.http_client.clone();
+        let controllers = self.controllers.clone();
+        let config = self.config.clone();
+        let current_state = self.current_state.clone();
+        let udp_sockets = self.udp_sockets.clone();
+        let realtime_task_handle = self.realtime_task_handle.clone();
+        let event_bus = self.event_bus.clone();
+
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            // Re-apply state effect (rebuild a minimal WledManager-like context)
+            let current = *current_state.read().await;
+            let effect = match current {
+                ArenaState::Suspended => {
+                    let payload = serde_json::json!({ "on": false });
+                    let ctls = controllers.read().await;
+                    for c in ctls.iter() {
+                        let url = format!("http://{}/json/state", c.ip);
+                        let _ = http_client.post(&url).json(&payload).send().await;
+                    }
+                    return;
+                }
+                ArenaState::Idle => &config.effects.idle as &WledEffect,
+                ArenaState::Warming => &config.effects.warming,
+                ArenaState::Fight => &config.effects.fight,
+                ArenaState::Cooldown => &config.effects.cooldown,
+            };
+
+            if effect.effect != "realtime" {
+                let effect_id: u8 = match effect.effect.to_lowercase().as_str() {
+                    "solid" => 0, "blink" => 1, "breathe" => 2, "wipe" => 3,
+                    "scan" => 5, "rainbow" => 8, "twinkle" => 15, "fire" | "fireworks" => 16,
+                    _ => 0,
+                };
+                let payload = serde_json::json!({
+                    "on": true, "bri": 255, "transition": 7,
+                    "seg": [{ "id": 0, "fx": effect_id, "sx": effect.speed.unwrap_or(128), "ix": 128 }]
+                });
+                let ctls = controllers.read().await;
+                for c in ctls.iter() {
+                    let url = format!("http://{}/json/state", c.ip);
+                    let _ = http_client.post(&url).json(&payload).send().await;
+                }
+            }
+            // realtime mode: existing task already sends frames to all sockets incl. new one
+            drop(udp_sockets);
+            drop(realtime_task_handle);
+            drop(event_bus);
+        });
+
+        Ok(())
     }
 
     /// Remove a controller by IP from the runtime list and rebuild UDP sockets.
@@ -337,7 +416,7 @@ impl WledManager {
         }
     }
 
-    /// Subscribe to StateChanged events and apply LED effects autonomously.
+    /// Subscribe to StateChanged and WledConnected events.
     pub fn start_event_loop(self: Arc<Self>) {
         let mut event_rx = self.event_bus.subscribe();
         tokio::spawn(async move {
@@ -345,9 +424,15 @@ impl WledManager {
                 match event_rx.recv().await {
                     Ok(Event::StateChanged { to, .. }) => {
                         if let Ok(state) = to.parse::<ArenaState>() {
+                            *self.current_state.write().await = state;
                             if let Err(e) = self.set_state_effect(state).await {
                                 error!("WLED set_state_effect error: {}", e);
                             }
+                        }
+                    }
+                    Ok(Event::WledConnected { ip }) => {
+                        if let Err(e) = self.add_controller(ip).await {
+                            error!("WLED add_controller error: {}", e);
                         }
                     }
                     Err(e) => {
