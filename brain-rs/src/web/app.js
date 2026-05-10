@@ -329,15 +329,21 @@ async function scanHardware() {
         const response = await fetch('/api/discovery/scan', { method: 'POST' });
         const result = await response.json();
         if (result.success) {
-            setTimeout(loadDevices, 2000); // Wait for results to populate
+            // Poll device list every 2s for 16s (covers mDNS 5s + SSDP 5s + BLE 5s)
+            let polls = 0;
+            const pollInterval = setInterval(async () => {
+                await loadDevices();
+                polls++;
+                if (polls >= 8) clearInterval(pollInterval);
+            }, 2000);
         }
     } catch (error) {
         console.error('Scan failed:', error);
     } finally {
         setTimeout(() => {
             scanBtn.disabled = false;
-            scanBtn.textContent = 'Scan Hardware (SSDP/BLE)';
-        }, 5000);
+            scanBtn.textContent = 'Scan Hardware (mDNS/SSDP/BLE)';
+        }, 16000);
     }
 }
 
