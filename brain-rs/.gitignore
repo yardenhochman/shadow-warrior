@@ -26,3 +26,8 @@ Thumbs.db
 
 # Claude Code ctags index
 .claude/tags
+
+# sqlite
+*.db
+*.db-wal
+*.db-shm
