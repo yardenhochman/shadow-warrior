@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "shadow_warrior",
+  "project_id": "33cdb0a2-6102-4e30-b1ad-6eafcdc574f1"
+}
