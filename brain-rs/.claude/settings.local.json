@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__memelord__memory_start_task",
+      "Bash(cargo build:*)",
+      "mcp__memelord__memory_end_task"
+    ]
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "memelord"
+  ]
+}

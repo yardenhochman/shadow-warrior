@@ -1,0 +1,31 @@
+# Build environment for Shadow Warrior Brain-RS
+# Targets: aarch64-unknown-linux-gnu (Pi 4), arm-unknown-linux-gnueabihf (Pi Zero W)
+FROM rust:1.93-bookworm
+
+# Add foreign architectures
+RUN dpkg --add-architecture arm64 && \
+    dpkg --add-architecture armhf
+
+# Install cross-compilers and native dependencies for both architectures
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    # Pi 4 (aarch64) dependencies (Native since we run on arm64 host)
+    libasound2-dev:arm64 \
+    libdbus-1-dev:arm64 \
+    libssl-dev:arm64 \
+    # Pi Zero W (armhf) dependencies
+    gcc-arm-linux-gnueabihf \
+    libasound2-dev:armhf \
+    libdbus-1-dev:armhf \
+    libssl-dev:armhf \
+    && rm -rf /var/lib/apt/lists/*
+
+# Pre-install rust targets
+RUN rustup target add aarch64-unknown-linux-gnu arm-unknown-linux-gnueabihf
+
+# Environment variables for cross-compilation
+ENV PKG_CONFIG_ALLOW_CROSS=1
+ENV CARGO_TARGET_ARM_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc
+
+WORKDIR /project

@@ -1,0 +1,514 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+:root {
+    --bg-dark: #0a0e1a;
+    --bg-card: #151b2e;
+    --bg-card-hover: #1a2237;
+    --primary: #00d9ff;
+    --primary-glow: rgba(0, 217, 255, 0.3);
+    --secondary: #ff006e;
+    --success: #00ff88;
+    --warning: #ffaa00;
+    --danger: #ff3366;
+    --text-primary: #ffffff;
+    --text-secondary: #a0a0a0;
+    --border: #2a3548;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    background: var(--bg-dark);
+    color: var(--text-primary);
+    line-height: 1.6;
+    min-height: 100vh;
+}
+
+.container {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 2rem;
+}
+
+header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 3rem;
+    padding-bottom: 1.5rem;
+    border-bottom: 2px solid var(--border);
+}
+
+h1 {
+    font-size: 2.5rem;
+    font-weight: 800;
+    background: linear-gradient(135deg, var(--primary), var(--secondary));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+h2 {
+    font-size: 1.5rem;
+    margin-bottom: 1rem;
+    color: var(--text-primary);
+}
+
+.uptime {
+    font-size: 1rem;
+    color: var(--text-secondary);
+}
+
+/* State Display */
+.state-display {
+    text-align: center;
+    margin-bottom: 2rem;
+}
+
+.state-badge {
+    display: inline-block;
+    padding: 2rem 4rem;
+    border-radius: 20px;
+    font-size: 3rem;
+    font-weight: 900;
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+    margin-bottom: 1rem;
+    animation: pulse 2s ease-in-out infinite;
+    box-shadow: 0 0 40px var(--primary-glow);
+}
+
+.state-badge.suspended {
+    background: rgba(128, 128, 128, 0.2);
+    color: #808080;
+    box-shadow: none;
+}
+
+.state-badge.idle {
+    background: rgba(0, 217, 255, 0.2);
+    color: var(--primary);
+}
+
+.state-badge.warming {
+    background: rgba(255, 170, 0, 0.2);
+    color: var(--warning);
+}
+
+.state-badge.fight {
+    background: rgba(255, 51, 102, 0.2);
+    color: var(--danger);
+}
+
+.state-badge.cooldown {
+    background: rgba(0, 255, 136, 0.2);
+    color: var(--success);
+}
+
+@keyframes pulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.05); }
+}
+
+.state-timer {
+    font-size: 1.5rem;
+    color: var(--text-secondary);
+}
+
+/* Energy Bar */
+.energy-section {
+    margin-bottom: 2rem;
+}
+
+.energy-bar {
+    position: relative;
+    width: 100%;
+    height: 60px;
+    background: var(--bg-card);
+    border-radius: 30px;
+    overflow: hidden;
+    border: 2px solid var(--border);
+}
+
+.energy-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--warning), var(--danger));
+    transition: width 0.3s ease;
+    box-shadow: 0 0 20px rgba(255, 170, 0, 0.5);
+}
+
+.energy-text {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 1.5rem;
+    font-weight: 700;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+}
+
+/* Fight Section */
+.fight-section {
+    margin-bottom: 2rem;
+}
+
+.fight-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
+}
+
+.stat-card {
+    background: var(--bg-card);
+    padding: 1.5rem;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    text-align: center;
+}
+
+.stat-label {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    margin-bottom: 0.5rem;
+}
+
+.stat-value {
+    font-size: 2rem;
+    font-weight: 700;
+    color: var(--primary);
+}
+
+/* Hardware Section */
+.hardware-section {
+    margin-bottom: 2rem;
+}
+
+.hardware-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
+}
+
+.hardware-card {
+    background: var(--bg-card);
+    padding: 1.5rem;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    transition: all 0.3s ease;
+}
+
+.hardware-card:hover {
+    background: var(--bg-card-hover);
+    transform: translateY(-2px);
+}
+
+.hardware-card.connected {
+    border-color: var(--success);
+}
+
+.hardware-icon {
+    font-size: 2rem;
+    margin-bottom: 0.5rem;
+}
+
+.hardware-name {
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+}
+
+.hardware-status {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+}
+
+.hardware-status.connected {
+    color: var(--success);
+}
+
+.audio-level {
+    margin-top: 0.5rem;
+    height: 8px;
+    background: var(--bg-dark);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.audio-meter {
+    height: 100%;
+    background: var(--primary);
+    transition: width 0.1s ease;
+}
+
+.music-track {
+    margin-top: 0.5rem;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    font-style: italic;
+}
+
+/* Statistics */
+.stats-section {
+    margin-bottom: 2rem;
+}
+
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 1rem;
+}
+
+.stat-box {
+    background: var(--bg-card);
+    padding: 2rem;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    text-align: center;
+}
+
+.stat-number {
+    font-size: 2.5rem;
+    font-weight: 700;
+    color: var(--primary);
+    margin-bottom: 0.5rem;
+}
+
+/* Controls */
+.controls-section {
+    margin-bottom: 2rem;
+}
+
+.button-group {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+
+.btn {
+    padding: 1rem 2rem;
+    border: none;
+    border-radius: 8px;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.btn-primary {
+    background: var(--primary);
+    color: var(--bg-dark);
+}
+
+.btn-primary:hover {
+    background: var(--primary);
+    box-shadow: 0 0 20px var(--primary-glow);
+    transform: translateY(-2px);
+}
+
+.btn-secondary {
+    background: var(--bg-card);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+}
+
+.btn-secondary:hover {
+    background: var(--bg-card-hover);
+}
+
+.btn-danger {
+    background: var(--danger);
+    color: white;
+}
+
+.btn-danger:hover {
+    background: #ff0055;
+    box-shadow: 0 0 20px rgba(255, 51, 102, 0.5);
+}
+
+.btn-warning {
+    background: var(--warning);
+    color: var(--bg-dark);
+}
+
+.btn-warning:hover {
+    background: #ff8800;
+    box-shadow: 0 0 20px rgba(255, 170, 0, 0.5);
+}
+
+.btn-small {
+    padding: 0.5rem 1rem;
+    font-size: 0.8rem;
+}
+
+.control-row {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    background: var(--bg-card);
+    padding: 1rem;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+}
+
+.form-select {
+    background: var(--bg-dark);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    padding: 0.5rem;
+    border-radius: 4px;
+    font-size: 1rem;
+    outline: none;
+}
+
+.form-select:focus {
+    border-color: var(--primary);
+}
+
+.form-input {
+    background: var(--bg-dark);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    padding: 0.5rem 1rem;
+    border-radius: 4px;
+    font-size: 1rem;
+    outline: none;
+    width: 100%;
+}
+
+.form-input:focus {
+    border-color: var(--primary);
+}
+
+/* Tabs */
+.tabs {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 2rem;
+}
+
+.tab-btn {
+    padding: 0.75rem 1.5rem;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text-secondary);
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.tab-btn:hover {
+    background: var(--bg-card-hover);
+    color: var(--text-primary);
+}
+
+.tab-btn.active {
+    background: var(--primary);
+    color: var(--bg-dark);
+    border-color: var(--primary);
+}
+
+.tab-content {
+    display: none;
+}
+
+.tab-content.active {
+    display: block;
+}
+
+/* Config Section */
+.config-group {
+    background: var(--bg-card);
+    padding: 1.5rem;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    margin-bottom: 1.5rem;
+}
+
+.config-group h3 {
+    font-size: 1.1rem;
+    margin-bottom: 1.2rem;
+    color: var(--primary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.form-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    align-items: center;
+    gap: 1.5rem;
+    margin-bottom: 1rem;
+}
+
+.form-row label {
+    font-size: 0.95rem;
+    color: var(--text-secondary);
+}
+
+.config-actions {
+    display: flex;
+    gap: 1rem;
+    margin-top: 2rem;
+}
+
+/* Footer */
+footer {
+    margin-top: 3rem;
+    padding-top: 1.5rem;
+    border-top: 2px solid var(--border);
+    text-align: center;
+}
+
+.connection-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+}
+
+.status-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--text-secondary);
+    animation: blink 2s ease-in-out infinite;
+}
+
+.status-dot.connected {
+    background: var(--success);
+    animation: none;
+}
+
+@keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .container {
+        padding: 1rem;
+    }
+
+    h1 {
+        font-size: 2rem;
+    }
+
+    .state-badge {
+        padding: 1.5rem 3rem;
+        font-size: 2rem;
+    }
+
+    .button-group {
+        flex-direction: column;
+    }
+
+    .btn {
+        width: 100%;
+    }
+}

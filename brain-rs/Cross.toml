@@ -1,0 +1,13 @@
+[target.aarch64-unknown-linux-gnu]
+pre-build = [
+    "dpkg --add-architecture arm64",
+    "apt-get update",
+    "apt-get install --assume-yes libasound2-dev:arm64 libdbus-1-dev:arm64 libssl-dev:arm64 pkg-config"
+]
+
+[target.arm-unknown-linux-gnueabihf]
+pre-build = [
+    "dpkg --add-architecture armhf",
+    "apt-get update",
+    "apt-get install --assume-yes libasound2-dev:armhf libdbus-1-dev:armhf libssl-dev:armhf pkg-config"
+]
