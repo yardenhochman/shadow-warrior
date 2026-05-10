@@ -1,0 +1,68 @@
+server:
+  host: "0.0.0.0"
+  port: 8000
+  log_level: "info"
+
+arena:
+  # Timing configuration
+  warming_energy_threshold: 100.0  # Energy points to trigger FIGHT
+  fight_duration_sec: 180          # 3 minutes default
+  fight_inactivity_timeout_sec: 30 # End fight if no activity
+  cooldown_duration_sec: 60
+
+  # Energy bar settings
+  shout_energy_multiplier: 10.0
+  energy_decay_rate: 0.5           # Points per second
+
+ble:
+  auto_connect: true
+  scan_timeout_sec: 5
+  retry_interval_sec: 10
+  device_name_patterns:
+    - "shadow"
+    - "warrior"
+    - "punch"
+    - "bag"
+
+  # Punching bag parameters
+  alpha: 0.8
+  threshold: 2.0
+
+audio:
+  sample_rate: 16000
+  channels: 1
+  buffer_size: 1024
+  shout_threshold_db: -15.0
+  shout_min_duration_sec: 0.5
+
+music:
+  playlist_dir: "./music"
+  formats:
+    - "mp3"
+    - "flac"
+    - "wav"
+  shuffle: true
+  volume: 0.8
+
+wled:
+  controllers: []
+
+  udp_fps: 30
+  effects:
+    idle:
+      effect: "breathe"
+      palette: "ocean"
+      speed: 128
+    warming:
+      effect: "rainbow"
+      palette: "rainbow"
+      speed: 200
+    fight:
+      effect: "realtime"  # UDP realtime
+    cooldown:
+      effect: "fire"
+      palette: "lava"
+      speed: 150
+
+tasmota:
+  plugs: []

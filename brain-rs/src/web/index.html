@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shadow Warrior Brain</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <h1>⚡ Shadow Warrior</h1>
+            <div class="uptime">Uptime: <span id="uptime">--</span></div>
+        </header>
+
+        <nav class="tabs">
+            <button class="tab-btn active" onclick="showTab('arena')">Arena</button>
+            <button class="tab-btn" onclick="showTab('hardware')">Hardware</button>
+            <button class="tab-btn" onclick="showTab('config')">Config</button>
+        </nav>
+
+        <main>
+            <div id="arenaTab" class="tab-content active">
+                <!-- State Display -->
+                <section class="state-display">
+                    <div class="state-badge" id="stateBadge">
+                        <span id="stateText">LOADING</span>
+                    </div>
+                    <div class="state-timer" id="stateTimer">--</div>
+                </section>
+
+                <!-- Energy Bar (Warming State) -->
+                <section class="energy-section" id="energySection" style="display: none;">
+                    <h2>Energy Bar</h2>
+                    <div class="energy-bar">
+                        <div class="energy-fill" id="energyFill"></div>
+                        <span class="energy-text" id="energyText">0%</span>
+                    </div>
+                </section>
+
+                <!-- Fight Info (Fight State) -->
+                <section class="fight-section" id="fightSection" style="display: none;">
+                    <div class="fight-stats">
+                        <div class="stat-card">
+                            <div class="stat-label">Time Remaining</div>
+                            <div class="stat-value" id="fightTimeRemaining">--</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Punches</div>
+                            <div class="stat-value" id="punchCount">0</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Max Power</div>
+                            <div class="stat-value" id="maxPower">0</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Inactivity</div>
+                            <div class="stat-value" id="inactivityTime">0s</div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Session Statistics -->
+                <section class="stats-section">
+                    <h2>Session Statistics</h2>
+                    <div class="stats-grid">
+                        <div class="stat-box">
+                            <div class="stat-number" id="totalSessions">0</div>
+                            <div class="stat-label">Total Sessions</div>
+                        </div>
+                    </div>
+                </section>
+            </div>
+
+            <div id="hardwareTab" class="tab-content">
+                <!-- Hardware Status -->
+                <section class="hardware-section">
+                    <h2>Hardware Status</h2>
+                    <div class="hardware-grid">
+                        <div class="hardware-card" id="bleCard">
+                            <div class="hardware-icon">📡</div>
+                            <div class="hardware-name">BLE</div>
+                            <div class="hardware-status" id="bleStatus">Disconnected</div>
+                        </div>
+                        <div class="hardware-card" id="audioCard">
+                            <div class="hardware-icon">🎤</div>
+                            <div class="hardware-name">Audio</div>
+                            <div class="hardware-status" id="audioStatus">Disconnected</div>
+                            <div class="audio-level">
+                                <div class="audio-meter" id="audioMeter"></div>
+                            </div>
+                        </div>
+                        <div class="hardware-card" id="wledCard">
+                            <div class="hardware-icon">💡</div>
+                            <div class="hardware-name">WLED</div>
+                            <div class="hardware-status" id="wledStatus">Disconnected</div>
+                        </div>
+                        <div class="hardware-card" id="tasmotaCard">
+                            <div class="hardware-icon">🔌</div>
+                            <div class="hardware-name">Tasmota</div>
+                            <div class="hardware-status" id="tasmotaStatus">Disconnected</div>
+                        </div>
+                        <div class="hardware-card" id="musicCard">
+                            <div class="hardware-icon">🎵</div>
+                            <div class="hardware-name">Music</div>
+                            <div class="hardware-status" id="musicStatus">Stopped</div>
+                            <div class="music-track" id="musicTrack"></div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Hardware Discovery & Management -->
+                <section class="hardware-management">
+                    <h2>Discovery & Management</h2>
+                    <div class="button-group">
+                        <button class="btn btn-primary" onclick="scanHardware()" id="scanBtn">
+                            Scan Hardware (SSDP/BLE)
+                        </button>
+                        <button class="btn" onclick="toggleAddDeviceForm()">
+                            Add Device Manually
+                        </button>
+                    </div>
+
+                    <div id="addDeviceForm"
+                        style="display: none; margin-top: 15px; padding: 15px; background: #2a2a2a; border-radius: 8px;">
+                        <h3>Add/Update Device</h3>
+                        <div class="form-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                            <input type="text" id="devName" placeholder="Device Name (e.g. Bag 1)" class="form-input">
+                            <select id="devType" class="form-select">
+                                <option value="wled">WLED</option>
+                                <option value="tasmota">Tasmota</option>
+                                <option value="punching_bag">Punching Bag (BLE)</option>
+                            </select>
+                            <input type="text" id="devHost" placeholder="Host/IP (or BLE Address)" class="form-input">
+                            <input type="number" id="devPort" value="80" class="form-input">
+                        </div>
+                        <button class="btn btn-small btn-primary" style="margin-top: 10px;" onclick="saveDevice()">Save
+                            Device</button>
+                    </div>
+
+                    <div class="device-list" style="margin-top: 20px;">
+                        <h3>Configured Devices</h3>
+                        <div id="deviceListContainer">
+                            <p>Loading devices...</p>
+                        </div>
+                    </div>
+                </section>
+            </div>
+
+            <div id="configTab" class="tab-content">
+                <section class="config-section">
+                    <h2>Game Tunables</h2>
+                    <form id="configForm" onsubmit="event.preventDefault(); saveConfig();">
+                        <div class="config-group">
+                            <h3>Arena & Energy</h3>
+                            <div class="form-row">
+                                <label for="confEnergyThreshold">Warming Threshold (Points)</label>
+                                <input type="number" id="confEnergyThreshold" step="0.1" class="form-input">
+                            </div>
+                            <div class="form-row">
+                                <label for="confEnergyDecay">Energy Decay Rate (Points/s)</label>
+                                <input type="number" id="confEnergyDecay" step="0.01" class="form-input">
+                            </div>
+                        </div>
+
+                        <div class="config-group">
+                            <h3>Shout Detection</h3>
+                            <div class="form-row">
+                                <label for="confShoutThreshold">Shout Threshold (dB)</label>
+                                <input type="number" id="confShoutThreshold" step="0.5" class="form-input">
+                            </div>
+                            <div class="form-row">
+                                <label for="confShoutSensitivity">Shout Sensitivity (Scale)</label>
+                                <input type="number" id="confShoutSensitivity" step="0.1" min="0.1" class="form-input">
+                            </div>
+                            <div class="form-row">
+                                <label for="confShoutEnergyMultiplier">Energy Multiplier</label>
+                                <input type="number" id="confShoutEnergyMultiplier" step="0.1" class="form-input">
+                            </div>
+                            <div class="form-row">
+                                <label for="confVadThreshold">VAD Accuracy (0.0-1.0)</label>
+                                <input type="number" id="confVadThreshold" step="0.01" min="0" max="1"
+                                    class="form-input">
+                            </div>
+                        </div>
+
+                        <div class="config-group">
+                            <h3>Fight Logic</h3>
+                            <div class="form-row">
+                                <label for="confFightDuration">Fight Duration (s)</label>
+                                <input type="number" id="confFightDuration" class="form-input">
+                            </div>
+                            <div class="form-row">
+                                <label for="confInactivityTimeout">Inactivity Timeout (s)</label>
+                                <input type="number" id="confInactivityTimeout" class="form-input">
+                            </div>
+                            <div class="form-row">
+                                <label for="confCooldownDuration">Cooldown Duration (s)</label>
+                                <input type="number" id="confCooldownDuration" class="form-input">
+                            </div>
+                        </div>
+
+                        <div class="config-group">
+                            <h3>Punch Detection</h3>
+                            <div class="form-row">
+                                <label for="confPunchThreshold">Punch Threshold (G)</label>
+                                <input type="number" id="confPunchThreshold" step="0.1" class="form-input">
+                            </div>
+                            <div class="form-row">
+                                <label for="confPunchAlpha">Alpha Filter (Smoothing)</label>
+                                <input type="number" id="confPunchAlpha" step="0.01" min="0" max="1" class="form-input">
+                            </div>
+                        </div>
+
+                        <div class="config-actions">
+                            <button type="submit" class="btn btn-primary">Save Configuration</button>
+                            <button type="button" class="btn" onclick="loadConfig()">Reset to Current</button>
+                        </div>
+                    </form>
+                </section>
+            </div>
+
+            <!-- Controls -->
+            <section class="controls-section">
+                <h2>Manual Controls</h2>
+                <div class="button-group">
+                    <button class="btn btn-primary" onclick="triggerPresence(true)">
+                        Enter Arena
+                    </button>
+                    <button class="btn btn-secondary" onclick="triggerPresence(false)">
+                        Leave Arena
+                    </button>
+                    <button class="btn btn-danger" onclick="suspend()">
+                        Suspend
+                    </button>
+                </div>
+
+                <div class="button-group" style="margin-top: 10px;">
+                    <button class="btn" onclick="simulateShout()">
+                        Simulate Shout
+                    </button>
+                    <button class="btn" onclick="simulatePunch()">
+                        Simulate Punch
+                    </button>
+                    <button class="btn btn-warning" onclick="resetStats()">
+                        Reset Stats
+                    </button>
+                </div>
+
+                <div class="control-row" style="margin-top: 15px;">
+                    <label for="stateSelect">Force State:</label>
+                    <select id="stateSelect" class="form-select">
+                        <option value="Suspended">Suspended</option>
+                        <option value="Idle">Idle</option>
+                        <option value="Warming">Warming</option>
+                        <option value="Fight">Fight</option>
+                        <option value="Cooldown">Cooldown</option>
+                    </select>
+                    <button class="btn btn-small" onclick="forceState()">Apply</button>
+                </div>
+            </section>
+        </main>
+
+        <footer>
+            <div class="connection-status">
+                <span id="connectionStatus" class="status-dot"></span>
+                <span id="connectionText">Connecting...</span>
+            </div>
+        </footer>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+
+</html>
