@@ -54,6 +54,7 @@ chrono = { version = "0.4", features = ["serde"] }
 
 # Device Discovery
 ssdp-client = "2.0"
+mdns-sd = "0.11"
 
 # Database
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "macros"] }

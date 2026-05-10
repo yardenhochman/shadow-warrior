@@ -5,6 +5,7 @@ use tracing::{info, warn, error, debug};
 use ssdp_client::SearchTarget;
 use std::time::Duration;
 use futures::StreamExt;
+use mdns_sd::{ServiceDaemon, ServiceEvent};
 
 use crate::services::database_manager::SharedDatabaseManager;
 use crate::services::ble_manager::BleManager;
@@ -41,12 +42,17 @@ impl DiscoveryManager {
         let is_scanning = self.is_scanning.clone();
         
         tokio::spawn(async move {
-            // 1. SSDP/UPnP Scan for WLED and Tasmota
+            // 1. mDNS scan for WLED (_wled._tcp)
+            if let Err(e) = Self::scan_mdns(db.clone()).await {
+                error!("mDNS scan failed: {}", e);
+            }
+
+            // 2. SSDP/UPnP Scan for WLED and Tasmota
             if let Err(e) = Self::scan_ssdp(db.clone()).await {
                 error!("SSDP scan failed: {}", e);
             }
-            
-            // 2. BLE Scan for Punching Bag
+
+            // 3. BLE Scan for Punching Bag
             // Note: BleManager needs to be updated to return discovered devices
             if let Err(e) = Self::scan_ble(db.clone(), ble).await {
                 error!("BLE scan failed: {}", e);
@@ -57,6 +63,47 @@ impl DiscoveryManager {
             info!("Hardware discovery scan completed");
         });
         
+        Ok(())
+    }
+
+    async fn scan_mdns(db: SharedDatabaseManager) -> Result<()> {
+        info!("Scanning for WLED devices via mDNS (_wled._tcp)...");
+        let mdns = ServiceDaemon::new()?;
+        let receiver = mdns.browse("_wled._tcp.local.")?;
+
+        let timeout = tokio::time::sleep(Duration::from_secs(5));
+        tokio::pin!(timeout);
+
+        loop {
+            tokio::select! {
+                _ = &mut timeout => break,
+                event = tokio::task::spawn_blocking({
+                    let receiver = receiver.clone();
+                    move || receiver.recv()
+                }) => {
+                    match event {
+                        Ok(Ok(ServiceEvent::ServiceResolved(info))) => {
+                            let name = info.get_fullname().to_string();
+                            for addr in info.get_addresses() {
+                                let host = addr.to_string();
+                                let port = info.get_port() as i32;
+                                debug!("Found WLED via mDNS: {} at {}:{}", name, host, port);
+                                if let Err(e) = db.add_device(&name, "wled", &host, port, None).await {
+                                    error!("Failed to save mDNS WLED device: {}", e);
+                                } else {
+                                    info!("Registered WLED {} at {}:{}", name, host, port);
+                                }
+                            }
+                        }
+                        Ok(Ok(_)) => {}
+                        Ok(Err(e)) => { warn!("mDNS recv error: {}", e); break; }
+                        Err(_) => break,
+                    }
+                }
+            }
+        }
+
+        let _ = mdns.shutdown();
         Ok(())
     }
 
