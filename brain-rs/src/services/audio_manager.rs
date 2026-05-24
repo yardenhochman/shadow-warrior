@@ -1,10 +1,10 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Stream, StreamConfig};
+use cpal::{Stream, StreamConfig, BufferSize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use anyhow::{Context, Result};
 
 use earshot::Detector;
@@ -22,6 +22,8 @@ pub struct AudioManager {
     last_event_time: Arc<RwLock<Instant>>,
     vad: Arc<RwLock<Detector>>,
     audio_buffer: Arc<RwLock<Vec<f32>>>,
+    actual_sample_rate: Arc<RwLock<u32>>,
+    actual_channels: Arc<RwLock<u16>>,
 }
 
 impl AudioManager {
@@ -38,11 +40,13 @@ impl AudioManager {
             shout_score: Arc::new(RwLock::new(0.0)),
             last_event_time: Arc::new(RwLock::new(Instant::now())),
             vad: Arc::new(RwLock::new(vad)),
-            audio_buffer: Arc::new(RwLock::new(Vec::with_capacity(480))),
+            audio_buffer: Arc::new(RwLock::new(Vec::with_capacity(1024))),
+            actual_sample_rate: Arc::new(RwLock::new(16000)),
+            actual_channels: Arc::new(RwLock::new(1)),
         }
     }
 
-    /// Start audio capture
+    /// Start audio capture — negotiates best supported config with device
     pub async fn start(&self) -> Result<()> {
         info!("Starting audio manager");
 
@@ -54,13 +58,13 @@ impl AudioManager {
         let device_name = device.description().map(|d| d.to_string()).unwrap_or_else(|_| "Unknown".to_string());
         info!("Using audio device: {}", device_name);
 
-        let initial_config = self.config.read().await;
-        let config_proto = StreamConfig {
-            channels: initial_config.channels,
-            sample_rate: initial_config.sample_rate,
-            buffer_size: cpal::BufferSize::Fixed(initial_config.buffer_size as u32),
-        };
-        drop(initial_config);
+        let stream_config = Self::negotiate_config(&device)?;
+        let actual_rate = stream_config.sample_rate;
+        let actual_ch = stream_config.channels;
+        info!("Audio stream config: {}Hz, {} ch", actual_rate, actual_ch);
+
+        *self.actual_sample_rate.write().await = actual_rate;
+        *self.actual_channels.write().await = actual_ch;
 
         let config_lock = self.config.clone();
         let event_bus = self.event_bus.clone();
@@ -71,10 +75,12 @@ impl AudioManager {
         let audio_buffer = self.audio_buffer.clone();
 
         let stream = device.build_input_stream(
-            &config_proto,
+            &stream_config,
             move |data: &[f32], _: &cpal::InputCallbackInfo| {
                 Self::process_audio_vad_sync(
                     data,
+                    actual_rate,
+                    actual_ch,
                     &event_bus,
                     &current_level_db,
                     &shout_score,
@@ -97,15 +103,96 @@ impl AudioManager {
 
         self.event_bus.publish(Event::AudioDeviceConnected { device_name });
 
-        // Start energy decay task
         self.start_energy_decay_task();
 
         Ok(())
     }
 
+    /// Negotiate best supported input config — prefers 16kHz mono, falls back to device default.
+    fn negotiate_config(device: &cpal::Device) -> Result<StreamConfig> {
+        const PREFERRED_RATES: &[u32] = &[16000, 48000, 44100, 22050, 8000];
+
+        if let Ok(supported) = device.supported_input_configs() {
+            let supported: Vec<_> = supported.collect();
+            for &rate in PREFERRED_RATES {
+                for range in &supported {
+                    if range.channels() == 1
+                        && range.min_sample_rate() <= rate
+                        && range.max_sample_rate() >= rate
+                    {
+                        let cfg = StreamConfig {
+                            channels: 1,
+                            sample_rate: rate,
+                            buffer_size: BufferSize::Default,
+                        };
+                        info!("Selected audio config: {}Hz mono", rate);
+                        return Ok(cfg);
+                    }
+                }
+            }
+            // Try any supported config at preferred rates (stereo fallback)
+            for &rate in PREFERRED_RATES {
+                for range in &supported {
+                    if range.min_sample_rate() <= rate
+                        && range.max_sample_rate() >= rate
+                    {
+                        let cfg = StreamConfig {
+                            channels: range.channels(),
+                            sample_rate: rate,
+                            buffer_size: BufferSize::Default,
+                        };
+                        warn!("Selected audio config: {}Hz {} ch (stereo fallback)", rate, range.channels());
+                        return Ok(cfg);
+                    }
+                }
+            }
+        }
+
+        // Last resort: device default
+        let default = device.default_input_config().context("No supported input config")?;
+        warn!("Using device default audio config: {}Hz {} ch", default.sample_rate(), default.channels());
+        Ok(StreamConfig {
+            channels: default.channels(),
+            sample_rate: default.sample_rate(),
+            buffer_size: BufferSize::Default,
+        })
+    }
+
+    /// Mix interleaved stereo (or N-ch) to mono
+    fn mix_to_mono(data: &[f32], channels: u16) -> Vec<f32> {
+        if channels == 1 {
+            return data.to_vec();
+        }
+        let ch = channels as usize;
+        (0..data.len() / ch)
+            .map(|i| data[i * ch..i * ch + ch].iter().sum::<f32>() / ch as f32)
+            .collect()
+    }
+
+    /// Linear interpolation resample to 16kHz
+    fn resample_to_16k(input: &[f32], input_rate: u32) -> Vec<f32> {
+        if input_rate == 16000 {
+            return input.to_vec();
+        }
+        let ratio = input_rate as f64 / 16000.0;
+        let out_len = (input.len() as f64 / ratio).ceil() as usize;
+        (0..out_len)
+            .map(|i| {
+                let pos = i as f64 * ratio;
+                let idx = pos as usize;
+                let frac = (pos - idx as f64) as f32;
+                let a = input.get(idx).copied().unwrap_or(0.0);
+                let b = input.get(idx + 1).copied().unwrap_or(a);
+                a + (b - a) * frac
+            })
+            .collect()
+    }
+
     /// Process audio samples with VAD (Synchronous for audio thread)
     fn process_audio_vad_sync(
         data: &[f32],
+        sample_rate: u32,
+        channels: u16,
         event_bus: &SharedEventBus,
         current_level_db: &Arc<RwLock<f32>>,
         shout_score: &Arc<RwLock<f32>>,
@@ -114,12 +201,15 @@ impl AudioManager {
         vad: &Arc<RwLock<Detector>>,
         audio_buffer_lock: &Arc<RwLock<Vec<f32>>>,
     ) {
-        // Use try_write to avoid blocking the audio thread
+        // Mix to mono, resample to 16kHz for earshot
+        let mono = Self::mix_to_mono(data, channels);
+        let resampled = Self::resample_to_16k(&mono, sample_rate);
+
         let mut audio_buffer = match audio_buffer_lock.try_write() {
             Ok(b) => b,
             Err(_) => return,
         };
-        audio_buffer.extend_from_slice(data);
+        audio_buffer.extend_from_slice(&resampled);
 
         // earshot v1.0.0 expects exactly 256 samples (16ms at 16kHz)
         const FRAME_SIZE: usize = 256;
