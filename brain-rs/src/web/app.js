@@ -3,6 +3,8 @@
 let eventSource = null;
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 10;
+let logEventSource = null;
+const MAX_LOG_LINES = 500;
 
 // Initial state and UI elements
 let currentState = 'LOADING';
@@ -21,6 +23,8 @@ function showTab(tabId) {
         } else if (tabId === 'hardware' && btn.textContent === 'Hardware') {
             btn.classList.add('active');
         } else if (tabId === 'config' && btn.textContent === 'Config') {
+            btn.classList.add('active');
+        } else if (tabId === 'logs' && btn.textContent === 'Logs') {
             btn.classList.add('active');
         }
     });
@@ -42,6 +46,7 @@ document.addEventListener('DOMContentLoaded', () => {
     console.log('Shadow Warrior Brain initializing...');
     initializeState();
     connectEventStream();
+    connectLogStream();
     startUpdateLoop();
     showTab('arena'); // Default to arena tab
 });
@@ -590,5 +595,103 @@ async function saveConfig() {
     } catch (error) {
         console.error('Failed to save config:', error);
         alert('Failed to save configuration.');
+    }
+}
+
+// Connect to logs SSE stream
+function connectLogStream() {
+    if (logEventSource) {
+        logEventSource.close();
+    }
+
+    logEventSource = new EventSource('/api/logs');
+
+    logEventSource.onopen = () => {
+        console.log('Logs stream connected');
+    };
+
+    logEventSource.onerror = (error) => {
+        console.error('Logs stream error:', error);
+        logEventSource.close();
+        
+        // Reconnect after 5 seconds on error
+        setTimeout(connectLogStream, 5000);
+    };
+
+    logEventSource.onmessage = (event) => {
+        addLogLine(event.data);
+    };
+}
+
+function addLogLine(text) {
+    const logViewer = document.getElementById('logViewer');
+    if (!logViewer) return;
+
+    // Detect level to style appropriately
+    let levelClass = 'info';
+    let lowerText = text.toLowerCase();
+    if (lowerText.includes('warn') || lowerText.includes('⚠️')) {
+        levelClass = 'warn';
+    } else if (lowerText.includes('error') || lowerText.includes('fail') || lowerText.includes('🔥') || lowerText.includes('panic')) {
+        levelClass = 'error';
+    } else if (lowerText.includes('debug') || lowerText.includes('trace')) {
+        levelClass = 'debug';
+    } else if (lowerText.includes('info')) {
+        levelClass = 'info';
+    }
+
+    const logEntry = document.createElement('div');
+    logEntry.className = `log-entry ${levelClass}`;
+    logEntry.textContent = text.trim();
+
+    // Store level for filtering
+    logEntry.dataset.level = levelClass;
+
+    // Apply filtering if necessary
+    const currentFilter = document.getElementById('logLevelSelect').value;
+    if (currentFilter !== 'all' && levelClass !== currentFilter) {
+        logEntry.style.display = 'none';
+    }
+
+    // Append to viewer
+    logViewer.appendChild(logEntry);
+
+    // Enforce ring buffer (MAX_LOG_LINES)
+    while (logViewer.childNodes.length > MAX_LOG_LINES) {
+        logViewer.removeChild(logViewer.firstChild);
+    }
+
+    // Auto-scroll
+    const autoScroll = document.getElementById('autoScrollCheck').checked;
+    if (autoScroll) {
+        logViewer.scrollTop = logViewer.scrollHeight;
+    }
+}
+
+function filterLogs() {
+    const currentFilter = document.getElementById('logLevelSelect').value;
+    const logViewer = document.getElementById('logViewer');
+    if (!logViewer) return;
+
+    const entries = logViewer.getElementsByClassName('log-entry');
+    for (let entry of entries) {
+        if (currentFilter === 'all' || entry.dataset.level === currentFilter) {
+            entry.style.display = 'block';
+        } else {
+            entry.style.display = 'none';
+        }
+    }
+    
+    // Auto-scroll after filter change if enabled
+    const autoScroll = document.getElementById('autoScrollCheck').checked;
+    if (autoScroll) {
+        logViewer.scrollTop = logViewer.scrollHeight;
+    }
+}
+
+function clearLogs() {
+    const logViewer = document.getElementById('logViewer');
+    if (logViewer) {
+        logViewer.innerHTML = '';
     }
 }

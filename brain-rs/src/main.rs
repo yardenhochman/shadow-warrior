@@ -37,6 +37,7 @@ async fn main() -> Result<()> {
                 .parse::<Level>()
                 .unwrap_or(Level::INFO),
         )
+        .with_writer(|| BroadcastWriter)
         .finish();
     tracing::subscriber::set_global_default(subscriber)?;
 
@@ -160,6 +161,7 @@ async fn main() -> Result<()> {
         // API routes
         .route("/api/state", get(status::get_state))
         .route("/api/events", get(status::get_events))
+        .route("/api/logs", get(status::get_logs))
         .route("/api/stats", get(status::get_statistics))
         .route("/api/arena/presence", post(arena::presence))
         .route("/api/arena/suspend", post(arena::suspend))
@@ -200,3 +202,50 @@ async fn serve_index() -> axum::response::Html<String> {
         .unwrap_or_else(|_| "<h1>Error loading dashboard</h1>".to_string());
     axum::response::Html(html)
 }
+
+fn strip_ansi(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut in_escape = false;
+    let mut chars = s.chars().peekable();
+    
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            if let Some(&'[') = chars.peek() {
+                chars.next(); // consume '['
+                in_escape = true;
+                continue;
+            }
+        }
+        if in_escape {
+            if c.is_ascii_alphabetic() {
+                in_escape = false;
+            }
+            continue;
+        }
+        result.push(c);
+    }
+    result
+}
+
+#[derive(Clone, Copy)]
+struct BroadcastWriter;
+
+impl std::io::Write for BroadcastWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let stdout = std::io::stdout();
+        let mut handle = stdout.lock();
+        let n = handle.write(buf)?;
+        
+        if let Ok(s) = std::str::from_utf8(&buf[..n]) {
+            let cleaned = strip_ansi(s);
+            let broadcaster = crate::api::status::get_log_broadcaster();
+            let _ = broadcaster.send(cleaned);
+        }
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        std::io::stdout().flush()
+    }
+}
+
