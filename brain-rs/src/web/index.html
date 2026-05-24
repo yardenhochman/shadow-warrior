@@ -19,6 +19,7 @@
             <button class="tab-btn active" onclick="showTab('arena')">Arena</button>
             <button class="tab-btn" onclick="showTab('hardware')">Hardware</button>
             <button class="tab-btn" onclick="showTab('config')">Config</button>
+            <button class="tab-btn" onclick="showTab('logs')">Logs</button>
         </nav>
 
         <main>
@@ -219,6 +220,33 @@
                             <button type="button" class="btn" onclick="loadConfig()">Reset to Current</button>
                         </div>
                     </form>
+                </section>
+            </div>
+ 
+            <div id="logsTab" class="tab-content">
+                <section class="logs-section">
+                    <div class="logs-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 10px;">
+                        <h2>System Logs</h2>
+                        <div class="logs-controls" style="display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;">
+                            <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                <label for="logLevelSelect" style="color: var(--text-secondary); font-size: 0.9rem;">Level:</label>
+                                <select id="logLevelSelect" class="form-select" onchange="filterLogs()">
+                                    <option value="all">ALL</option>
+                                    <option value="info">INFO</option>
+                                    <option value="warn">WARN</option>
+                                    <option value="error">ERROR</option>
+                                    <option value="debug">DEBUG</option>
+                                </select>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 1rem;">
+                                <label style="display: flex; align-items: center; gap: 0.35rem; color: var(--text-secondary); font-size: 0.9rem; cursor: pointer; user-select: none;">
+                                    <input type="checkbox" id="autoScrollCheck" checked style="accent-color: var(--primary);"> Auto-Scroll
+                                </label>
+                                <button class="btn btn-small btn-secondary" style="padding: 0.5rem 1rem;" onclick="clearLogs()">Clear</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="logViewer" class="log-viewer"></div>
                 </section>
             </div>
 

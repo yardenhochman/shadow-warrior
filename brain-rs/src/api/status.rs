@@ -125,3 +125,31 @@ pub async fn get_statistics(State(state): State<AppState>) -> Json<ApiResponse<S
 
     Json(ApiResponse::success(statistics))
 }
+
+use std::sync::OnceLock;
+use tokio::sync::broadcast;
+
+static LOG_BROADCASTER: OnceLock<broadcast::Sender<String>> = OnceLock::new();
+
+pub fn get_log_broadcaster() -> &'static broadcast::Sender<String> {
+    LOG_BROADCASTER.get_or_init(|| {
+        let (tx, _) = broadcast::channel(1000);
+        tx
+    })
+}
+
+/// GET /api/logs - SSE stream for real-time system logs
+pub async fn get_logs(State(_state): State<AppState>) -> impl IntoResponse {
+    let log_rx = get_log_broadcaster().subscribe();
+    let stream = BroadcastStream::new(log_rx).filter_map(|result| match result {
+        Ok(log) => {
+            Some(Ok::<_, Infallible>(
+                Event::default().data(log),
+            ))
+        }
+        Err(_) => None,
+    });
+
+    Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
