@@ -170,6 +170,8 @@ void setup() {
   gyroCharacteristic.setPermission(SECMODE_OPEN, SECMODE_NO_ACCESS);
   gyroCharacteristic.setFixedLen(12);
   gyroCharacteristic.begin();
+  float zeroGyro[3] = {0.0f, 0.0f, 0.0f};
+  gyroCharacteristic.write(zeroGyro, 12);
 
   alphaCharacteristic.setProperties(CHR_PROPS_READ | CHR_PROPS_WRITE);
   alphaCharacteristic.setPermission(SECMODE_OPEN, SECMODE_OPEN);
