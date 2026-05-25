@@ -1,9 +1,0 @@
-/.vscode
-/.embuild
-/target
-/Cargo.lock
-
-# Configuration files with credentials
-config.toml
-spiffs.bin
-spiffs_data/

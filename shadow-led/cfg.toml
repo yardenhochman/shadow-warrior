@@ -1,6 +1,0 @@
-[build]
-# ESP-IDF build configuration
-
-[esp-idf]
-# Custom partition table
-partition_table_csv = "partitions.csv"
