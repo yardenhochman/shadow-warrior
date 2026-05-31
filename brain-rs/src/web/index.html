@@ -3,9 +3,35 @@
 
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#0a0e1a">
+    <meta name="description" content="Shadow Warrior Brain - Control panel for the Shadow Warrior arena game">
     <title>Shadow Warrior Brain</title>
     <link rel="stylesheet" href="/static/style.css">
+    <style>
+        * {
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+        }
+
+        button, select, input {
+            font-size: 16px;
+            -webkit-text-size-adjust: none;
+        }
+
+        .hardware-card, .stat-card, .stat-box {
+            min-height: 88px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+        }
+
+        .hardware-card.connected, .stat-card.connected, .stat-box.connected {
+            min-height: 88px;
+        }
+    </style>
 </head>
 
 <body>
@@ -127,15 +153,15 @@
                     <div id="addDeviceForm"
                         style="display: none; margin-top: 15px; padding: 15px; background: #2a2a2a; border-radius: 8px;">
                         <h3>Add/Update Device</h3>
-                        <div class="form-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
-                            <input type="text" id="devName" placeholder="Device Name (e.g. Bag 1)" class="form-input">
-                            <select id="devType" class="form-select">
+                        <div class="form-grid" style="display: grid; grid-template-columns: 1fr; gap: 10px;">
+                            <input type="text" id="devName" placeholder="Device Name (e.g. Bag 1)" class="form-input" style="min-height: 44px;">
+                            <select id="devType" class="form-select" style="min-height: 44px;">
                                 <option value="wled">WLED</option>
                                 <option value="tasmota">Tasmota</option>
                                 <option value="punching_bag">Punching Bag (BLE)</option>
                             </select>
-                            <input type="text" id="devHost" placeholder="Host/IP (or BLE Address)" class="form-input">
-                            <input type="number" id="devPort" value="80" class="form-input">
+                            <input type="text" id="devHost" placeholder="Host/IP (or BLE Address)" class="form-input" style="min-height: 44px;">
+                            <input type="number" id="devPort" value="80" class="form-input" style="min-height: 44px;">
                         </div>
                         <button class="btn btn-small btn-primary" style="margin-top: 10px;" onclick="saveDevice()">Save
                             Device</button>
