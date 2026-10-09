@@ -84,10 +84,54 @@ music:
 
 ## Development
 
+### System dependencies
+
+Several crates link against system C libraries, which need their development headers plus `pkg-config` and a C compiler at build time:
+
+| Library | Pulled in by | Fedora | Debian / Raspberry Pi OS |
+|---------|--------------|--------|--------------------------|
+| D-Bus | `btleplug` (BLE, via `libdbus-sys`) | `dbus-devel` | `libdbus-1-dev` |
+| ALSA | `cpal` / `rodio` (audio, via `alsa-sys`) | `alsa-lib-devel` | `libasound2-dev` |
+| OpenSSL | `reqwest` (native-tls, via `openssl-sys`) | `openssl-devel` | `libssl-dev` |
+| pkg-config | build scripts of the above | `pkgconf-pkg-config` | `pkg-config` |
+| C compiler | bundled SQLite (`sqlx` → `libsqlite3-sys`) | `gcc` | `build-essential` |
+
+SQLite is compiled from source (the `bundled` feature), so no system SQLite package is needed.
+
+Fedora:
+```bash
+sudo dnf install gcc pkgconf-pkg-config dbus-devel alsa-lib-devel openssl-devel
+```
+
+Debian / Raspberry Pi OS (building on the Pi itself):
+```bash
+sudo apt install build-essential pkg-config libdbus-1-dev libasound2-dev libssl-dev
+```
+
+At runtime the target machine needs the matching shared libraries (`libdbus-1`, `libasound2`, `libssl`) and a running BlueZ daemon for BLE.
+
 ### Build
 ```bash
 cargo build --release
 ```
+
+### Cross-compiling for Raspberry Pi
+
+Targets:
+- Pi 4: `aarch64-unknown-linux-gnu`
+- Pi Zero W: `arm-unknown-linux-gnueabihf` (ARMv6)
+
+The same three libraries are needed **for the target architecture** (e.g. `libdbus-1-dev:arm64`, `libasound2-dev:armhf`), along with a cross linker and `PKG_CONFIG_ALLOW_CROSS=1`. Rather than setting this up on the host, use the podman build image (`Dockerfile.build`), which installs them for both targets:
+
+```bash
+make image       # build the podman image once
+make build-pi4   # aarch64
+make build-pi0   # armhf
+```
+
+`Cross.toml` holds the equivalent package list for [`cross`](https://github.com/cross-rs/cross) (`cross build --target <triple>`).
+
+When adding a dependency that links a new system library, add its `-dev` package to `Dockerfile.build`, `Cross.toml` and the table above.
 
 ### Run
 ```bash
