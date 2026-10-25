@@ -44,6 +44,8 @@
         <nav class="tabs">
             <button class="tab-btn active" onclick="showTab('arena')">Arena</button>
             <button class="tab-btn" onclick="showTab('hardware')">Hardware</button>
+            <button class="tab-btn" onclick="showTab('schedule')">Schedule</button>
+            <button class="tab-btn" onclick="showTab('lights')">Lights</button>
             <button class="tab-btn" onclick="showTab('config')">Config</button>
             <button class="tab-btn" onclick="showTab('logs')">Logs</button>
         </nav>
@@ -173,6 +175,76 @@
                             <p>Loading devices...</p>
                         </div>
                     </div>
+                </section>
+            </div>
+
+            <div id="scheduleTab" class="tab-content">
+                <section class="config-section">
+                    <h2>Game Schedule</h2>
+                    <div class="schedule-status" id="scheduleStatus">--</div>
+                    <form id="scheduleForm" onsubmit="event.preventDefault(); saveSchedule();">
+                        <div class="form-row">
+                            <label><input type="checkbox" id="schedEnabled"> Schedule enabled (game runs only inside windows)</label>
+                        </div>
+                        <div id="scheduleWindows"></div>
+                        <div class="config-actions">
+                            <button type="button" class="btn" onclick="addScheduleWindow()">Add Window</button>
+                            <button type="submit" class="btn btn-primary">Save Schedule</button>
+                            <button type="button" class="btn" onclick="loadSchedule()">Reload</button>
+                        </div>
+                        <div class="form-error" id="scheduleError" role="alert"></div>
+                    </form>
+                </section>
+            </div>
+
+            <div id="lightsTab" class="tab-content">
+                <section class="config-section">
+                    <h2>WLED Effect</h2>
+                    <form id="effectForm" onsubmit="event.preventDefault(); applyEffect();">
+                        <div class="config-group">
+                            <div class="form-row">
+                                <label for="fxEffect">Effect</label>
+                                <input type="text" id="fxEffect" list="fxEffectList" class="form-input" required autocomplete="off">
+                                <datalist id="fxEffectList"></datalist>
+                            </div>
+                            <div class="form-row">
+                                <label for="fxPalette">Palette</label>
+                                <input type="text" id="fxPalette" list="fxPaletteList" class="form-input" autocomplete="off">
+                                <datalist id="fxPaletteList"></datalist>
+                            </div>
+                            <div class="form-row">
+                                <label for="fxSpeed">Speed: <span id="fxSpeedVal">128</span></label>
+                                <input type="range" id="fxSpeed" min="0" max="255" value="128">
+                            </div>
+                            <div class="form-row">
+                                <label for="fxIntensity">Intensity: <span id="fxIntensityVal">128</span></label>
+                                <input type="range" id="fxIntensity" min="0" max="255" value="128">
+                            </div>
+                            <div class="form-row">
+                                <label for="fxBrightness">Brightness: <span id="fxBrightnessVal">128</span></label>
+                                <input type="range" id="fxBrightness" min="0" max="255" value="128">
+                            </div>
+                            <div class="form-row">
+                                <label for="fxTransition">Transition (x100ms, optional)</label>
+                                <input type="number" id="fxTransition" min="0" max="65535" class="form-input">
+                            </div>
+                            <div class="form-row">
+                                <label>Colors (optional, up to 3)</label>
+                                <div class="color-row">
+                                    <input type="color" id="fxColor0" value="#ff0000" disabled>
+                                    <input type="color" id="fxColor1" value="#00ff00" disabled>
+                                    <input type="color" id="fxColor2" value="#0000ff" disabled>
+                                </div>
+                                <label class="inline-check"><input type="checkbox" id="fxUseColors" onchange="toggleEffectColors()"> Set colors</label>
+                            </div>
+                        </div>
+                        <div class="config-actions">
+                            <button type="submit" class="btn btn-primary">Apply Effect</button>
+                            <button type="button" class="btn" onclick="loadWledLists()">Reload Lists</button>
+                        </div>
+                        <div class="form-error" id="effectError" role="alert"></div>
+                        <div class="form-ok" id="effectOk"></div>
+                    </form>
                 </section>
             </div>
 

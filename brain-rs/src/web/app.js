@@ -38,6 +38,10 @@ function showTab(tabId) {
     // Load data if switching to config
     if (tabId === 'config') {
         loadConfig();
+    } else if (tabId === 'schedule') {
+        loadSchedule();
+    } else if (tabId === 'lights') {
+        loadWledLists();
     }
 }
 
@@ -695,3 +699,157 @@ function clearLogs() {
         logViewer.innerHTML = '';
     }
 }
+
+
+// ---- Schedule ----
+const SCHEDULE_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+async function apiJson(url, options) {
+    const response = await fetch(url, options);
+    let result;
+    try {
+        result = await response.json();
+    } catch (e) {
+        throw new Error(`HTTP ${response.status}`);
+    }
+    if (!result.success) {
+        throw new Error(result.error || 'Request failed');
+    }
+    return result.data;
+}
+
+function showMsg(id, text) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = text || '';
+}
+
+function addScheduleWindow(w) {
+    if (!w || w instanceof Event) w = { days: [], start: '09:00', end: '17:00' };
+    const days = (w.days || []).map(d => d.slice(0, 3).toLowerCase());
+    const div = document.createElement('div');
+    div.className = 'config-group schedule-window';
+    const dayBoxes = SCHEDULE_DAYS.map(d =>
+        `<label class="inline-check"><input type="checkbox" class="sw-day" value="${d}"${days.includes(d.toLowerCase()) ? ' checked' : ''}> ${d}</label>`
+    ).join('');
+    div.innerHTML = `
+        <div class="sw-days">${dayBoxes}</div>
+        <div class="sw-times">
+            <input type="time" class="form-input sw-start" required>
+            <span>to</span>
+            <input type="time" class="form-input sw-end" required>
+        </div>
+        <label class="inline-check"><input type="checkbox" class="sw-enabled"> Enabled</label>
+        <div class="hint">No days selected = every day. End before start = overnight.</div>
+        <button type="button" class="btn btn-small btn-danger">Remove</button>`;
+    div.querySelector('.sw-start').value = w.start;
+    div.querySelector('.sw-end').value = w.end;
+    div.querySelector('.sw-enabled').checked = w.enabled !== false;
+    div.querySelector('button').onclick = () => div.remove();
+    document.getElementById('scheduleWindows').appendChild(div);
+}
+
+function renderSchedule(status) {
+    const cfg = status.config;
+    document.getElementById('schedEnabled').checked = !!cfg.enabled;
+    document.getElementById('scheduleWindows').innerHTML = '';
+    (cfg.windows || []).forEach(addScheduleWindow);
+    const el = document.getElementById('scheduleStatus');
+    el.textContent = status.active ? 'Game is ACTIVE now' : 'Game is OFF (outside schedule)';
+    el.className = 'schedule-status ' + (status.active ? 'on' : 'off');
+}
+
+async function loadSchedule() {
+    showMsg('scheduleError', '');
+    try {
+        renderSchedule(await apiJson('/api/schedule'));
+    } catch (e) {
+        showMsg('scheduleError', 'Failed to load schedule: ' + e.message);
+    }
+}
+
+async function saveSchedule() {
+    const windows = Array.from(document.querySelectorAll('#scheduleWindows .schedule-window')).map(div => ({
+        days: Array.from(div.querySelectorAll('.sw-day:checked')).map(c => c.value),
+        start: div.querySelector('.sw-start').value,
+        end: div.querySelector('.sw-end').value,
+        enabled: div.querySelector('.sw-enabled').checked
+    }));
+    const body = { enabled: document.getElementById('schedEnabled').checked, windows };
+    showMsg('scheduleError', '');
+    try {
+        renderSchedule(await apiJson('/api/schedule', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        }));
+    } catch (e) {
+        showMsg('scheduleError', 'Failed to save schedule: ' + e.message);
+    }
+}
+
+// ---- WLED effects ----
+async function loadWledLists() {
+    showMsg('effectError', '');
+    const errors = [];
+    for (const [path, listId] of [['effects', 'fxEffectList'], ['palettes', 'fxPaletteList']]) {
+        const list = document.getElementById(listId);
+        try {
+            const data = await apiJson('/api/wled/' + path);
+            list.innerHTML = '';
+            data.names.forEach(n => {
+                const o = document.createElement('option');
+                o.value = n;
+                list.appendChild(o);
+            });
+        } catch (e) {
+            errors.push(`Failed to load ${path}: ${e.message}`);
+        }
+    }
+    showMsg('effectError', errors.join('; '));
+}
+
+function toggleEffectColors() {
+    const on = document.getElementById('fxUseColors').checked;
+    for (let i = 0; i < 3; i++) document.getElementById('fxColor' + i).disabled = !on;
+}
+
+async function applyEffect() {
+    const num = id => parseInt(document.getElementById(id).value, 10);
+    const effect = {
+        effect: document.getElementById('fxEffect').value.trim(),
+        speed: num('fxSpeed'),
+        intensity: num('fxIntensity'),
+        brightness: num('fxBrightness')
+    };
+    const palette = document.getElementById('fxPalette').value.trim();
+    if (palette) effect.palette = palette;
+    const tr = document.getElementById('fxTransition').value;
+    if (tr !== '') effect.transition = parseInt(tr, 10);
+    if (document.getElementById('fxUseColors').checked) {
+        effect.colors = [0, 1, 2].map(i => {
+            const v = document.getElementById('fxColor' + i).value;
+            return [1, 3, 5].map(p => parseInt(v.slice(p, p + 2), 16));
+        });
+    }
+    showMsg('effectError', '');
+    showMsg('effectOk', '');
+    try {
+        const r = await apiJson('/api/wled/effect', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(effect)
+        });
+        showMsg('effectOk', `Applied to ${r.controllers_updated} controller(s)`);
+    } catch (e) {
+        showMsg('effectError', 'Failed to apply effect: ' + e.message);
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    ['Speed', 'Intensity', 'Brightness'].forEach(n => {
+        const input = document.getElementById('fx' + n);
+        if (input) input.addEventListener('input', () => {
+            document.getElementById('fx' + n + 'Val').textContent = input.value;
+        });
+    });
+});
