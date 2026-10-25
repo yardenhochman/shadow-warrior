@@ -19,6 +19,7 @@ pub struct PlaylistCursor {
 }
 
 impl PlaylistCursor {
+    #[cfg(test)]
     pub fn index(&self) -> usize {
         self.index
     }
