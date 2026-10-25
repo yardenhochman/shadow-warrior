@@ -96,6 +96,7 @@ async fn main() -> Result<()> {
     wled_manager.clone().start_event_loop();
     tasmota_manager.clone().start_event_loop();
     music_manager.load_playlist().await?;
+    music_manager.clone().start_advance_loop();
 
     // Handle music playback via events (moved here to avoid non-Send issues)
     let music_manager_clone = music_manager.clone();
