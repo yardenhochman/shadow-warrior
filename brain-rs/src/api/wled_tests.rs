@@ -95,6 +95,7 @@ async fn state_with(ips: &[&str]) -> AppState {
     let (arena_tx, _rx) = tokio::sync::mpsc::unbounded_channel();
     Arc::new(SharedState {
         event_bus: bus.clone(),
+        health: Arc::new(crate::core::status_registry::StatusRegistry::new()),
         state_machine: sm,
         arena_tx,
         db: db.clone(),
