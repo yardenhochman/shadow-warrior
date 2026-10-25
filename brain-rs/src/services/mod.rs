@@ -6,6 +6,7 @@ pub mod database_manager;
 pub mod discovery_manager;
 pub mod music_manager;
 pub mod schedule_manager;
+pub mod shout_detector;
 pub mod tasmota_manager;
 pub mod wled_manager;
 

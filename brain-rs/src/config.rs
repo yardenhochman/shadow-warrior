@@ -55,10 +55,52 @@ pub struct AudioConfig {
     pub sample_rate: u32,
     pub channels: u16,
     pub buffer_size: usize,
+    /// DEPRECATED: legacy absolute threshold, no longer used by detection
+    /// (replaced by `shout_margin_db` above the adaptive noise floor). Kept so the
+    /// dashboard tunables API and existing configs keep working.
     pub shout_threshold_db: f32,
+    /// Shout must be sustained (allowing short gaps) this long before it fires.
     pub shout_min_duration_sec: f32,
     pub shout_sensitivity: f32,
     pub vad_threshold: f32,
+    /// Required band level above the adaptive noise floor, dB.
+    #[serde(default = "d_margin")]
+    pub shout_margin_db: f32,
+    /// Extra margin added while our own speakers are playing, dB.
+    #[serde(default = "d_playback_margin")]
+    pub shout_playback_margin_db: f32,
+    /// VAD gate stays open this many frames (16ms each) after the last VAD-positive frame.
+    #[serde(default = "d_hangover")]
+    pub vad_hangover_frames: u32,
+    /// Voiced F0 range for a shout, Hz.
+    #[serde(default = "d_f0_min")]
+    pub shout_f0_min_hz: f32,
+    #[serde(default = "d_f0_max")]
+    pub shout_f0_max_hz: f32,
+    /// Minimum autocorrelation pitch confidence (0..1) to count as voiced.
+    #[serde(default = "d_pitch_conf")]
+    pub shout_pitch_conf_min: f32,
+    /// Minimum spectral centroid, Hz (shouts are bright).
+    #[serde(default = "d_centroid")]
+    pub shout_centroid_min_hz: f32,
+    /// Minimum spectral tilt, dB/kHz (shouts are less steeply falling than speech/bass).
+    #[serde(default = "d_tilt")]
+    pub shout_tilt_min_db_per_khz: f32,
+    /// Maximum spectral flatness (0..1); high values are noise (wind, crowd).
+    #[serde(default = "d_flatness")]
+    pub shout_flatness_max: f32,
+    /// How many of the 4 spectral/pitch checks (voiced, centroid, tilt, flatness) must pass.
+    #[serde(default = "d_min_features")]
+    pub shout_min_features: u32,
+    /// Score at which ShoutDetected fires (each shouty frame adds 1-2 x sensitivity).
+    #[serde(default = "d_score_threshold")]
+    pub shout_score_threshold: f32,
+    /// Per-frame multiplicative score decay on non-shouty frames.
+    #[serde(default = "d_score_decay")]
+    pub shout_score_decay: f32,
+    /// Non-shouty frames tolerated inside a sustained shout.
+    #[serde(default = "d_gap_frames")]
+    pub shout_gap_frames: u32,
     /// Directory where audio clips (wav + feature json) are written.
     #[serde(default = "default_clip_dir")]
     pub clip_dir: PathBuf,
@@ -72,6 +114,20 @@ pub struct AudioConfig {
     #[serde(default = "default_clip_cooldown_sec")]
     pub clip_cooldown_sec: f32,
 }
+
+fn d_margin() -> f32 { 15.0 }
+fn d_playback_margin() -> f32 { 8.0 }
+fn d_hangover() -> u32 { 6 }
+fn d_f0_min() -> f32 { 150.0 }
+fn d_f0_max() -> f32 { 700.0 }
+fn d_pitch_conf() -> f32 { 0.4 }
+fn d_centroid() -> f32 { 900.0 }
+fn d_tilt() -> f32 { -25.0 }
+fn d_flatness() -> f32 { 0.5 }
+fn d_min_features() -> u32 { 3 }
+fn d_score_threshold() -> f32 { 8.0 }
+fn d_score_decay() -> f32 { 0.9 }
+fn d_gap_frames() -> u32 { 3 }
 
 fn default_clip_dir() -> PathBuf {
     PathBuf::from("./clips")
@@ -223,9 +279,22 @@ impl Default for Config {
                 channels: 1,
                 buffer_size: 1024,
                 shout_threshold_db: -15.0,
-                shout_min_duration_sec: 0.5,
+                shout_min_duration_sec: 0.2,
                 shout_sensitivity: 1.0,
                 vad_threshold: 0.5,
+                shout_margin_db: d_margin(),
+                shout_playback_margin_db: d_playback_margin(),
+                vad_hangover_frames: d_hangover(),
+                shout_f0_min_hz: d_f0_min(),
+                shout_f0_max_hz: d_f0_max(),
+                shout_pitch_conf_min: d_pitch_conf(),
+                shout_centroid_min_hz: d_centroid(),
+                shout_tilt_min_db_per_khz: d_tilt(),
+                shout_flatness_max: d_flatness(),
+                shout_min_features: d_min_features(),
+                shout_score_threshold: d_score_threshold(),
+                shout_score_decay: d_score_decay(),
+                shout_gap_frames: d_gap_frames(),
                 clip_dir: default_clip_dir(),
                 clip_seconds: default_clip_seconds(),
                 clip_on_shout: default_clip_on_shout(),

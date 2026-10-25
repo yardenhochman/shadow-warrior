@@ -32,8 +32,27 @@ audio:
   sample_rate: 16000
   channels: 1
   buffer_size: 1024
-  shout_threshold_db: -15.0
-  shout_min_duration_sec: 0.5
+  shout_threshold_db: -15.0  # DEPRECATED, ignored (use shout_margin_db)
+  vad_threshold: 0.5         # earshot VAD prob; used only as an activation gate
+
+  # Shout detection (services/shout_detector.rs). Pipeline: band-pass -> adaptive
+  # noise floor -> VAD gate w/ hangover -> shout features -> score -> ShoutDetected.
+  # All keys optional (defaults shown). Target latency < 300ms from onset.
+  shout_margin_db: 15.0            # required dB above the adaptive noise floor
+  shout_playback_margin_db: 8.0    # extra margin while our speakers play (Fight)
+  vad_hangover_frames: 6           # keep VAD gate open N frames (16ms) after speech
+  shout_f0_min_hz: 150.0           # voiced pitch range of a shout
+  shout_f0_max_hz: 700.0
+  shout_pitch_conf_min: 0.4        # autocorr confidence to count as voiced
+  shout_centroid_min_hz: 900.0     # spectral centroid (shouts are bright)
+  shout_tilt_min_db_per_khz: -25.0 # spectral tilt floor
+  shout_flatness_max: 0.5          # reject noise-like frames (wind, crowd)
+  shout_min_features: 3            # of 4 checks (voiced/centroid/tilt/flatness) required
+  shout_min_duration_sec: 0.2      # sustained shouty time before firing (keep < 0.3)
+  shout_gap_frames: 3              # non-shouty frames tolerated inside a shout
+  shout_sensitivity: 1.0           # score gain per shouty frame
+  shout_score_threshold: 8.0       # score at which ShoutDetected fires
+  shout_score_decay: 0.9           # per-frame score decay when not shouty
 
   # Audio clip recording (wav + per-frame feature json), for tuning detectors.
   # Clips can be requested via POST /api/audio/clip and are auto-recorded on shouts.

@@ -9,6 +9,7 @@ use anyhow::{Context, Result};
 
 use earshot::Detector;
 
+use super::shout_detector::ShoutDetector;
 use super::audio_frontend::{ClipRecorder, FrameFeatures, FrontEnd, FrontEndConfig};
 
 use crate::config::AudioConfig;
@@ -20,8 +21,6 @@ pub struct AudioManager {
     _stream: Arc<RwLock<Option<Stream>>>,
     connected: Arc<AtomicBool>,
     current_level_db: Arc<RwLock<f32>>,
-    shout_score: Arc<RwLock<f32>>,
-    last_event_time: Arc<RwLock<Instant>>,
     frontend: Arc<std::sync::Mutex<Option<FrontEnd>>>,
     features_tx: tokio::sync::watch::Sender<Option<FrameFeatures>>,
     actual_sample_rate: Arc<RwLock<u32>>,
@@ -38,8 +37,6 @@ impl AudioManager {
             _stream: Arc::new(RwLock::new(None)),
             connected: Arc::new(AtomicBool::new(false)),
             current_level_db: Arc::new(RwLock::new(-100.0)),
-            shout_score: Arc::new(RwLock::new(0.0)),
-            last_event_time: Arc::new(RwLock::new(Instant::now())),
             frontend: Arc::new(std::sync::Mutex::new(None)),
             features_tx: tokio::sync::watch::channel(None).0,
             actual_sample_rate: Arc::new(RwLock::new(16000)),
@@ -67,11 +64,6 @@ impl AudioManager {
         *self.actual_sample_rate.write().await = actual_rate;
         *self.actual_channels.write().await = actual_ch;
 
-        let config_lock = self.config.clone();
-        let event_bus = self.event_bus.clone();
-        let current_level_db = self.current_level_db.clone();
-        let shout_score = self.shout_score.clone();
-        let last_event_time = self.last_event_time.clone();
         let frontend = self.frontend.clone();
         let features_tx = self.features_tx.clone();
         *frontend.lock().unwrap() = Some(FrontEnd::new(
@@ -83,17 +75,7 @@ impl AudioManager {
         let stream = device.build_input_stream(
             &stream_config,
             move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                Self::process_audio_vad_sync(
-                    data,
-                    actual_ch,
-                    &event_bus,
-                    &current_level_db,
-                    &shout_score,
-                    &config_lock,
-                    &last_event_time,
-                    &frontend,
-                    &features_tx,
-                );
+                Self::process_audio_sync(data, actual_ch, &frontend, &features_tx);
             },
             move |err| {
                 error!("Audio stream error: {}", err);
@@ -108,6 +90,7 @@ impl AudioManager {
 
         self.event_bus.publish(Event::AudioDeviceConnected { device_name });
 
+        self.start_shout_detector();
         self.start_energy_decay_task();
 
         Ok(())
@@ -174,16 +157,11 @@ impl AudioManager {
             .collect()
     }
 
-    /// Process audio: band-pass + resample + features via the shared front-end, then
-    /// run the legacy energy shout logic on VAD-positive frames.
-    fn process_audio_vad_sync(
+    /// Run the shared front-end (band-pass, resample, features) and publish per-frame
+    /// features. Shout detection consumes them via `start_shout_detector`.
+    fn process_audio_sync(
         data: &[f32],
         channels: u16,
-        event_bus: &SharedEventBus,
-        current_level_db: &Arc<RwLock<f32>>,
-        shout_score: &Arc<RwLock<f32>>,
-        config_lock: &Arc<RwLock<AudioConfig>>,
-        last_event_time: &Arc<RwLock<Instant>>,
         frontend: &Arc<std::sync::Mutex<Option<FrontEnd>>>,
         features_tx: &tokio::sync::watch::Sender<Option<FrameFeatures>>,
     ) {
@@ -195,25 +173,38 @@ impl AudioManager {
             },
             Err(_) => return,
         };
-        let vad_threshold = config_lock.try_read().map(|c| c.vad_threshold).unwrap_or(0.5);
-        for (frame, feat) in frames {
-            let speech = feat.vad_prob > vad_threshold;
+        for (_frame, feat) in frames {
             features_tx.send_replace(Some(feat));
-            if speech {
-                Self::handle_speech_frame(
-                    &frame,
-                    event_bus,
-                    current_level_db,
-                    shout_score,
-                    config_lock,
-                    last_event_time,
-                );
-            }
         }
     }
 
+    /// Spawn the shout detector: consumes `subscribe_features()` and publishes
+    /// `AudioLevelChanged` (throttled) and `ShoutDetected`.
+    fn start_shout_detector(&self) {
+        let mut rx = self.subscribe_features();
+        let config = self.config.clone();
+        let event_bus = self.event_bus.clone();
+        let level = self.current_level_db.clone();
+        tokio::spawn(async move {
+            let mut det = ShoutDetector::new();
+            let mut last_level_event = Instant::now();
+            while rx.changed().await.is_ok() {
+                let Some(feat) = rx.borrow_and_update().clone() else { continue };
+                let cfg = config.read().await.clone();
+                *level.write().await = feat.band_db;
+                if last_level_event.elapsed() >= Duration::from_millis(100) {
+                    event_bus.publish(Event::AudioLevelChanged { level_db: feat.band_db });
+                    last_level_event = Instant::now();
+                }
+                if let Some(d) = det.push(&feat, &cfg) {
+                    event_bus.publish(Event::shout_detected(d.intensity, d.duration_sec, d.level_db));
+                }
+            }
+        });
+    }
+
     /// Subscribe to per-frame (16ms) features.
-    #[allow(dead_code)]
+
     pub fn subscribe_features(&self) -> tokio::sync::watch::Receiver<Option<FrameFeatures>> {
         self.features_tx.subscribe()
     }
@@ -272,68 +263,6 @@ impl AudioManager {
                 }
             }
         });
-    }
-
-    fn handle_speech_frame(
-        data: &[f32],
-        event_bus: &SharedEventBus,
-        current_level_db: &Arc<RwLock<f32>>,
-        shout_score: &Arc<RwLock<f32>>,
-        config_lock: &Arc<RwLock<AudioConfig>>,
-        last_event_time: &Arc<RwLock<Instant>>,
-    ) {
-        // Get config parameters (use try_read to avoid blocking)
-        let (shout_threshold_db, shout_sensitivity) = if let Ok(c) = config_lock.try_read() {
-            (c.shout_threshold_db, c.shout_sensitivity)
-        } else {
-            (-15.0, 1.0) // Defaults
-        };
-
-        // Calculate RMS (root mean square)
-        let sum_squares: f32 = data.iter().map(|&s| s * s).sum();
-        let rms = (sum_squares / data.len() as f32).sqrt();
-
-        // Convert to dB
-        let db = if rms > 0.0 {
-            20.0 * rms.log10()
-        } else {
-            -100.0
-        };
-
-        // Update current level
-        if let Ok(mut level) = current_level_db.try_write() {
-            *level = db;
-        }
-
-        // Emit level changed event (throttled)
-        if let Ok(mut last_time) = last_event_time.try_write() {
-            let now = Instant::now();
-            if now.duration_since(*last_time) >= Duration::from_millis(100) {
-                event_bus.publish(Event::AudioLevelChanged { level_db: db });
-                *last_time = now;
-            }
-        }
-
-        // Shout detection logic (only triggers if dB > threshold)
-        if db > shout_threshold_db {
-            if let Ok(mut score) = shout_score.try_write() {
-                let strength = ((db - shout_threshold_db) / 10.0 + 1.0).min(2.0);
-                *score += 1.0 * strength * shout_sensitivity;
-
-                if *score > 10.0 {
-                    let intensity = (*score / 20.0).min(1.0);
-                    event_bus.publish(Event::shout_detected(intensity, 0.5, db));
-                    *score = 0.0;
-                }
-            }
-        } else {
-            if let Ok(mut score) = shout_score.try_write() {
-                *score *= 0.95;
-                if *score < 0.1 {
-                    *score = 0.0;
-                }
-            }
-        }
     }
 
     /// Update audio parameters dynamically
