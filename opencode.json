@@ -1,0 +1,17 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "memelord": {
+      "type": "local",
+      "command": [
+        "node",
+        "/Users/avishai/.local/state/fnm_multishells/90112_1778415277608/bin/memelord",
+        "serve"
+      ],
+      "environment": {
+        "MEMELORD_DIR": "/Users/avishai/code/shadow-warrior/.memelord"
+      },
+      "enabled": true
+    }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "memelord": {
+      "command": "node",
+      "args": [
+        "/Users/avishai/.local/state/fnm_multishells/90112_1778415277608/bin/memelord",
+        "serve"
+      ],
+      "env": {
+        "MEMELORD_DIR": "/Users/avishai/code/shadow-warrior/.memelord"
+      }
+    }
+  }
+}
