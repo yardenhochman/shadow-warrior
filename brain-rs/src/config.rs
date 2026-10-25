@@ -90,13 +90,30 @@ pub struct WledEffects {
     pub cooldown: WledEffect,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+/// A WLED effect description. `effect` and `palette` may be a name (resolved
+/// against the device's own effect/palette list) or a numeric WLED id.
+/// Everything except `effect` is optional and falls back to WLED defaults.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
+#[serde(default)]
 pub struct WledEffect {
     pub effect: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub palette: Option<String>,
+    /// Effect speed (WLED `sx`)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub speed: Option<u8>,
+    /// Effect intensity (WLED `ix`)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub intensity: Option<u8>,
+    /// Master brightness (WLED `bri`)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub brightness: Option<u8>,
+    /// Transition time in 100ms units (WLED `transition`)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transition: Option<u16>,
+    /// Segment colors (WLED `col`), up to 3 RGB triples
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub colors: Option<Vec<[u8; 3]>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -193,21 +210,25 @@ impl Default for Config {
                         effect: "breathe".to_string(),
                         palette: Some("ocean".to_string()),
                         speed: Some(128),
+                        ..Default::default()
                     },
                     warming: WledEffect {
                         effect: "rainbow".to_string(),
                         palette: Some("rainbow".to_string()),
                         speed: Some(200),
+                        ..Default::default()
                     },
                     fight: WledEffect {
                         effect: "realtime".to_string(),
                         palette: None,
                         speed: None,
+                        ..Default::default()
                     },
                     cooldown: WledEffect {
                         effect: "fire".to_string(),
                         palette: Some("lava".to_string()),
                         speed: Some(150),
+                        ..Default::default()
                     },
                 },
             },

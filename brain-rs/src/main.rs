@@ -190,6 +190,10 @@ async fn main() -> Result<()> {
         .route("/api/arena/config", post(arena::update_config))
         .route("/api/schedule", get(api::schedule::get_schedule))
         .route("/api/schedule", post(api::schedule::update_schedule))
+        // WLED routes
+        .route("/api/wled/effects", get(api::wled::get_effects))
+        .route("/api/wled/palettes", get(api::wled::get_palettes))
+        .route("/api/wled/effect", post(api::wled::set_effect))
         // Discovery routes
         .route("/api/discovery/scan", post(api::discovery::scan_hardware))
         .route("/api/devices", get(api::discovery::get_devices))

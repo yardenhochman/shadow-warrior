@@ -48,6 +48,9 @@ wled:
   controllers: []
 
   udp_fps: 30
+  # effect/palette: device effect name (see GET /api/wled/effects), numeric id, or "realtime".
+  # Optional per effect: speed, intensity, brightness (0-255), transition (100ms units),
+  # colors (up to 3 RGB triples, e.g. [[255,0,0],[0,0,255]]).
   effects:
     idle:
       effect: "breathe"
