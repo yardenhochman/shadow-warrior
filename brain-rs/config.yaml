@@ -67,8 +67,15 @@ wled:
       palette: "lava"
       speed: 150
 
+# Tasmota smart plugs (HTTP). Each plug lists the arena states during which it
+# is ON (suspended, idle, warming, fight, cooldown); it is switched OFF in all
+# other states. A plug with no on_states is only switched off on IDLE/SUSPENDED.
+# Unreachable plugs are retried once and never block the state machine.
 tasmota:
   plugs: []
+  # - name: uv_lights
+  #   ip: 192.168.1.50
+  #   on_states: [warming, fight]
 
 # Daily schedule. When enabled, the game is only active inside these windows
 # (local time, "HH:MM"). Outside them the arena is SUSPENDED and presence is

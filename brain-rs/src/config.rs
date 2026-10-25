@@ -125,6 +125,12 @@ pub struct TasmotaConfig {
 pub struct TasmotaPlug {
     pub ip: String,
     pub name: String,
+    /// Arena states (case-insensitive: suspended, idle, warming, fight,
+    /// cooldown) during which this plug is ON; it is OFF in every other
+    /// state. Empty (default) = never turned on by the game; the plug is only
+    /// switched off when the arena goes IDLE/SUSPENDED.
+    #[serde(default)]
+    pub on_states: Vec<String>,
 }
 
 /// Daily schedule: the game is active only inside the configured windows.
