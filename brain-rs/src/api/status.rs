@@ -37,6 +37,7 @@ pub struct SharedState {
     pub wled: Arc<crate::services::wled_manager::WledManager>,
     pub schedule: Arc<crate::services::schedule_manager::ScheduleManager>,
     pub health: Arc<crate::core::status_registry::StatusRegistry>,
+    pub audio: Arc<crate::services::audio_manager::AudioManager>,
 }
 
 /// GET /api/state - Get complete brain state

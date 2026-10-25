@@ -99,9 +99,10 @@ async fn state_with(ips: &[&str]) -> AppState {
         state_machine: sm,
         arena_tx,
         db: db.clone(),
-        discovery: Arc::new(DiscoveryManager::new(db, ble, bus)),
+        discovery: Arc::new(DiscoveryManager::new(db, ble, bus.clone())),
         wled,
         schedule,
+        audio: Arc::new(crate::services::AudioManager::new(config.audio.clone(), bus.clone())),
     })
 }
 

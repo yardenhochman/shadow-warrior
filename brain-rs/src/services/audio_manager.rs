@@ -219,7 +219,6 @@ impl AudioManager {
     }
 
     /// Tell the front-end whether our speakers are playing.
-    #[allow(dead_code)]
     pub fn set_playback_active(&self, active: bool) {
         if let Ok(mut g) = self.frontend.lock() {
             if let Some(fe) = g.as_mut() {
@@ -229,7 +228,6 @@ impl AudioManager {
     }
 
     /// Dump the last `seconds` of audio + features to `dir` (detector triggers / on demand).
-    #[allow(dead_code)]
     pub fn record_clip(&self, dir: &std::path::Path, reason: &str, seconds: f32) -> Result<std::path::PathBuf> {
         let (audio, feats) = {
             let g = self.frontend.lock().map_err(|_| anyhow::anyhow!("frontend poisoned"))?;
@@ -237,6 +235,43 @@ impl AudioManager {
         };
         let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%.3f").to_string();
         Ok(ClipRecorder::new(dir).record(reason, &stamp, &audio, &feats)?)
+    }
+
+    /// Record a clip using the configured directory and length.
+    pub async fn record_clip_default(&self, reason: &str) -> Result<std::path::PathBuf> {
+        let (dir, seconds) = {
+            let c = self.config.read().await;
+            (c.clip_dir.clone(), c.clip_seconds)
+        };
+        self.record_clip(&dir, reason, seconds)
+    }
+
+    /// Record a clip on every shout (rate limited by `clip_cooldown_sec`).
+    pub fn start_shout_clip_trigger(self: Arc<Self>) {
+        let mut rx = self.event_bus.subscribe();
+        tokio::spawn(async move {
+            let mut last: Option<Instant> = None;
+            loop {
+                match rx.recv().await {
+                    Ok(Event::ShoutDetected { intensity, .. }) => {
+                        let (enabled, cooldown) = {
+                            let c = self.config.read().await;
+                            (c.clip_on_shout, c.clip_cooldown_sec)
+                        };
+                        if !clip_due(enabled, last, Instant::now(), cooldown) {
+                            continue;
+                        }
+                        last = Some(Instant::now());
+                        match self.record_clip_default("shout").await {
+                            Ok(p) => info!("Shout clip saved ({:.2}): {}", intensity, p.display()),
+                            Err(e) => warn!("Shout clip failed: {}", e),
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    _ => {}
+                }
+            }
+        });
     }
 
     fn handle_speech_frame(
@@ -335,6 +370,12 @@ impl AudioManager {
     }
 }
 
+/// Whether an automatic clip should be recorded now.
+fn clip_due(enabled: bool, last: Option<Instant>, now: Instant, cooldown_sec: f32) -> bool {
+    enabled
+        && last.is_none_or(|l| now.duration_since(l) >= Duration::from_secs_f32(cooldown_sec.max(0.0)))
+}
+
 /// Energy bar tracker for WARMING state
 pub struct EnergyBar {
     current: Arc<RwLock<f32>>,
@@ -430,6 +471,32 @@ impl EnergyBar {
 mod tests {
     use super::*;
     use crate::core::EventBus;
+
+    #[test]
+    fn clip_throttle() {
+        let t0 = Instant::now();
+        assert!(clip_due(true, None, t0, 10.0));
+        assert!(!clip_due(false, None, t0, 10.0));
+        assert!(!clip_due(true, Some(t0), t0 + Duration::from_secs(5), 10.0));
+        assert!(clip_due(true, Some(t0), t0 + Duration::from_secs(10), 10.0));
+    }
+
+    #[tokio::test]
+    async fn record_clip_writes_files_from_synthetic_frames() {
+        use crate::services::audio_frontend::ConstVad;
+        let bus = Arc::new(EventBus::new(10));
+        let am = AudioManager::new(crate::config::Config::default().audio, bus);
+        let mut fe = FrontEnd::new(16000, FrontEndConfig::default(), Box::new(ConstVad(0.9)));
+        let tone: Vec<f32> = (0..16000).map(|i| (i as f32 * 0.05).sin() * 0.3).collect();
+        fe.process(&tone);
+        *am.frontend.lock().unwrap() = Some(fe);
+        am.set_playback_active(true);
+        let dir = std::env::temp_dir().join(format!("sw_clip_test_{}", std::process::id()));
+        let p = am.record_clip(&dir, "unit", 0.5).unwrap();
+        assert!(p.exists());
+        assert!(p.with_extension("json").exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[tokio::test]
     async fn test_energy_bar() {
