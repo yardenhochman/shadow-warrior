@@ -574,7 +574,7 @@ mod tests {
     fn bp_gain(freq: f32, rate: u32) -> f32 {
         let mut bp = BandPass::new(rate as f32, 250.0, 4000.0);
         let out: Vec<f32> = sine(freq, rate, 0.5, 1.0).iter().map(|&x| bp.process(x)).collect();
-        rms(&out[out.len() / 2..]) / 0.7071
+        rms(&out[out.len() / 2..]) / std::f32::consts::FRAC_1_SQRT_2
     }
 
     #[test]

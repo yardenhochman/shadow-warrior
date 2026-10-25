@@ -23,3 +23,4 @@ graphify-out/
 punching_bag/.claude/
 .codex/
 .vscode/
+.playwright-mcp/
