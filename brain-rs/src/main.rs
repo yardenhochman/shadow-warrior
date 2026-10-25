@@ -3,6 +3,8 @@ mod config;
 mod core;
 mod models;
 mod services;
+#[cfg(test)]
+mod test_util;
 
 use anyhow::Result;
 use axum::{

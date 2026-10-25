@@ -613,8 +613,7 @@ async fn fetch_name_list(client: &Client, ip: &str, path: &str) -> Result<Vec<St
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
+    use crate::test_util::{mock_http, Seen};
 
     fn names(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()
@@ -675,56 +674,15 @@ mod tests {
         assert_eq!(e.colors, Some(vec![[1, 2, 3]]));
     }
 
-    /// Minimal HTTP mock (one request per connection); returns (addr, captured requests).
-    async fn mock_server(
-        status: &'static str,
-        body: &'static str,
-    ) -> (String, Arc<tokio::sync::Mutex<Vec<String>>>) {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap().to_string();
-        let seen = Arc::new(tokio::sync::Mutex::new(Vec::new()));
-        let seen2 = seen.clone();
-        tokio::spawn(async move {
-            loop {
-                let (mut sock, _) = listener.accept().await.unwrap();
-                let mut buf = vec![0u8; 8192];
-                let mut total = 0;
-                loop {
-                    let n = sock.read(&mut buf[total..]).await.unwrap();
-                    total += n;
-                    let text = String::from_utf8_lossy(&buf[..total]).to_string();
-                    if let Some(h) = text.find("\r\n\r\n") {
-                        let len = text
-                            .lines()
-                            .find_map(|l| {
-                                l.to_lowercase()
-                                    .strip_prefix("content-length:")
-                                    .map(|v| v.trim().parse::<usize>().unwrap())
-                            })
-                            .unwrap_or(0);
-                        if total >= h + 4 + len || n == 0 {
-                            break;
-                        }
-                    } else if n == 0 {
-                        break;
-                    }
-                }
-                seen2.lock().await.push(String::from_utf8_lossy(&buf[..total]).to_string());
-                let resp = format!(
-                    "HTTP/1.1 {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    status,
-                    body.len(),
-                    body
-                );
-                let _ = sock.write_all(resp.as_bytes()).await;
-            }
-        });
+    /// Mock device answering every request with `status` and `body`.
+    async fn mock_server(status: u16, body: &'static str) -> (String, Seen) {
+        let (addr, _, seen) = mock_http(&[("*", status, body)]).await;
         (addr, seen)
     }
 
     #[tokio::test]
     async fn fetches_effect_list_from_device() {
-        let (addr, seen) = mock_server("200 OK", r#"["Solid","Blink","Breathe"]"#).await;
+        let (addr, seen) = mock_server(200, r#"["Solid","Blink","Breathe"]"#).await;
         let list = fetch_name_list(&Client::new(), &addr, "effects").await.unwrap();
         assert_eq!(list, names(&["Solid", "Blink", "Breathe"]));
         assert!(seen.lock().await[0].starts_with("GET /json/effects"));
@@ -732,7 +690,7 @@ mod tests {
 
     #[tokio::test]
     async fn posts_state_and_reports_http_errors() {
-        let (addr, seen) = mock_server("200 OK", "{}").await;
+        let (addr, seen) = mock_server(200, "{}").await;
         let e = WledEffect { effect: "fire".into(), speed: Some(99), ..Default::default() };
         let payload = build_effect_payload(&e, 16, None);
         post_state(&Client::new(), &addr, &payload).await.unwrap();
@@ -740,7 +698,7 @@ mod tests {
         assert!(req.starts_with("POST /json/state"));
         assert!(req.contains("\"sx\":99"));
 
-        let (bad, _) = mock_server("500 Internal Server Error", "{}").await;
+        let (bad, _) = mock_server(500, "{}").await;
         assert!(post_state(&Client::new(), &bad, &payload).await.is_err());
     }
 }

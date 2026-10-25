@@ -190,8 +190,7 @@ impl TasmotaManager {
 mod tests {
     use super::*;
     use crate::core::EventBus;
-    use axum::{extract::State, routing::get, Router};
-    use std::sync::Mutex;
+    use crate::test_util::{mock_http, Seen};
 
     fn plug(name: &str, ip: &str, on: &[&str]) -> TasmotaPlug {
         TasmotaPlug {
@@ -219,29 +218,28 @@ mod tests {
         assert_eq!(desired_power(&p, ArenaState::Suspended), Some(false));
     }
 
-    type Log = Arc<Mutex<Vec<String>>>;
+    /// Mock plug; returns its address and the log of requests received.
+    async fn mock() -> (String, Seen) {
+        let (addr, _, seen) = mock_http(&[("*", 200, "{}")]).await;
+        (addr, seen)
+    }
 
-    async fn mock() -> (String, Log) {
-        let log: Log = Arc::default();
-        async fn h(
-            State(l): State<Log>,
-            axum::extract::Query(q): axum::extract::Query<
-                std::collections::HashMap<String, String>,
-            >,
-        ) -> &'static str {
-            l.lock().unwrap().push(q["cmnd"].clone());
-            "{}"
-        }
-        let app = Router::new().route("/cm", get(h)).with_state(log.clone());
-        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = l.local_addr().unwrap().to_string();
-        tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
-        (addr, log)
+    /// The `cmnd` values received so far, in order.
+    async fn cmnds(seen: &Seen) -> Vec<String> {
+        seen.lock()
+            .await
+            .iter()
+            .filter_map(|r| {
+                let q = r.lines().next()?.split_once("cmnd=")?.1;
+                let v = q.split([' ', '&']).next()?;
+                Some(v.replace("%20", " ").replace('+', " "))
+            })
+            .collect()
     }
 
     #[tokio::test]
     async fn apply_state_drives_mock_and_survives_dead_plug() {
-        let (addr, log) = mock().await;
+        let (addr, seen) = mock().await;
         let cfg = TasmotaConfig {
             plugs: vec![
                 plug("dead", "127.0.0.1:1", &["fight"]),
@@ -252,10 +250,10 @@ mod tests {
 
         let failed = mgr.apply_state(ArenaState::Fight).await;
         assert_eq!(failed, 1);
-        assert_eq!(log.lock().unwrap().as_slice(), ["Power on"]);
+        assert_eq!(cmnds(&seen).await, ["Power on"]);
 
         mgr.apply_state(ArenaState::Cooldown).await;
-        assert_eq!(log.lock().unwrap().as_slice(), ["Power on", "Power off"]);
+        assert_eq!(cmnds(&seen).await, ["Power on", "Power off"]);
         let st = mgr.get_states().await;
         assert!(st.iter().any(|s| s.0 == "uv" && s.2 && !s.3));
         assert!(st.iter().any(|s| s.0 == "dead" && !s.2));
