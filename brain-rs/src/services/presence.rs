@@ -100,7 +100,7 @@ impl PresenceFusion {
         Self::default()
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn present(&self) -> bool {
         self.present
     }
@@ -155,6 +155,7 @@ impl PresenceFusion {
 pub struct PresenceService {
     config: Arc<RwLock<PresenceConfig>>,
     event_bus: SharedEventBus,
+    #[allow(dead_code)] // kept for evidence_sender (extra sensors not yet wired)
     tx: mpsc::UnboundedSender<Evidence>,
     rx: std::sync::Mutex<Option<mpsc::UnboundedReceiver<Evidence>>>,
 }
@@ -171,7 +172,7 @@ impl PresenceService {
     }
 
     /// Handle for additional sensors (radar, motion...) to report evidence.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // reserved for additional sensors (radar, motion)
     pub fn evidence_sender(&self) -> mpsc::UnboundedSender<Evidence> {
         self.tx.clone()
     }

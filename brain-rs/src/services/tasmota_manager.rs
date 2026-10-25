@@ -148,8 +148,8 @@ impl TasmotaManager {
         }
     }
 
+    #[cfg(test)]
     /// Get current states for all plugs
-    #[allow(dead_code)]
     pub async fn get_states(&self) -> Vec<(String, String, bool, bool)> {
         let states = self.states.read().await;
         states

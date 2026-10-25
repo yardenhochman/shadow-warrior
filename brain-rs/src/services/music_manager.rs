@@ -278,6 +278,11 @@ impl MusicManager {
         });
     }
 
+    #[cfg(test)]
+    pub async fn current_track(&self) -> Option<String> {
+        self.current_track.read().await.clone()
+    }
+
     /// Stop music playback
     pub async fn stop(&self) {
         if !*self.playing.read().await {
@@ -297,23 +302,6 @@ impl MusicManager {
         self.event_bus.publish(Event::MusicStopped);
     }
 
-    /// Check if music is playing
-    #[allow(dead_code)]
-    pub async fn is_playing(&self) -> bool {
-        *self.playing.read().await
-    }
-
-    /// Get current track name
-    #[allow(dead_code)]
-    pub async fn current_track(&self) -> Option<String> {
-        self.current_track.read().await.clone()
-    }
-
-    /// Get playlist size
-    #[allow(dead_code)]
-    pub async fn playlist_size(&self) -> usize {
-        self.playlist.read().await.len()
-    }
 }
 
 #[cfg(test)]

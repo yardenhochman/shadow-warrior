@@ -14,12 +14,10 @@ use crate::config::BleConfig;
 use crate::core::{Event, SharedEventBus};
 
 // Nordic UART Service UUIDs
-#[allow(dead_code)]
-const SERVICE_UUID: Uuid = Uuid::from_u128(0x6E400001_B5A3_F393_E0A9_E50E24DCCA9E);
 const ACCELERATION_UUID: Uuid = Uuid::from_u128(0x6E400002_B5A3_F393_E0A9_E50E24DCCA9E);
 const ALPHA_UUID: Uuid = Uuid::from_u128(0x6E400004_B5A3_F393_E0A9_E50E24DCCA9E);
 const THRESHOLD_UUID: Uuid = Uuid::from_u128(0x6E400005_B5A3_F393_E0A9_E50E24DCCA9E);
-#[allow(dead_code)]
+#[allow(dead_code)] // reserved: fight-mode toggle (see set_fight_mode)
 const FIGHT_MODE_UUID: Uuid = Uuid::from_u128(0x6E400006_B5A3_F393_E0A9_E50E24DCCA9E);
 
 pub struct BleManager {
@@ -337,7 +335,7 @@ impl BleManager {
     }
 
     /// Set fight mode
-    #[allow(dead_code)]
+    #[allow(dead_code)] // reserved: not yet wired to any caller
     pub async fn set_fight_mode(&self, enabled: bool) -> Result<()> {
         let peripheral_guard = self.peripheral.read().await;
         let peripheral = peripheral_guard
@@ -355,12 +353,6 @@ impl BleManager {
 
         info!("Set fight mode to {}", enabled);
         Ok(())
-    }
-
-    /// Check if connected
-    #[allow(dead_code)]
-    pub async fn is_connected(&self) -> bool {
-        *self.connected.read().await
     }
 
     /// Helper to clone for async tasks

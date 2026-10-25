@@ -160,7 +160,7 @@ impl NoiseFloor {
         self.floor_db
     }
 
-    #[allow(dead_code)] // for upcoming detectors/tests
+    #[cfg(test)]
     pub fn floor_db(&self) -> f32 {
         self.floor_db
     }
@@ -207,9 +207,10 @@ impl VadProbe for earshot::Detector {
     }
 }
 
-#[allow(dead_code)] // for upcoming detectors/tests
+#[cfg(test)]
 /// VAD stub that always returns a fixed probability.
 pub struct ConstVad(pub f32);
+#[cfg(test)]
 impl VadProbe for ConstVad {
     fn probability(&mut self, _: &[f32]) -> f32 {
         self.0
@@ -353,15 +354,11 @@ impl<T: Clone> RingBuffer<T> {
         }
         self.buf.push_back(item);
     }
-    #[allow(dead_code)] // for upcoming detectors/tests
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.buf.len()
     }
-    #[allow(dead_code)] // for upcoming detectors/tests
-    pub fn is_empty(&self) -> bool {
-        self.buf.is_empty()
-    }
-    #[allow(dead_code)] // for upcoming detectors/tests
+    #[cfg(test)]
     pub fn capacity(&self) -> usize {
         self.cap
     }
@@ -369,7 +366,7 @@ impl<T: Clone> RingBuffer<T> {
     pub fn last_n(&self, n: usize) -> Vec<T> {
         self.buf.iter().skip(self.buf.len().saturating_sub(n)).cloned().collect()
     }
-    #[allow(dead_code)] // for upcoming detectors/tests
+    #[cfg(test)]
     pub fn snapshot(&self) -> Vec<T> {
         self.buf.iter().cloned().collect()
     }
@@ -466,15 +463,10 @@ impl FrontEnd {
         f
     }
 
-    #[allow(dead_code)] // for upcoming detectors/tests
+    #[cfg(test)]
     pub fn audio_ring(&self) -> &RingBuffer<f32> {
         &self.audio
     }
-    #[allow(dead_code)] // for upcoming detectors/tests
-    pub fn feature_history(&self) -> &RingBuffer<FrameFeatures> {
-        &self.features
-    }
-
     /// Snapshot the last `seconds` of audio + features for the clip recorder.
     pub fn snapshot_clip(&self, seconds: f32) -> (Vec<f32>, Vec<FrameFeatures>) {
         let ns = (seconds * TARGET_RATE as f32) as usize;

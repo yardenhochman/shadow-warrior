@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
@@ -100,13 +100,6 @@ impl StateMachine {
         *self.state_entered_at.read().await
     }
 
-    /// Get the duration spent in the current state
-    #[allow(dead_code)]
-    pub async fn time_in_state(&self) -> Duration {
-        let entered_at = self.state_entered_at().await;
-        Utc::now() - entered_at
-    }
-
     /// Register a state hook
     pub async fn register_hook(&self, hook: Box<dyn StateHook>) {
         self.hooks.write().await.push(hook);
@@ -165,34 +158,6 @@ impl StateMachine {
         Ok(())
     }
 
-    /// Force transition to a state without validation (for emergency stops)
-    #[allow(dead_code)]
-    pub async fn force_transition(&self, to: ArenaState) {
-        let from = self.current_state().await;
-        warn!("Force transition: {} -> {}", from, to);
-
-        // Update state directly
-        {
-            let mut current = self.current_state.write().await;
-            let mut entered_at = self.state_entered_at.write().await;
-            *current = to;
-            *entered_at = Utc::now();
-        }
-
-        // Publish event
-        self.event_bus.publish(Event::state_changed(
-            from.to_string(),
-            to.to_string(),
-        ));
-
-        // Call hooks (best effort, ignore errors)
-        let hooks = self.hooks.read().await;
-        for hook in hooks.iter() {
-            let _ = hook.on_exit(from).await;
-            let _ = hook.on_enter(to).await;
-            let _ = hook.on_transition(from, to).await;
-        }
-    }
 }
 
 /// Hook interface for state machine lifecycle events

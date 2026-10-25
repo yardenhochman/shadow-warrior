@@ -285,17 +285,6 @@ impl AudioManager {
         self.config.clone()
     }
 
-    /// Get current audio level in dB
-    #[allow(dead_code)]
-    pub async fn current_level_db(&self) -> f32 {
-        *self.current_level_db.read().await
-    }
-
-    /// Check if connected
-    #[allow(dead_code)]
-    pub fn is_connected(&self) -> bool {
-        self.connected.load(Ordering::Relaxed)
-    }
 }
 
 /// Whether an automatic clip should be recorded now.
@@ -365,8 +354,8 @@ impl EnergyBar {
         *self.current.read().await
     }
 
+    #[cfg(test)]
     /// Get energy percentage (0.0 to 1.0)
-    #[allow(dead_code)]
     pub async fn percentage(&self) -> f32 {
         let current = self.current().await;
         let max = *self.max.read().await;
@@ -377,16 +366,16 @@ impl EnergyBar {
         }
     }
 
+    #[cfg(test)]
     /// Check if energy bar is full
-    #[allow(dead_code)]
     pub async fn is_full(&self) -> bool {
         let current = self.current().await;
         let max = *self.max.read().await;
         current >= max
     }
 
+    #[cfg(test)]
     /// Reset energy bar
-    #[allow(dead_code)]
     pub async fn reset(&self) {
         let mut energy = self.current.write().await;
         let max = *self.max.read().await;
