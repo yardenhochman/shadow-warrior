@@ -2,7 +2,6 @@
 /target/
 **/*.rs.bk
 *.pdb
-Cargo.lock
 
 # IDE
 .vscode/
@@ -26,6 +25,7 @@ Thumbs.db
 
 # Claude Code ctags index
 .claude/tags
+.claude/settings.local.json
 
 # sqlite
 *.db

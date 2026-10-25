@@ -124,9 +124,9 @@ Targets:
 The same three libraries are needed **for the target architecture** (e.g. `libdbus-1-dev:arm64`, `libasound2-dev:armhf`), along with a cross linker and `PKG_CONFIG_ALLOW_CROSS=1`. Rather than setting this up on the host, use the podman build image (`Dockerfile.build`), which installs them for both targets:
 
 ```bash
-make image       # build the podman image once
-make build-pi4   # aarch64
-make build-pi0   # armhf
+just image       # build the podman image once
+just build-pi4   # aarch64
+just build-pi0   # armhf
 ```
 
 `Cross.toml` holds the equivalent package list for [`cross`](https://github.com/cross-rs/cross) (`cross build --target <triple>`).
