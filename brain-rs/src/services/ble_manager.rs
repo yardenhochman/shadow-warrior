@@ -120,7 +120,7 @@ impl BleManager {
         let address = peripheral
             .properties()
             .await?
-            .and_then(|p| Some(p.address.to_string()))
+            .map(|p| p.address.to_string())
             .unwrap_or_else(|| "Unknown".to_string());
 
         *self.peripheral.write().await = Some(peripheral);

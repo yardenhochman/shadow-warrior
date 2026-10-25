@@ -126,7 +126,7 @@ impl DiscoveryManager {
                     
                     debug!("Found SSDP device: USN={}, Location={}, Server={:?}", usn, location, server);
                     
-                    if location.contains("wled") || server.as_ref().map_or(false, |s| s.to_lowercase().contains("wled")) {
+                    if location.contains("wled") || server.as_ref().is_some_and(|s| s.to_lowercase().contains("wled")) {
                         Self::register_discovered_device(&db, "WLED Device", "wled", &location, Some(&event_bus)).await;
                     } else if location.contains("tasmota") || usn.to_lowercase().contains("tasmota") {
                         Self::register_discovered_device(&db, "Tasmota Plug", "tasmota", &location, None).await;

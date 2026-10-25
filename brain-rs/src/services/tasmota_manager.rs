@@ -72,13 +72,6 @@ impl TasmotaManager {
         }
     }
 
-    /// Turn all plugs on or off
-    pub async fn set_all(&self, power_on: bool) -> Result<()> {
-        let futs = self.config.plugs.iter().map(|p| self.set_plug_retry(p, power_on));
-        futures::future::join_all(futs).await;
-        Ok(())
-    }
-
     /// Apply the per-state plug mapping. Plugs are driven concurrently, each
     /// with a bounded retry, so one dead plug cannot delay the others.
     /// Returns the number of plugs that could not be set.

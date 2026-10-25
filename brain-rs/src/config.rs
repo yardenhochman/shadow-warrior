@@ -287,12 +287,13 @@ pub struct ScheduleWindow {
 
 impl Config {
     /// Load configuration from config.yaml and environment variables
-    pub fn load() -> Result<Self, figment::Error> {
+    pub fn load() -> Result<Self, Box<figment::Error>> {
         Figment::new()
             .merge(Serialized::defaults(Self::default()))
             .merge(Yaml::file("config.yaml"))
             .merge(Env::prefixed("BRAIN_"))
             .extract()
+            .map_err(Box::new)
     }
 }
 

@@ -49,7 +49,7 @@ pub struct HardwareStatus {
 }
 
 /// Generic connection status
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ConnectionStatus {
     pub connected: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -83,7 +83,7 @@ pub struct TasmotaStatus {
 }
 
 /// Music player status
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MusicStatus {
     pub playing: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -95,7 +95,7 @@ pub struct MusicStatus {
 }
 
 /// Statistics and metrics
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Statistics {
     // Session stats
     pub total_sessions: u64,
@@ -195,28 +195,6 @@ impl ApiResponse<()> {
             success: true,
             data: None,
             error: None,
-        }
-    }
-}
-
-impl Default for ConnectionStatus {
-    fn default() -> Self {
-        Self {
-            connected: false,
-            device_name: None,
-            last_error: None,
-            connected_at: None,
-        }
-    }
-}
-
-impl Default for MusicStatus {
-    fn default() -> Self {
-        Self {
-            playing: false,
-            current_track: None,
-            playlist_size: None,
-            last_error: None,
         }
     }
 }

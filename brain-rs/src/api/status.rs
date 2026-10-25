@@ -61,14 +61,7 @@ pub async fn get_state(State(state): State<AppState>) -> Json<ApiResponse<BrainS
         time_since_last_activity_sec: None,
     });
 
-    let statistics = stats_rx.await.unwrap_or_else(|_| Statistics {
-        total_sessions: 0,
-        current_session_punches: 0,
-        current_session_max_power: 0.0,
-        latest_acceleration: None,
-        latest_audio_level_db: None,
-        uptime_sec: 0.0,
-    });
+    let statistics = stats_rx.await.unwrap_or_default();
 
     let health = state.health.snapshot();
     let conn = |d: &crate::core::status_registry::DeviceHealth| ConnectionStatus {
@@ -143,14 +136,7 @@ pub async fn get_statistics(State(state): State<AppState>) -> Json<ApiResponse<S
     let (tx, rx) = oneshot::channel();
     let _ = state.arena_tx.send(ArenaCommand::GetStatistics(tx));
 
-    let statistics = rx.await.unwrap_or_else(|_| Statistics {
-        total_sessions: 0,
-        current_session_punches: 0,
-        current_session_max_power: 0.0,
-        latest_acceleration: None,
-        latest_audio_level_db: None,
-        uptime_sec: 0.0,
-    });
+    let statistics = rx.await.unwrap_or_default();
 
     Json(ApiResponse::success(statistics))
 }

@@ -395,6 +395,10 @@ impl EnergyBar {
     }
 }
 
+// SAFETY: AudioManager is always wrapped in Arc and stream access is synchronized
+unsafe impl Send for AudioManager {}
+unsafe impl Sync for AudioManager {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -454,8 +458,3 @@ mod tests {
         assert_eq!(energy_bar.current().await, 0.0);
     }
 }
-
-// SAFETY: AudioManager is always wrapped in Arc and stream access is synchronized
-unsafe impl Send for AudioManager {}
-unsafe impl Sync for AudioManager {}
-
