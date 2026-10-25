@@ -204,7 +204,6 @@ impl AudioManager {
     }
 
     /// Subscribe to per-frame (16ms) features.
-
     pub fn subscribe_features(&self) -> tokio::sync::watch::Receiver<Option<FrameFeatures>> {
         self.features_tx.subscribe()
     }
@@ -420,7 +419,7 @@ mod tests {
         fe.process(&tone);
         *am.frontend.lock().unwrap() = Some(fe);
         am.set_playback_active(true);
-        let dir = std::env::temp_dir().join(format!("sw_clip_test_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("sw_clip_am_test_{}", std::process::id()));
         let p = am.record_clip(&dir, "unit", 0.5).unwrap();
         assert!(p.exists());
         assert!(p.with_extension("json").exists());
