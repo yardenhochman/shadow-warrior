@@ -36,6 +36,7 @@ pub struct SharedState {
     pub discovery: Arc<crate::services::discovery_manager::DiscoveryManager>,
     pub wled: Arc<crate::services::wled_manager::WledManager>,
     pub schedule: Arc<crate::services::schedule_manager::ScheduleManager>,
+    pub health: Arc<crate::core::status_registry::StatusRegistry>,
 }
 
 /// GET /api/state - Get complete brain state
@@ -68,18 +69,44 @@ pub async fn get_state(State(state): State<AppState>) -> Json<ApiResponse<BrainS
         uptime_sec: 0.0,
     });
 
-    // Build hardware status
+    let health = state.health.snapshot();
+    let conn = |d: &crate::core::status_registry::DeviceHealth| ConnectionStatus {
+        connected: d.connected,
+        device_name: d.name.clone(),
+        last_error: d.last_error.clone(),
+        connected_at: d.connected_at,
+    };
+    let mut wled = state.wled.get_status().await;
+    for w in &mut wled {
+        if let Some(d) = health.wled.get(&w.ip) {
+            if w.last_error.is_none() {
+                w.last_error = d.last_error.clone();
+            }
+        }
+    }
+    let tasmota = health
+        .tasmota
+        .iter()
+        .map(|(name, d)| crate::models::TasmotaStatus {
+            name: name.clone(),
+            ip: String::new(),
+            connected: d.connected,
+            powered: d.powered.unwrap_or(false),
+            last_error: d.last_error.clone(),
+        })
+        .collect();
     let hardware = HardwareStatus {
-        ble: ConnectionStatus::default(), // TODO: Get from BLE manager
-        audio: ConnectionStatus {
-            connected: true, // TODO: Get from audio manager
-            device_name: Some("Default".to_string()),
-            last_error: None,
-            connected_at: None,
+        ble: conn(&health.ble),
+        audio: conn(&health.audio),
+        wled,
+        tasmota,
+        music: MusicStatus {
+            playing: health.music.powered.unwrap_or(false),
+            current_track: health.music.detail.clone(),
+            playlist_size: None,
+            last_error: health.music.last_error.clone(),
         },
-        wled: state.wled.get_status().await,
-        tasmota: vec![], // TODO: Get from Tasmota manager
-        music: MusicStatus::default(), // TODO: Get from music manager
+        health,
     };
 
     let brain_state = BrainState {

@@ -107,6 +107,8 @@ async fn main() -> Result<()> {
 
     // Start hardware managers
     info!("Starting hardware managers...");
+    let health_registry = Arc::new(core::status_registry::StatusRegistry::new());
+    health_registry.spawn(&event_bus);
     ble_manager.start().await?;
     audio_manager.start().await?;
     wled_manager.start().await?;
@@ -175,6 +177,7 @@ async fn main() -> Result<()> {
         discovery: discovery_manager,
         wled: wled_manager.clone(),
         schedule: schedule_manager.clone(),
+        health: health_registry.clone(),
     });
 
     // Build application router

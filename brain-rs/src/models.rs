@@ -43,6 +43,9 @@ pub struct HardwareStatus {
     pub wled: Vec<WledStatus>,
     pub tasmota: Vec<TasmotaStatus>,
     pub music: MusicStatus,
+    /// Detailed per-device health (timestamps, errors) from the status registry
+    #[serde(default)]
+    pub health: crate::core::status_registry::HardwareHealth,
 }
 
 /// Generic connection status
