@@ -5,7 +5,6 @@
 //! per-frame features + adaptive noise floor -> ring buffer of audio and feature history.
 //! No hardware or async dependencies; everything is unit-testable with synthetic signals.
 
-#![allow(dead_code)] // API consumed by upcoming shout/presence detectors
 
 use serde::Serialize;
 use std::collections::VecDeque;
@@ -161,6 +160,7 @@ impl NoiseFloor {
         self.floor_db
     }
 
+    #[allow(dead_code)] // for upcoming detectors/tests
     pub fn floor_db(&self) -> f32 {
         self.floor_db
     }
@@ -207,6 +207,7 @@ impl VadProbe for earshot::Detector {
     }
 }
 
+#[allow(dead_code)] // for upcoming detectors/tests
 /// VAD stub that always returns a fixed probability.
 pub struct ConstVad(pub f32);
 impl VadProbe for ConstVad {
@@ -352,12 +353,15 @@ impl<T: Clone> RingBuffer<T> {
         }
         self.buf.push_back(item);
     }
+    #[allow(dead_code)] // for upcoming detectors/tests
     pub fn len(&self) -> usize {
         self.buf.len()
     }
+    #[allow(dead_code)] // for upcoming detectors/tests
     pub fn is_empty(&self) -> bool {
         self.buf.is_empty()
     }
+    #[allow(dead_code)] // for upcoming detectors/tests
     pub fn capacity(&self) -> usize {
         self.cap
     }
@@ -365,6 +369,7 @@ impl<T: Clone> RingBuffer<T> {
     pub fn last_n(&self, n: usize) -> Vec<T> {
         self.buf.iter().skip(self.buf.len().saturating_sub(n)).cloned().collect()
     }
+    #[allow(dead_code)] // for upcoming detectors/tests
     pub fn snapshot(&self) -> Vec<T> {
         self.buf.iter().cloned().collect()
     }
@@ -461,9 +466,11 @@ impl FrontEnd {
         f
     }
 
+    #[allow(dead_code)] // for upcoming detectors/tests
     pub fn audio_ring(&self) -> &RingBuffer<f32> {
         &self.audio
     }
+    #[allow(dead_code)] // for upcoming detectors/tests
     pub fn feature_history(&self) -> &RingBuffer<FrameFeatures> {
         &self.features
     }

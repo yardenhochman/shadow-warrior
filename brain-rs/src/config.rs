@@ -59,6 +59,31 @@ pub struct AudioConfig {
     pub shout_min_duration_sec: f32,
     pub shout_sensitivity: f32,
     pub vad_threshold: f32,
+    /// Directory where audio clips (wav + feature json) are written.
+    #[serde(default = "default_clip_dir")]
+    pub clip_dir: PathBuf,
+    /// Length of recorded clips in seconds.
+    #[serde(default = "default_clip_seconds")]
+    pub clip_seconds: f32,
+    /// Automatically record a clip whenever a shout is detected.
+    #[serde(default = "default_clip_on_shout")]
+    pub clip_on_shout: bool,
+    /// Minimum seconds between automatic shout clips.
+    #[serde(default = "default_clip_cooldown_sec")]
+    pub clip_cooldown_sec: f32,
+}
+
+fn default_clip_dir() -> PathBuf {
+    PathBuf::from("./clips")
+}
+fn default_clip_seconds() -> f32 {
+    5.0
+}
+fn default_clip_on_shout() -> bool {
+    true
+}
+fn default_clip_cooldown_sec() -> f32 {
+    10.0
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -195,6 +220,10 @@ impl Default for Config {
                 shout_min_duration_sec: 0.5,
                 shout_sensitivity: 1.0,
                 vad_threshold: 0.5,
+                clip_dir: default_clip_dir(),
+                clip_seconds: default_clip_seconds(),
+                clip_on_shout: default_clip_on_shout(),
+                clip_cooldown_sec: default_clip_cooldown_sec(),
             },
             music: MusicConfig {
                 playlist_dir: PathBuf::from("./music"),

@@ -109,6 +109,7 @@ async fn main() -> Result<()> {
     info!("Starting hardware managers...");
     ble_manager.start().await?;
     audio_manager.start().await?;
+    audio_manager.clone().start_shout_clip_trigger();
     wled_manager.start().await?;
     wled_manager.clone().start_event_loop();
     wled_manager.clone().spawn_cache_warmup();
@@ -118,6 +119,7 @@ async fn main() -> Result<()> {
 
     // Handle music playback via events (moved here to avoid non-Send issues)
     let music_manager_clone = music_manager.clone();
+    let audio_for_music = audio_manager.clone();
     let mut music_event_rx = event_bus.subscribe();
     tokio::spawn(async move {
         use tracing::warn;
@@ -129,6 +131,8 @@ async fn main() -> Result<()> {
                             warn!("Failed to start music: {}", e);
                         }
                     }
+                    core::Event::MusicStarted { .. } => audio_for_music.set_playback_active(true),
+                    core::Event::MusicStopped => audio_for_music.set_playback_active(false),
                     core::Event::SessionEnded { .. } => {
                         music_manager_clone.stop().await;
                     }
@@ -175,6 +179,7 @@ async fn main() -> Result<()> {
         discovery: discovery_manager,
         wled: wled_manager.clone(),
         schedule: schedule_manager.clone(),
+        audio: audio_manager.clone(),
     });
 
     // Build application router
@@ -195,6 +200,7 @@ async fn main() -> Result<()> {
         .route("/api/arena/reset_stats", post(arena::reset_stats))
         .route("/api/arena/config", get(arena::get_config))
         .route("/api/arena/config", post(arena::update_config))
+        .route("/api/audio/clip", post(api::audio::record_clip))
         .route("/api/schedule", get(api::schedule::get_schedule))
         .route("/api/schedule", post(api::schedule::update_schedule))
         // WLED routes

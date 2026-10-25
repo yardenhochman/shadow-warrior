@@ -35,6 +35,13 @@ audio:
   shout_threshold_db: -15.0
   shout_min_duration_sec: 0.5
 
+  # Audio clip recording (wav + per-frame feature json), for tuning detectors.
+  # Clips can be requested via POST /api/audio/clip and are auto-recorded on shouts.
+  clip_dir: "./clips"        # output directory (created on demand)
+  clip_seconds: 5.0          # length of each clip (capped by the front-end ring buffer)
+  clip_on_shout: true        # record a clip whenever a shout is detected
+  clip_cooldown_sec: 10.0    # min seconds between automatic shout clips
+
 music:
   playlist_dir: "./music"
   formats:
