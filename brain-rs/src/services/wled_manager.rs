@@ -47,6 +47,14 @@ impl WledManager {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) async fn set_controllers_for_test(&self, ips: &[&str]) {
+        *self.controllers.write().await = ips
+            .iter()
+            .map(|ip| WledController { ip: ip.to_string(), num_leds: 10 })
+            .collect();
+    }
+
     /// Initialize UDP sockets for realtime control
     pub async fn start(&self) -> Result<()> {
         let mut loaded_controllers = self.config.controllers.clone();
@@ -262,6 +270,39 @@ impl WledManager {
         self.fetch_names("palettes", &self.palette_cache).await
     }
 
+    /// Fill the effect and palette caches from the first reachable controller.
+    /// Never fails: unreachable devices are logged and the caches stay empty,
+    /// so the next list/apply call retries. Returns (effects_ok, palettes_ok).
+    pub async fn warm_caches(&self) -> (bool, bool) {
+        let effects = self.list_effects().await.map(|l| l.len());
+        let palettes = self.list_palettes().await.map(|l| l.len());
+        match &effects {
+            Ok(n) => info!("WLED effect cache warmed ({} effects)", n),
+            Err(e) => warn!("WLED effect cache warm-up skipped: {}", e),
+        }
+        match &palettes {
+            Ok(n) => info!("WLED palette cache warmed ({} palettes)", n),
+            Err(e) => warn!("WLED palette cache warm-up skipped: {}", e),
+        }
+        (effects.is_ok(), palettes.is_ok())
+    }
+
+    /// Warm the caches in the background without blocking startup.
+    pub fn spawn_cache_warmup(self: Arc<Self>) {
+        tokio::spawn(async move {
+            self.warm_caches().await;
+        });
+    }
+
+    /// Cached list if present, otherwise try the device (empty on failure).
+    async fn cached_or_fetch(&self, path: &str, cache: &RwLock<Vec<String>>) -> Vec<String> {
+        let cached = cache.read().await.clone();
+        if !cached.is_empty() {
+            return cached;
+        }
+        self.fetch_names(path, cache).await.unwrap_or_default()
+    }
+
     async fn fetch_names(&self, path: &str, cache: &RwLock<Vec<String>>) -> Result<Vec<String>> {
         let ips: Vec<String> = self.controllers.read().await.iter().map(|c| c.ip.clone()).collect();
         for ip in &ips {
@@ -283,9 +324,9 @@ impl WledManager {
     /// Set effect via HTTP/JSON API. Returns number of controllers updated.
     async fn set_http_effect(&self, effect: &WledEffect) -> Result<usize> {
         // Resolve names against the device's list when we have one (cached or fetched).
-        let effects = self.list_effects().await.unwrap_or_default();
+        let effects = self.cached_or_fetch("effects", &self.effect_cache).await;
         let palettes = match effect.palette {
-            Some(_) => self.list_palettes().await.unwrap_or_default(),
+            Some(_) => self.cached_or_fetch("palettes", &self.palette_cache).await,
             None => Vec::new(),
         };
         let effect_id = resolve_effect_id(&effect.effect, &effects);

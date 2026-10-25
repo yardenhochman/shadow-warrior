@@ -32,6 +32,10 @@ pub async fn get_palettes(State(state): State<AppState>) -> Json<ApiResponse<Nam
     }
 }
 
+#[cfg(test)]
+#[path = "wled_tests.rs"]
+mod tests;
+
 /// POST /api/wled/effect - apply an effect to all controllers immediately.
 /// Body is a WledEffect, e.g. {"effect":"Fire 2012","palette":"Lava","speed":150,"colors":[[255,0,0]]}
 pub async fn set_effect(
