@@ -129,30 +129,7 @@ async fn main() -> Result<()> {
     music_manager.load_playlist().await?;
     music_manager.clone().start_advance_loop();
 
-    // Handle music playback via events (moved here to avoid non-Send issues)
-    let music_manager_clone = music_manager.clone();
-    let audio_for_music = audio_manager.clone();
-    let mut music_event_rx = event_bus.subscribe();
-    tokio::spawn(async move {
-        use tracing::warn;
-        loop {
-            if let Ok(event) = music_event_rx.recv().await {
-                match event {
-                    core::Event::FightStarted { .. } => {
-                        if let Err(e) = music_manager_clone.play().await {
-                            warn!("Failed to start music: {}", e);
-                        }
-                    }
-                    core::Event::MusicStarted { .. } => audio_for_music.set_playback_active(true),
-                    core::Event::MusicStopped => audio_for_music.set_playback_active(false),
-                    core::Event::SessionEnded { .. } => {
-                        music_manager_clone.stop().await;
-                    }
-                    _ => {}
-                }
-            }
-        }
-    });
+    spawn_music_event_loop(music_manager.clone(), audio_manager.clone(), &event_bus);
 
     // Create channel for API commands to arena manager
     let (arena_tx, arena_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -195,8 +172,57 @@ async fn main() -> Result<()> {
         audio: audio_manager.clone(),
     });
 
-    // Build application router
-    let app = Router::new()
+    let app = build_router(app_state);
+
+    // Start server
+    let addr = format!("{}:{}", config.server.host, config.server.port);
+    info!("🚀 Starting server on {}", addr);
+    info!("🌐 Dashboard available at http://localhost:{}", config.server.port);
+
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    axum::serve(listener, app).await?;
+
+    // Cleanup on shutdown
+    info!("Shutting down...");
+    event_bus.publish(core::Event::SystemShutdown);
+
+    Ok(())
+}
+
+// Serve index.html at root
+
+/// Handle music playback via events (kept out of the managers to avoid non-Send issues).
+fn spawn_music_event_loop(
+    music_manager: Arc<MusicManager>,
+    audio_manager: Arc<AudioManager>,
+    event_bus: &Arc<EventBus>,
+) {
+    let mut music_event_rx = event_bus.subscribe();
+    tokio::spawn(async move {
+        use tracing::warn;
+        loop {
+            if let Ok(event) = music_event_rx.recv().await {
+                match event {
+                    core::Event::FightStarted { .. } => {
+                        if let Err(e) = music_manager.play().await {
+                            warn!("Failed to start music: {}", e);
+                        }
+                    }
+                    core::Event::MusicStarted { .. } => audio_manager.set_playback_active(true),
+                    core::Event::MusicStopped => audio_manager.set_playback_active(false),
+                    core::Event::SessionEnded { .. } => {
+                        music_manager.stop().await;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    });
+}
+
+/// Build the HTTP router: web UI, static files and all `/api` routes.
+fn build_router(app_state: Arc<SharedState>) -> Router {
+    Router::new()
         // Serve web UI
         .route("/", get(serve_index))
         .nest_service("/static", ServeDir::new("src/web"))
@@ -228,24 +254,9 @@ async fn main() -> Result<()> {
         // Add state for all routes
         .with_state(app_state)
         // Add tracing middleware
-        .layer(TraceLayer::new_for_http());
-
-    // Start server
-    let addr = format!("{}:{}", config.server.host, config.server.port);
-    info!("🚀 Starting server on {}", addr);
-    info!("🌐 Dashboard available at http://localhost:{}", config.server.port);
-
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
-    axum::serve(listener, app).await?;
-
-    // Cleanup on shutdown
-    info!("Shutting down...");
-    event_bus.publish(core::Event::SystemShutdown);
-
-    Ok(())
+        .layer(TraceLayer::new_for_http())
 }
 
-// Serve index.html at root
 async fn serve_index() -> axum::response::Html<String> {
     let html = std::fs::read_to_string("src/web/index.html")
         .unwrap_or_else(|_| "<h1>Error loading dashboard</h1>".to_string());
