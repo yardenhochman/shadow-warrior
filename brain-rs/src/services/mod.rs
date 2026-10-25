@@ -1,4 +1,5 @@
 pub mod arena_manager;
+pub mod audio_frontend;
 pub mod audio_manager;
 pub mod ble_manager;
 pub mod database_manager;

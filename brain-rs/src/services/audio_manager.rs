@@ -9,6 +9,8 @@ use anyhow::{Context, Result};
 
 use earshot::Detector;
 
+use super::audio_frontend::{ClipRecorder, FrameFeatures, FrontEnd, FrontEndConfig};
+
 use crate::config::AudioConfig;
 use crate::core::{Event, SharedEventBus};
 
@@ -20,15 +22,14 @@ pub struct AudioManager {
     current_level_db: Arc<RwLock<f32>>,
     shout_score: Arc<RwLock<f32>>,
     last_event_time: Arc<RwLock<Instant>>,
-    vad: Arc<RwLock<Detector>>,
-    audio_buffer: Arc<RwLock<Vec<f32>>>,
+    frontend: Arc<std::sync::Mutex<Option<FrontEnd>>>,
+    features_tx: tokio::sync::watch::Sender<Option<FrameFeatures>>,
     actual_sample_rate: Arc<RwLock<u32>>,
     actual_channels: Arc<RwLock<u16>>,
 }
 
 impl AudioManager {
     pub fn new(config: AudioConfig, event_bus: SharedEventBus) -> Self {
-        let vad = Detector::default();
         let config = Arc::new(RwLock::new(config));
 
         Self {
@@ -39,8 +40,8 @@ impl AudioManager {
             current_level_db: Arc::new(RwLock::new(-100.0)),
             shout_score: Arc::new(RwLock::new(0.0)),
             last_event_time: Arc::new(RwLock::new(Instant::now())),
-            vad: Arc::new(RwLock::new(vad)),
-            audio_buffer: Arc::new(RwLock::new(Vec::with_capacity(1024))),
+            frontend: Arc::new(std::sync::Mutex::new(None)),
+            features_tx: tokio::sync::watch::channel(None).0,
             actual_sample_rate: Arc::new(RwLock::new(16000)),
             actual_channels: Arc::new(RwLock::new(1)),
         }
@@ -71,23 +72,27 @@ impl AudioManager {
         let current_level_db = self.current_level_db.clone();
         let shout_score = self.shout_score.clone();
         let last_event_time = self.last_event_time.clone();
-        let vad = self.vad.clone();
-        let audio_buffer = self.audio_buffer.clone();
+        let frontend = self.frontend.clone();
+        let features_tx = self.features_tx.clone();
+        *frontend.lock().unwrap() = Some(FrontEnd::new(
+            actual_rate,
+            FrontEndConfig::default(),
+            Box::new(Detector::default()),
+        ));
 
         let stream = device.build_input_stream(
             &stream_config,
             move |data: &[f32], _: &cpal::InputCallbackInfo| {
                 Self::process_audio_vad_sync(
                     data,
-                    actual_rate,
                     actual_ch,
                     &event_bus,
                     &current_level_db,
                     &shout_score,
                     &config_lock,
                     &last_event_time,
-                    &vad,
-                    &audio_buffer,
+                    &frontend,
+                    &features_tx,
                 );
             },
             move |err| {
@@ -169,75 +174,32 @@ impl AudioManager {
             .collect()
     }
 
-    /// Linear interpolation resample to 16kHz
-    fn resample_to_16k(input: &[f32], input_rate: u32) -> Vec<f32> {
-        if input_rate == 16000 {
-            return input.to_vec();
-        }
-        let ratio = input_rate as f64 / 16000.0;
-        let out_len = (input.len() as f64 / ratio).ceil() as usize;
-        (0..out_len)
-            .map(|i| {
-                let pos = i as f64 * ratio;
-                let idx = pos as usize;
-                let frac = (pos - idx as f64) as f32;
-                let a = input.get(idx).copied().unwrap_or(0.0);
-                let b = input.get(idx + 1).copied().unwrap_or(a);
-                a + (b - a) * frac
-            })
-            .collect()
-    }
-
-    /// Process audio samples with VAD (Synchronous for audio thread)
+    /// Process audio: band-pass + resample + features via the shared front-end, then
+    /// run the legacy energy shout logic on VAD-positive frames.
     fn process_audio_vad_sync(
         data: &[f32],
-        sample_rate: u32,
         channels: u16,
         event_bus: &SharedEventBus,
         current_level_db: &Arc<RwLock<f32>>,
         shout_score: &Arc<RwLock<f32>>,
         config_lock: &Arc<RwLock<AudioConfig>>,
         last_event_time: &Arc<RwLock<Instant>>,
-        vad: &Arc<RwLock<Detector>>,
-        audio_buffer_lock: &Arc<RwLock<Vec<f32>>>,
+        frontend: &Arc<std::sync::Mutex<Option<FrontEnd>>>,
+        features_tx: &tokio::sync::watch::Sender<Option<FrameFeatures>>,
     ) {
-        // Mix to mono, resample to 16kHz for earshot
         let mono = Self::mix_to_mono(data, channels);
-        let resampled = Self::resample_to_16k(&mono, sample_rate);
-
-        let mut audio_buffer = match audio_buffer_lock.try_write() {
-            Ok(b) => b,
+        let frames = match frontend.try_lock() {
+            Ok(mut g) => match g.as_mut() {
+                Some(fe) => fe.process(&mono),
+                None => return,
+            },
             Err(_) => return,
         };
-        audio_buffer.extend_from_slice(&resampled);
-
-        // earshot v1.0.0 expects exactly 256 samples (16ms at 16kHz)
-        const FRAME_SIZE: usize = 256;
-
-        while audio_buffer.len() >= FRAME_SIZE {
-            let frame: Vec<f32> = audio_buffer.drain(0..FRAME_SIZE).collect();
-            
-            let mut vad_guard: tokio::sync::RwLockWriteGuard<'_, Detector> = match vad.try_write() {
-                Ok(v) => v,
-                Err(_) => break, // If VAD is busy, skip this frame to keep up
-            };
-
-            // earshot v1.0.0 uses predict_i16 and returns probability
-            let frame_i16: Vec<i16> = frame.iter()
-                .map(|&s| (s.clamp(-1.0, 1.0) * 32767.0) as i16)
-                .collect();
-
-            let prob = vad_guard.predict_i16(&frame_i16);
-            
-            // Check threshold from config
-            let vad_threshold = if let Ok(c) = config_lock.try_read() {
-                c.vad_threshold
-            } else {
-                0.5 // Default if locked
-            };
-
-            if prob > vad_threshold {
-                // Only calculate RMS and shout if speech detected
+        let vad_threshold = config_lock.try_read().map(|c| c.vad_threshold).unwrap_or(0.5);
+        for (frame, feat) in frames {
+            let speech = feat.vad_prob > vad_threshold;
+            features_tx.send_replace(Some(feat));
+            if speech {
                 Self::handle_speech_frame(
                     &frame,
                     event_bus,
@@ -248,6 +210,33 @@ impl AudioManager {
                 );
             }
         }
+    }
+
+    /// Subscribe to per-frame (16ms) features.
+    #[allow(dead_code)]
+    pub fn subscribe_features(&self) -> tokio::sync::watch::Receiver<Option<FrameFeatures>> {
+        self.features_tx.subscribe()
+    }
+
+    /// Tell the front-end whether our speakers are playing.
+    #[allow(dead_code)]
+    pub fn set_playback_active(&self, active: bool) {
+        if let Ok(mut g) = self.frontend.lock() {
+            if let Some(fe) = g.as_mut() {
+                fe.set_playback_active(active);
+            }
+        }
+    }
+
+    /// Dump the last `seconds` of audio + features to `dir` (detector triggers / on demand).
+    #[allow(dead_code)]
+    pub fn record_clip(&self, dir: &std::path::Path, reason: &str, seconds: f32) -> Result<std::path::PathBuf> {
+        let (audio, feats) = {
+            let g = self.frontend.lock().map_err(|_| anyhow::anyhow!("frontend poisoned"))?;
+            g.as_ref().context("audio not started")?.snapshot_clip(seconds)
+        };
+        let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%.3f").to_string();
+        Ok(ClipRecorder::new(dir).record(reason, &stamp, &audio, &feats)?)
     }
 
     fn handle_speech_frame(
