@@ -66,3 +66,14 @@ wled:
 
 tasmota:
   plugs: []
+
+# Daily schedule. When enabled, the game is only active inside these windows
+# (local time, "HH:MM"). Outside them the arena is SUSPENDED and presence is
+# ignored. "days" is optional (mon..sun); omitted = every day. A window whose
+# end <= start wraps past midnight.
+schedule:
+  enabled: false
+  windows: []
+  # - days: [fri, sat]
+  #   start: "18:00"
+  #   end: "02:00"

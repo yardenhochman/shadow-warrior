@@ -14,6 +14,8 @@ pub struct Config {
     pub music: MusicConfig,
     pub wled: WledConfig,
     pub tasmota: TasmotaConfig,
+    #[serde(default)]
+    pub schedule: ScheduleConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -108,6 +110,26 @@ pub struct TasmotaPlug {
     pub name: String,
 }
 
+/// Daily schedule: the game is active only inside the configured windows.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Default)]
+pub struct ScheduleConfig {
+    /// When false the schedule is ignored and the game is always active.
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub windows: Vec<ScheduleWindow>,
+}
+
+/// One on-period. Times are local "HH:MM". If `end` <= `start` the window
+/// wraps past midnight. Empty `days` means every day (day of the start time).
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct ScheduleWindow {
+    #[serde(default)]
+    pub days: Vec<String>,
+    pub start: String,
+    pub end: String,
+}
+
 impl Config {
     /// Load configuration from config.yaml and environment variables
     pub fn load() -> Result<Self, figment::Error> {
@@ -190,6 +212,7 @@ impl Default for Config {
                 },
             },
             tasmota: TasmotaConfig { plugs: vec![] },
+            schedule: ScheduleConfig::default(),
         }
     }
 }

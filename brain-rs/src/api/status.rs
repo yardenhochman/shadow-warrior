@@ -35,6 +35,7 @@ pub struct SharedState {
     pub db: Arc<crate::services::database_manager::DatabaseManager>,
     pub discovery: Arc<crate::services::discovery_manager::DiscoveryManager>,
     pub wled: Arc<crate::services::wled_manager::WledManager>,
+    pub schedule: Arc<crate::services::schedule_manager::ScheduleManager>,
 }
 
 /// GET /api/state - Get complete brain state

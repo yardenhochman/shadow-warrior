@@ -20,7 +20,7 @@ use crate::config::Config;
 use crate::core::{EventBus, StateMachine};
 use crate::services::{
     ArenaManager, AudioManager, BleManager, DatabaseManager, DiscoveryManager, MusicManager,
-    TasmotaManager, WledManager,
+    TasmotaManager, WledManager, ScheduleManager,
 };
 
 #[tokio::main]
@@ -79,13 +79,24 @@ async fn main() -> Result<()> {
     let music_manager = Arc::new(MusicManager::new(config.music.clone(), event_bus.clone()));
     info!("Music manager initialized");
 
-    let arena_manager = Arc::new(ArenaManager::new(
-        config.clone(),
+    let schedule_manager = Arc::new(ScheduleManager::new(
+        config.schedule.clone(),
+        Arc::new(services::schedule_manager::LocalClock),
         state_machine.clone(),
         event_bus.clone(),
-        audio_manager.clone(),
-        ble_manager.clone(),
     ));
+    info!("Schedule manager initialized");
+
+    let arena_manager = Arc::new(
+        ArenaManager::new(
+            config.clone(),
+            state_machine.clone(),
+            event_bus.clone(),
+            audio_manager.clone(),
+            ble_manager.clone(),
+        )
+        .with_schedule_gate(schedule_manager.gate()),
+    );
     info!("Arena manager initialized");
 
     // Start hardware managers
@@ -136,6 +147,10 @@ async fn main() -> Result<()> {
         .await?;
     info!("Initial state set to IDLE");
 
+    // Apply the schedule immediately, then keep enforcing it
+    schedule_manager.tick().await;
+    schedule_manager.clone().start();
+
     // Initialize discovery manager
     let discovery_manager = Arc::new(DiscoveryManager::new(
         db_manager.clone(),
@@ -152,6 +167,7 @@ async fn main() -> Result<()> {
         db: db_manager,
         discovery: discovery_manager,
         wled: wled_manager.clone(),
+        schedule: schedule_manager.clone(),
     });
 
     // Build application router
@@ -172,6 +188,8 @@ async fn main() -> Result<()> {
         .route("/api/arena/reset_stats", post(arena::reset_stats))
         .route("/api/arena/config", get(arena::get_config))
         .route("/api/arena/config", post(arena::update_config))
+        .route("/api/schedule", get(api::schedule::get_schedule))
+        .route("/api/schedule", post(api::schedule::update_schedule))
         // Discovery routes
         .route("/api/discovery/scan", post(api::discovery::scan_hardware))
         .route("/api/devices", get(api::discovery::get_devices))

@@ -105,6 +105,9 @@ pub enum Event {
     WledDisconnected { ip: String },
     WledError { ip: String, error: String },
 
+    // Schedule events
+    ScheduleChanged { active: bool },
+
     // Tasmota events
     TasmotaStateChanged { name: String, powered: bool },
     TasmotaError { name: String, error: String },
@@ -194,6 +197,7 @@ impl Event {
             Event::WledConnected { .. } => "WledConnected",
             Event::WledDisconnected { .. } => "WledDisconnected",
             Event::WledError { .. } => "WledError",
+            Event::ScheduleChanged { .. } => "ScheduleChanged",
             Event::TasmotaStateChanged { .. } => "TasmotaStateChanged",
             Event::TasmotaError { .. } => "TasmotaError",
         }

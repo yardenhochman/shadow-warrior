@@ -31,6 +31,9 @@ pub struct ArenaManager {
     current_session_punches: Arc<RwLock<u32>>,
     current_session_max_power: Arc<RwLock<f32>>,
     started_at: DateTime<Utc>,
+
+    // Set false by the schedule service while the game is scheduled off
+    schedule_gate: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl ArenaManager {
@@ -54,7 +57,14 @@ impl ArenaManager {
             current_session_punches: Arc::new(RwLock::new(0)),
             current_session_max_power: Arc::new(RwLock::new(0.0)),
             started_at: Utc::now(),
+            schedule_gate: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         }
+    }
+
+    /// Share the schedule gate; presence is ignored while it reads false.
+    pub fn with_schedule_gate(mut self, gate: Arc<std::sync::atomic::AtomicBool>) -> Self {
+        self.schedule_gate = gate;
+        self
     }
 
     /// Start the arena manager
@@ -161,6 +171,10 @@ impl ArenaManager {
 
     /// Handle presence detection
     async fn handle_presence(&self, detected: bool) {
+        if detected && !self.schedule_gate.load(std::sync::atomic::Ordering::SeqCst) {
+            info!("Presence ignored: game is scheduled off");
+            return;
+        }
         let current_state = self.state_machine.current_state().await;
 
         if detected {
