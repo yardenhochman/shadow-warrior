@@ -11,7 +11,6 @@ tokio-stream = "0.1"
 # Web server
 axum = "0.7"
 tower-http = { version = "0.5", features = ["fs", "cors", "trace"] }
-tower = "0.4"
 
 # BLE communication
 btleplug = "0.11"
@@ -24,9 +23,6 @@ reqwest = { version = "0.12", features = ["json"] }
 cpal = "0.17.3"
 rodio = "0.22.1"
 
-# LED effects (removed smart_led_effects - will implement effects manually)
-palette = "0.7"
-rgb = "0.8"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -46,7 +42,6 @@ thiserror = "1"
 anyhow = "1"
 async-trait = "0.1"
 futures = "0.3"
-dashmap = "6"
 rand = "0.8"
 
 # Date/Time
@@ -58,6 +53,3 @@ mdns-sd = "0.11"
 
 # Database
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "macros"] }
-
-[dev-dependencies]
-tokio-test = "0.4"
