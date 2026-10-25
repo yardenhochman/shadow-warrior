@@ -112,6 +112,14 @@ async fn main() -> Result<()> {
     ble_manager.start().await?;
     audio_manager.start().await?;
     audio_manager.clone().start_shout_clip_trigger();
+    if config.presence.enabled {
+        Arc::new(services::presence::PresenceService::new(
+            config.presence.clone(),
+            event_bus.clone(),
+        ))
+        .start(audio_manager.subscribe_features());
+        info!("Presence service started");
+    }
     wled_manager.start().await?;
     wled_manager.clone().start_event_loop();
     wled_manager.clone().spawn_cache_warmup();

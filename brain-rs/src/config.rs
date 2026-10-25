@@ -16,6 +16,8 @@ pub struct Config {
     pub tasmota: TasmotaConfig,
     #[serde(default)]
     pub schedule: ScheduleConfig,
+    #[serde(default)]
+    pub presence: PresenceConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -214,6 +216,55 @@ pub struct TasmotaPlug {
     pub on_states: Vec<String>,
 }
 
+/// Fused presence detection (services/presence.rs). Every key is optional.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(default)]
+pub struct PresenceConfig {
+    /// Master switch for the automatic presence service (API-driven presence still works).
+    pub enabled: bool,
+    /// Mic: required dB above the adaptive noise floor (near-field gate).
+    pub mic_margin_db: f32,
+    /// Mic: extra margin while our own speakers play.
+    pub mic_playback_margin_db: f32,
+    /// Mic: VAD probability required for a frame to count.
+    pub mic_vad_threshold: f32,
+    /// Punch: evidence units one punch is worth (before the source weight).
+    pub punch_units: f32,
+    /// Per-source multiplier on evidence. Unknown sources (radar, motion...) use
+    /// `default_weight`.
+    pub source_weights: std::collections::HashMap<String, f32>,
+    pub default_weight: f32,
+    /// Accumulated evidence (weighted evidence-seconds) needed to enter.
+    pub enter_threshold: f32,
+    /// Accumulator leak, evidence-seconds per second. Must exceed the rate at
+    /// which background noise leaks past the gate; this is what rejects bursts.
+    pub decay_per_sec: f32,
+    /// Accumulator cap (bounds how long a burst of evidence lingers).
+    pub max_score: f32,
+    /// Seconds without any evidence before leaving.
+    pub leave_timeout_sec: f32,
+}
+
+impl Default for PresenceConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            mic_margin_db: 10.0,
+            mic_playback_margin_db: 8.0,
+            mic_vad_threshold: 0.5,
+            punch_units: 1.0,
+            source_weights: [("mic".to_string(), 1.0), ("punch".to_string(), 1.0)]
+                .into_iter()
+                .collect(),
+            default_weight: 1.0,
+            enter_threshold: 1.0,
+            decay_per_sec: 0.2,
+            max_score: 2.0,
+            leave_timeout_sec: 60.0,
+        }
+    }
+}
+
 /// Daily schedule: the game is active only inside the configured windows.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Default)]
 pub struct ScheduleConfig {
@@ -338,6 +389,7 @@ impl Default for Config {
             },
             tasmota: TasmotaConfig { plugs: vec![] },
             schedule: ScheduleConfig::default(),
+            presence: PresenceConfig::default(),
         }
     }
 }

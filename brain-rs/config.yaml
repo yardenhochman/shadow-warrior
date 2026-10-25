@@ -113,3 +113,22 @@ schedule:
   # - days: [fri, sat]
   #   start: "18:00"
   #   end: "02:00"
+
+# Fused presence detection (services/presence.rs). Sources (mic, punches, later
+# radar/motion) report weighted evidence; a leaky accumulator must reach
+# enter_threshold to publish PresenceDetected{true}, and PresenceDetected{false}
+# fires after leave_timeout_sec without evidence. Events only on state changes.
+# Mic evidence = near-field voiced frames (VAD + margin over the adaptive floor),
+# so distant party noise never accumulates. All keys optional (defaults shown).
+presence:
+  enabled: true
+  mic_margin_db: 10.0           # dB above noise floor for a frame to count
+  mic_playback_margin_db: 8.0   # extra margin while our speakers play
+  mic_vad_threshold: 0.5
+  punch_units: 1.0              # evidence-seconds per punch (1.0 = one punch enters)
+  source_weights: {mic: 1.0, punch: 1.0}  # add e.g. radar: 2.0 for new sensors
+  default_weight: 1.0           # weight for sources not listed above
+  enter_threshold: 1.0          # evidence-seconds to enter (~1.3s of steady speech)
+  decay_per_sec: 0.2          # accumulator leak; rejects sporadic bursts
+  max_score: 2.0
+  leave_timeout_sec: 60.0       # no evidence this long -> not present
