@@ -79,12 +79,18 @@ async fn main() -> Result<()> {
     let music_manager = Arc::new(MusicManager::new(config.music.clone(), event_bus.clone()));
     info!("Music manager initialized");
 
-    let schedule_manager = Arc::new(ScheduleManager::new(
-        config.schedule.clone(),
-        Arc::new(services::schedule_manager::LocalClock),
-        state_machine.clone(),
-        event_bus.clone(),
-    ));
+    ScheduleManager::validate(&config.schedule)
+        .map_err(|e| anyhow::anyhow!("invalid schedule in config: {e}"))?;
+    let schedule_manager = Arc::new(
+        ScheduleManager::new(
+            config.schedule.clone(),
+            Arc::new(services::schedule_manager::LocalClock),
+            state_machine.clone(),
+            event_bus.clone(),
+        )
+        .with_persistence(db_manager.clone())
+        .await,
+    );
     info!("Schedule manager initialized");
 
     let arena_manager = Arc::new(

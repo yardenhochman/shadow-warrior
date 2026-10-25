@@ -15,6 +15,9 @@ use tracing::info;
 
 use crate::config::{ScheduleConfig, ScheduleWindow};
 use crate::core::{ArenaState, Event, SharedEventBus, StateMachine};
+use crate::services::database_manager::DatabaseManager;
+
+const SETTING_KEY: &str = "schedule";
 
 /// Source of local wall-clock time.
 pub trait Clock: Send + Sync {
@@ -98,6 +101,7 @@ pub struct ScheduleManager {
     gate: Arc<AtomicBool>,
     /// Last applied activity (None until first tick).
     last_active: Mutex<Option<bool>>,
+    db: Option<Arc<DatabaseManager>>,
 }
 
 impl ScheduleManager {
@@ -114,7 +118,31 @@ impl ScheduleManager {
             event_bus,
             gate: Arc::new(AtomicBool::new(true)),
             last_active: Mutex::new(None),
+            db: None,
         }
+    }
+
+    /// Persist API edits in `db` and restore the saved schedule, which
+    /// overrides the config.yaml one. An unreadable saved schedule is ignored.
+    pub async fn with_persistence(mut self, db: Arc<DatabaseManager>) -> Self {
+        match db.get_setting(SETTING_KEY).await {
+            Ok(Some(json)) => match serde_json::from_str::<ScheduleConfig>(&json) {
+                Ok(cfg) if parse_config(&cfg).is_ok() => {
+                    info!("Schedule: restored saved config");
+                    self.config = Mutex::new(cfg);
+                }
+                _ => tracing::warn!("Ignoring invalid saved schedule"),
+            },
+            Ok(None) => {}
+            Err(e) => tracing::warn!("Could not load saved schedule: {}", e),
+        }
+        self.db = Some(db);
+        self
+    }
+
+    /// Check a config without applying it; used to fail fast on startup.
+    pub fn validate(cfg: &ScheduleConfig) -> Result<(), String> {
+        parse_config(cfg).map(|_| ())
     }
 
     /// Gate shared with the arena manager: false while scheduled off.
@@ -131,6 +159,12 @@ impl ScheduleManager {
     /// Validate and replace the schedule, then apply it immediately.
     pub async fn update_config(&self, cfg: ScheduleConfig) -> Result<(), String> {
         parse_config(&cfg)?;
+        if let Some(db) = &self.db {
+            let json = serde_json::to_string(&cfg).map_err(|e| e.to_string())?;
+            db.set_setting(SETTING_KEY, &json)
+                .await
+                .map_err(|e| format!("failed to persist schedule: {e}"))?;
+        }
         *self.config.lock().await = cfg;
         self.tick().await;
         Ok(())
@@ -327,5 +361,37 @@ mod tests {
         m.update_config(cfg(vec![win(&[], "09:00", "17:00")])).await.unwrap();
         assert_eq!(sm.current_state().await, ArenaState::Suspended);
         assert!(!m.status().await.active);
+    }
+
+    #[tokio::test]
+    async fn persisted_schedule_survives_restart() {
+        let db = Arc::new(DatabaseManager::new("sqlite::memory:").await.unwrap());
+        let clock = FakeClock::at(2025, 1, 6, 8, 0);
+        let (m, _sm) = setup(ScheduleConfig::default(), clock.clone()).await;
+        let m = Arc::try_unwrap(m).ok().unwrap().with_persistence(db.clone()).await;
+        m.update_config(cfg(vec![win(&[], "09:00", "17:00")])).await.unwrap();
+
+        // "Restart": fresh manager with the default config picks up the saved one.
+        let (m2, _sm2) = setup(ScheduleConfig::default(), clock).await;
+        let m2 = Arc::try_unwrap(m2).ok().unwrap().with_persistence(db).await;
+        assert_eq!(m2.status().await.config.windows.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn invalid_saved_schedule_is_ignored() {
+        let db = Arc::new(DatabaseManager::new("sqlite::memory:").await.unwrap());
+        db.set_setting(SETTING_KEY, r#"{"enabled":true,"windows":[{"days":[],"start":"bad","end":"10:00"}]}"#)
+            .await
+            .unwrap();
+        let clock = FakeClock::at(2025, 1, 6, 8, 0);
+        let (m, _sm) = setup(ScheduleConfig::default(), clock).await;
+        let m = Arc::try_unwrap(m).ok().unwrap().with_persistence(db).await;
+        assert!(m.status().await.config.windows.is_empty());
+    }
+
+    #[test]
+    fn validate_rejects_bad_config() {
+        assert!(ScheduleManager::validate(&cfg(vec![win(&[], "25:00", "10:00")])).is_err());
+        assert!(ScheduleManager::validate(&cfg(vec![win(&[], "09:00", "17:00")])).is_ok());
     }
 }
