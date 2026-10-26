@@ -50,3 +50,8 @@ bd close <id>         # Complete work
 - NEVER say "ready to push when you are" - YOU must push
 - If push fails, resolve and retry until it succeeds
 <!-- END BEADS INTEGRATION -->
+
+## Task tracking and status docs
+
+- Work items, status and planning live in **beads** (`bd ready`, `bd list`, `bd show <id>`). It is the only source of truth for what is open, in progress or done.
+- `brain-rs/IMPLEMENTATION_STATUS.md` is a periodic snapshot **for humans** (what exists, what is unverified on hardware). Agents must not use it for task tracking or planning, must not add TODO lists to it, and should file or update `bd` issues instead.

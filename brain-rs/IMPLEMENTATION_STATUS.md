@@ -1,79 +1,91 @@
-# Shadow Warrior Brain - Rust Implementation Status
+# Shadow Warrior Brain - Implementation Status
 
-## ✅ Completed (100%)
+> **For humans.** This is a periodic snapshot (2026-10-26) of what the Rust brain does
+> and what has and has not been verified on real hardware.
+> **Agents must not use this file for task tracking or "what to do next".**
+> Work items live in beads (`bd ready`, `bd list`, `bd show <id>`); it is the single
+> source of truth and this file will lag behind it. Do not add TODO lists here.
 
-### Core Architecture
-- [x] Project structure with Cargo.toml
-- [x] Modern configuration system (figment with YAML + env)
-- [x] Event bus (tokio broadcast channels)
-- [x] State machine with lifecycle hooks
-- [x] All data models and API types
+## Overview
 
-### Hardware Integration
-- [x] BLE Manager - Nordic UART Service for punching bag
-- [x] Audio Manager - cpal with shout detection + energy bar
-- [x] WLED Manager - HTTP JSON + UDP WARLS protocol
-- [x] Tasmota Manager - HTTP smart plug control
-- [x] Music Manager - rodio playlist playback
-
-### Game Logic
-- [x] New state flow: SUSPENDED ↔ IDLE → WARMING → FIGHT → COOLDOWN
-- [x] Energy bar system (fills with shouts)
-- [x] Fight timers (duration + inactivity timeout)
-- [x] Event-driven state transitions
-- [x] Music playback on FIGHT start
-
-### API Layer
-- [x] REST endpoints (/api/state, /api/stats, /api/arena/*)
-- [x] SSE for real-time events (/api/events)
-- [x] Channel-based communication with ArenaManager
-
-### Web UI
-- [x] Modern dark theme dashboard
-- [x] Real-time state visualization
-- [x] Energy bar display
-- [x] Fight statistics
-- [x] Hardware status cards
-- [x] Manual controls
-
-## Files Created
+The brain is a Tokio daemon. Services talk to each other through a broadcast event bus
+(`src/core/events.rs`) and a game state machine (`src/core/state_machine.rs`):
 
 ```
-brain-rs/
-├── Cargo.toml                    ✅
-├── config.yaml                   ✅
-├── README.md                     ✅
-├── .gitignore                    ✅
-├── src/
-│   ├── main.rs                   ✅
-│   ├── config.rs                 ✅
-│   ├── models.rs                 ✅
-│   ├── core/
-│   │   ├── mod.rs                ✅
-│   │   ├── events.rs             ✅
-│   │   └── state_machine.rs      ✅
-│   ├── services/
-│   │   ├── mod.rs                ✅
-│   │   ├── arena_manager.rs      ✅
-│   │   ├── audio_manager.rs      ✅
-│   │   ├── ble_manager.rs        ✅
-│   │   ├── wled_manager.rs       ✅
-│   │   ├── tasmota_manager.rs    ✅
-│   │   └── music_manager.rs      ✅
-│   ├── api/
-│   │   ├── mod.rs                ✅
-│   │   ├── status.rs             ✅
-│   │   └── arena.rs              ✅
-│   └── web/
-│       ├── index.html            ✅
-│       ├── style.css             ✅
-│       └── app.js                ✅
+SUSPENDED <-> IDLE -> WARMING -> FIGHT -> COOLDOWN -> IDLE
 ```
 
-## Next Steps
+- IDLE: LEDs breathe to attract players.
+- WARMING: shouts fill the energy bar.
+- FIGHT: bar full; music, fire effects, UV lights; punches score.
+- SUSPENDED: game switched off (manually, or by the schedule).
 
-1. Run `cargo build --release` (optional, for optimized build)
-2. Run `cargo run` and test!
-3. Optionally clean up warnings with `cargo fix`
+All code below is unit-tested without hardware (`cargo test`, `cargo clippy --all-targets`
+are both clean). **"Tested" means synthetic signals and mock HTTP servers, not real devices.**
 
-The architecture is solid and complete. All done! ✅
+## What exists
+
+| Area | Module | State |
+|---|---|---|
+| Config | `config.rs`, `config.yaml` | figment (YAML + env), serde defaults so old configs keep loading |
+| Event bus / state machine | `core/` | done |
+| Hardware status registry | `core/status_registry.rs` | per-device connection, last-seen, last-error, via bus events |
+| Arena game logic | `services/arena_manager.rs` | state flow, energy bar, fight timers |
+| Audio front-end | `services/audio_frontend.rs` (+ `ring`, `clip`) | band-pass/anti-alias, noise floor, frame features, ring buffer, clip recorder (WAV + JSON) |
+| Audio capture | `services/audio_manager.rs` | cpal mic -> front-end -> features channel |
+| Shout detection | `services/shout_detector.rs` | VAD-gated, dB-above-floor, pitch/spectral checks, playback-aware margin, <300 ms in frame counts |
+| Presence | `services/presence.rs` | fused evidence (mic + punches, pluggable `PresenceSource`), enter/leave hysteresis |
+| Schedule | `services/schedule_manager.rs` | daily windows (local time, optional days, overnight), persisted in SQLite |
+| Music | `services/music_manager.rs` | rodio playlist, gapless queue-ahead advance |
+| WLED | `services/wled_manager.rs` (+ `protocol`) | HTTP effects/palettes with device name resolution + cache, UDP realtime |
+| Tasmota | `services/tasmota_manager.rs` | per-state plug mapping (`on_states`), concurrent, retry once |
+| BLE punching bag | `services/ble_manager.rs` | Nordic UART via btleplug |
+| Discovery / devices | `services/discovery_manager.rs`, `database_manager.rs` | SQLite devices + settings tables |
+| Web dashboard | `src/web/` | state, energy bar, stats, hardware, controls, schedule editor, lights (WLED) tab |
+
+## HTTP API
+
+State/events: `GET /api/state`, `/api/events` (SSE), `/api/logs`, `/api/stats`.
+Arena: `POST /api/arena/{presence,suspend,shout,punch,state,reset_stats}`,
+`GET|POST /api/arena/config`.
+Schedule: `GET|POST /api/schedule`.
+WLED: `GET /api/wled/{effects,palettes}`, `POST /api/wled/effect`.
+Audio: `POST /api/audio/clip` (on-demand clip recording).
+Devices: `POST /api/discovery/scan`, `GET|POST /api/devices`, `POST /api/devices/:id`.
+
+## Not verified on real hardware
+
+Everything has only run against synthetic inputs. Expect tuning:
+
+- **Shout and presence thresholds** (dB margins, decay, leave timeout, F0/centroid limits) are
+  educated guesses. They need real clips from the clip recorder: party noise at ~100 m,
+  distant crowd, shouts, bag hits, wind, our own playback.
+- **Earshot VAD on real audio** (it is trained on normal speech and may score shouts low).
+- **Gapless music**: audible gap at track boundaries, stutter on a Pi Zero, whether
+  `Player::len()` behaves as assumed on the real backend.
+- **Tasmota/WLED/BLE** behaviour on flaky Wi-Fi and BLE links.
+
+## Known gaps and design notes
+
+- Schedule edits via the API persist in SQLite and override `config.yaml`; an invalid
+  `config.yaml` schedule fails startup.
+- Semantics of the schedule (windows, forced SUSPENDED when off) were designed from issue
+  titles and still need an owner review.
+- Presence "present" while scheduled off is ignored by the arena and not re-fired when the
+  schedule resumes; the manual `/api/arena/presence` endpoint bypasses fusion.
+- A device that drops without publishing an event still shows as connected in the status API.
+- Dashboard Hardware tab reads the legacy status fields, not `hardware.health`.
+- No model-based shout classifier yet (a hook exists in `shout_detector.rs`).
+- `legacy/wpa_supplicant.conf` in git history contains real Wi-Fi passphrases (rotate them).
+
+For the current, authoritative list of open work, run `bd list` in the repo root.
+
+## Build and run
+
+```bash
+cargo run                      # dashboard on http://localhost:8000
+cargo test && cargo clippy --all-targets
+just --list                    # Pi cross-compile recipes (podman)
+```
+
+See `README.md` for hardware setup and system build dependencies.

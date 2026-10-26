@@ -51,6 +51,11 @@ Standard USB microphone is used for the microphone. It is connected to the brain
 
 Standard Bluetooth speakers are used for the speakers. They are connected to the brain via Bluetooth and are used to play music and sound effects to the user. Brain communicates with the speakers via Bluetooth API.
 
+## Task tracking and status docs
+
+- Work items, status and planning live in **beads** (`bd ready`, `bd list`, `bd show <id>`). It is the only source of truth for what is open, in progress or done.
+- `brain-rs/IMPLEMENTATION_STATUS.md` is a periodic snapshot **for humans** (what exists, what is unverified on hardware). Agents must not use it for task tracking or planning, must not add TODO lists to it, and should file or update `bd` issues instead.
+
 ## Landing the Plane (Session Completion)
 
 **When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
