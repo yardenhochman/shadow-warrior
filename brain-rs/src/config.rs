@@ -57,10 +57,9 @@ pub struct AudioConfig {
     pub sample_rate: u32,
     pub channels: u16,
     pub buffer_size: usize,
-    /// DEPRECATED: legacy absolute threshold, no longer used by detection
-    /// (replaced by `shout_margin_db` above the adaptive noise floor). Kept so the
-    /// dashboard tunables API and existing configs keep working.
-    pub shout_threshold_db: f32,
+    // Legacy `shout_threshold_db` (absolute dB) was replaced by `shout_margin_db`
+    // above the adaptive noise floor. Old config files may still contain the key;
+    // serde ignores unknown fields, so it is accepted and dropped.
     /// Shout must be sustained (allowing short gaps) this long before it fires.
     pub shout_min_duration_sec: f32,
     pub shout_sensitivity: f32,
@@ -330,7 +329,6 @@ impl Default for Config {
                 sample_rate: 44100,
                 channels: 1,
                 buffer_size: 1024,
-                shout_threshold_db: -15.0,
                 shout_min_duration_sec: 0.2,
                 shout_sensitivity: 1.0,
                 vad_threshold: 0.5,

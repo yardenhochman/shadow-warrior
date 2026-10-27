@@ -153,14 +153,35 @@ pub struct GameTunables {
     pub fight_duration_sec: u64,
     pub fight_inactivity_timeout_sec: u64,
     pub cooldown_duration_sec: u64,
-    pub shout_threshold_db: f32,
+    // Shout detector (applied live to the running detector). A legacy
+    // `shout_threshold_db` key in posted JSON is ignored; missing fields
+    // fall back to the defaults.
     pub shout_sensitivity: f32,
     pub vad_threshold: f32,
+    #[serde(default = "d_margin")]
+    pub shout_margin_db: f32,
+    #[serde(default = "d_playback_margin")]
+    pub shout_playback_margin_db: f32,
+    #[serde(default = "d_min_duration")]
+    pub shout_min_duration_sec: f32,
+    #[serde(default = "d_min_features")]
+    pub shout_min_features: u32,
+    #[serde(default = "d_gap_frames")]
+    pub shout_gap_frames: u32,
+    #[serde(default = "d_score_threshold")]
+    pub shout_score_threshold: f32,
 
     // BLE/Punch
     pub punch_threshold: f32,
     pub punch_alpha: f32,
 }
+
+fn d_margin() -> f32 { 15.0 }
+fn d_playback_margin() -> f32 { 8.0 }
+fn d_min_duration() -> f32 { 0.2 }
+fn d_min_features() -> u32 { 3 }
+fn d_gap_frames() -> u32 { 3 }
+fn d_score_threshold() -> f32 { 8.0 }
 
 #[derive(Debug, Serialize)]
 pub struct ApiResponse<T> {

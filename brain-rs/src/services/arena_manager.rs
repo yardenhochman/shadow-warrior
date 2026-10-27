@@ -385,9 +385,14 @@ impl ArenaManager {
             fight_duration_sec: config.fight_duration_sec,
             fight_inactivity_timeout_sec: config.fight_inactivity_timeout_sec,
             cooldown_duration_sec: config.cooldown_duration_sec,
-            shout_threshold_db: audio_config.shout_threshold_db,
             shout_sensitivity: audio_config.shout_sensitivity,
             vad_threshold: audio_config.vad_threshold,
+            shout_margin_db: audio_config.shout_margin_db,
+            shout_playback_margin_db: audio_config.shout_playback_margin_db,
+            shout_min_duration_sec: audio_config.shout_min_duration_sec,
+            shout_min_features: audio_config.shout_min_features,
+            shout_gap_frames: audio_config.shout_gap_frames,
+            shout_score_threshold: audio_config.shout_score_threshold,
             punch_threshold: ble_config.threshold,
             punch_alpha: ble_config.alpha,
         }
@@ -415,11 +420,7 @@ impl ArenaManager {
         }
 
         // Update hardware managers
-        self.audio_manager.update_parameters(
-            tunables.shout_threshold_db,
-            tunables.shout_sensitivity,
-            tunables.vad_threshold
-        ).await;
+        self.audio_manager.update_shout_tunables(&tunables).await;
 
         let _ = self.ble_manager.update_parameters(
             tunables.punch_alpha,

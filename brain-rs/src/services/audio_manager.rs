@@ -264,14 +264,24 @@ impl AudioManager {
         });
     }
 
-    /// Update audio parameters dynamically
-    pub async fn update_parameters(&self, threshold_db: f32, sensitivity: f32, vad_threshold: f32) {
-        let mut config = self.config.write().await;
-        config.shout_threshold_db = threshold_db;
-        config.shout_sensitivity = sensitivity;
-        config.vad_threshold = vad_threshold;
-        info!("Audio parameters updated: threshold={:.1}dB, sensitivity={:.1}, vad={:.2}", 
-            threshold_db, sensitivity, vad_threshold);
+    /// Apply shout-detector tunables live. The detector re-reads the shared
+    /// config every frame, so no restart is needed. Values are clamped to sane ranges.
+    pub async fn update_shout_tunables(&self, t: &crate::models::GameTunables) {
+        let mut c = self.config.write().await;
+        c.shout_margin_db = t.shout_margin_db.clamp(3.0, 40.0);
+        c.shout_playback_margin_db = t.shout_playback_margin_db.clamp(0.0, 30.0);
+        c.shout_min_duration_sec = t.shout_min_duration_sec.clamp(0.05, 0.28);
+        c.shout_min_features = t.shout_min_features.clamp(1, 4);
+        c.shout_gap_frames = t.shout_gap_frames.min(20);
+        c.shout_score_threshold = t.shout_score_threshold.clamp(1.0, 50.0);
+        c.shout_sensitivity = t.shout_sensitivity.clamp(0.1, 5.0);
+        c.vad_threshold = t.vad_threshold.clamp(0.0, 1.0);
+        info!(
+            "Shout tunables updated: margin={:.1}dB playback+={:.1}dB min_dur={:.2}s features>={} gap={} score>={:.1} sens={:.2} vad={:.2}",
+            c.shout_margin_db, c.shout_playback_margin_db, c.shout_min_duration_sec,
+            c.shout_min_features, c.shout_gap_frames, c.shout_score_threshold,
+            c.shout_sensitivity, c.vad_threshold
+        );
     }
 
     /// Start background task for energy decay
@@ -392,6 +402,85 @@ unsafe impl Sync for AudioManager {}
 mod tests {
     use super::*;
     use crate::core::EventBus;
+
+    fn tunables(am_cfg: &AudioConfig) -> crate::models::GameTunables {
+        crate::models::GameTunables {
+            warming_energy_threshold: 100.0,
+            shout_energy_multiplier: 10.0,
+            energy_decay_rate: 0.5,
+            fight_duration_sec: 180,
+            fight_inactivity_timeout_sec: 30,
+            cooldown_duration_sec: 60,
+            shout_sensitivity: am_cfg.shout_sensitivity,
+            vad_threshold: am_cfg.vad_threshold,
+            shout_margin_db: am_cfg.shout_margin_db,
+            shout_playback_margin_db: am_cfg.shout_playback_margin_db,
+            shout_min_duration_sec: am_cfg.shout_min_duration_sec,
+            shout_min_features: am_cfg.shout_min_features,
+            shout_gap_frames: am_cfg.shout_gap_frames,
+            shout_score_threshold: am_cfg.shout_score_threshold,
+            punch_threshold: 1.0,
+            punch_alpha: 0.5,
+        }
+    }
+
+    fn shout_frame(i: u64) -> crate::services::audio_frontend::FrameFeatures {
+        crate::services::audio_frontend::FrameFeatures {
+            index: i,
+            band_db: -22.0,
+            noise_floor_db: -50.0,
+            db_above_floor: 28.0,
+            vad_prob: 0.9,
+            pitch_hz: 380.0,
+            pitch_conf: 0.8,
+            spectral_centroid_hz: 1800.0,
+            spectral_tilt_db_per_khz: -8.0,
+            spectral_flatness: 0.15,
+            playback_active: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn shout_tunables_apply_live_and_reach_detector() {
+        let am = AudioManager::new(crate::config::Config::default().audio, Arc::new(EventBus::new(10)));
+        let fires = |cfg: &AudioConfig| {
+            let mut det = ShoutDetector::new();
+            (0..100).filter_map(|i| det.push(&shout_frame(i), cfg)).count()
+        };
+        let base = am.config().read().await.clone();
+        assert!(fires(&base) > 0, "28 dB above floor fires at default margin");
+
+        let mut t = tunables(&base);
+        t.shout_margin_db = 35.0;
+        t.shout_min_duration_sec = 5.0; // clamped
+        t.shout_min_features = 9; // clamped
+        t.vad_threshold = 2.0; // clamped
+        am.update_shout_tunables(&t).await;
+        let c = am.config().read().await.clone();
+        assert_eq!(c.shout_margin_db, 35.0);
+        assert_eq!(c.shout_min_duration_sec, 0.28);
+        assert_eq!(c.shout_min_features, 4);
+        assert_eq!(c.vad_threshold, 1.0);
+        assert_eq!(fires(&c), 0, "raised margin silences the same input");
+    }
+
+    #[test]
+    fn tunables_json_roundtrip_and_legacy_key() {
+        let am_cfg = crate::config::Config::default().audio;
+        let t = tunables(&am_cfg);
+        let back: crate::models::GameTunables =
+            serde_json::from_str(&serde_json::to_string(&t).unwrap()).unwrap();
+        assert_eq!(back.shout_margin_db, t.shout_margin_db);
+        assert_eq!(back.shout_gap_frames, t.shout_gap_frames);
+        // Old dashboard payload: legacy key present, new keys absent.
+        let old = r#"{"warming_energy_threshold":100,"shout_energy_multiplier":10,"energy_decay_rate":0.5,
+            "fight_duration_sec":180,"fight_inactivity_timeout_sec":30,"cooldown_duration_sec":60,
+            "shout_threshold_db":-15.0,"shout_sensitivity":1.0,"vad_threshold":0.5,
+            "punch_threshold":1.0,"punch_alpha":0.5}"#;
+        let o: crate::models::GameTunables = serde_json::from_str(old).unwrap();
+        assert_eq!(o.shout_margin_db, 15.0);
+        assert_eq!(o.shout_min_features, 3);
+    }
 
     #[test]
     fn clip_throttle() {

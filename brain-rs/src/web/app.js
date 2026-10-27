@@ -560,7 +560,12 @@ function populateConfigForm(tunables) {
     document.getElementById('confPunchAlpha').value = tunables.punch_alpha;
 
     // New shout fields
-    document.getElementById('confShoutThreshold').value = tunables.shout_threshold_db;
+    document.getElementById('confShoutMargin').value = tunables.shout_margin_db;
+    document.getElementById('confShoutPlaybackMargin').value = tunables.shout_playback_margin_db;
+    document.getElementById('confShoutMinDuration').value = tunables.shout_min_duration_sec;
+    document.getElementById('confShoutScoreThreshold').value = tunables.shout_score_threshold;
+    document.getElementById('confShoutMinFeatures').value = tunables.shout_min_features;
+    document.getElementById('confShoutGapFrames').value = tunables.shout_gap_frames;
     document.getElementById('confShoutSensitivity').value = tunables.shout_sensitivity;
     document.getElementById('confShoutEnergyMultiplier').value = tunables.shout_energy_multiplier;
     document.getElementById('confVadThreshold').value = tunables.vad_threshold;
@@ -578,7 +583,12 @@ async function saveConfig() {
         punch_alpha: parseFloat(document.getElementById('confPunchAlpha').value),
 
         // New shout fields
-        shout_threshold_db: parseFloat(document.getElementById('confShoutThreshold').value),
+        shout_margin_db: parseFloat(document.getElementById('confShoutMargin').value),
+        shout_playback_margin_db: parseFloat(document.getElementById('confShoutPlaybackMargin').value),
+        shout_min_duration_sec: parseFloat(document.getElementById('confShoutMinDuration').value),
+        shout_score_threshold: parseFloat(document.getElementById('confShoutScoreThreshold').value),
+        shout_min_features: parseInt(document.getElementById('confShoutMinFeatures').value),
+        shout_gap_frames: parseInt(document.getElementById('confShoutGapFrames').value),
         shout_sensitivity: parseFloat(document.getElementById('confShoutSensitivity').value),
         vad_threshold: parseFloat(document.getElementById('confVadThreshold').value)
     };
@@ -599,6 +609,33 @@ async function saveConfig() {
     } catch (error) {
         console.error('Failed to save config:', error);
         alert('Failed to save configuration.');
+    }
+}
+
+async function recordClip() {
+    showMsg('clipError', '');
+    showMsg('clipOk', '');
+    const body = { reason: document.getElementById('clipReason').value.trim() || 'manual' };
+    const secs = document.getElementById('clipSeconds').value;
+    if (secs !== '') body.seconds = parseFloat(secs);
+    const btn = document.getElementById('clipBtn');
+    btn.disabled = true;
+    try {
+        const response = await fetch('/api/audio/clip', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+        const result = await response.json();
+        if (result.success) {
+            showMsg('clipOk', 'Saved: ' + result.data.path);
+        } else {
+            showMsg('clipError', 'Clip failed: ' + result.error);
+        }
+    } catch (e) {
+        showMsg('clipError', 'Clip failed: ' + e.message);
+    } finally {
+        btn.disabled = false;
     }
 }
 

@@ -32,7 +32,7 @@ audio:
   sample_rate: 16000
   channels: 1
   buffer_size: 1024
-  shout_threshold_db: -15.0  # DEPRECATED, ignored (use shout_margin_db)
+  # (legacy shout_threshold_db was removed; old files that still have it load fine, key is ignored)
   vad_threshold: 0.5         # earshot VAD prob; used only as an activation gate
 
   # Shout detection (services/shout_detector.rs). Pipeline: band-pass -> adaptive

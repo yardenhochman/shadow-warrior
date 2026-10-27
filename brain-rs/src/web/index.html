@@ -267,21 +267,40 @@
                         <div class="config-group">
                             <h3>Shout Detection</h3>
                             <div class="form-row">
-                                <label for="confShoutThreshold">Shout Threshold (dB)</label>
-                                <input type="number" id="confShoutThreshold" step="0.5" class="form-input">
+                                <label for="confShoutMargin">Margin above noise floor (dB, 3-40)</label>
+                                <input type="number" id="confShoutMargin" step="0.5" min="3" max="40" class="form-input">
                             </div>
                             <div class="form-row">
-                                <label for="confShoutSensitivity">Shout Sensitivity (Scale)</label>
-                                <input type="number" id="confShoutSensitivity" step="0.1" min="0.1" class="form-input">
+                                <label for="confShoutPlaybackMargin">Extra margin during playback (dB, 0-30)</label>
+                                <input type="number" id="confShoutPlaybackMargin" step="0.5" min="0" max="30" class="form-input">
+                            </div>
+                            <div class="form-row">
+                                <label for="confShoutMinDuration">Min shout duration (s, 0.05-0.28)</label>
+                                <input type="number" id="confShoutMinDuration" step="0.01" min="0.05" max="0.28" class="form-input">
+                            </div>
+                            <div class="form-row">
+                                <label for="confShoutSensitivity">Sensitivity (score gain, 0.1-5)</label>
+                                <input type="number" id="confShoutSensitivity" step="0.1" min="0.1" max="5" class="form-input">
+                            </div>
+                            <div class="form-row">
+                                <label for="confShoutScoreThreshold">Fire score threshold (1-50)</label>
+                                <input type="number" id="confShoutScoreThreshold" step="0.5" min="1" max="50" class="form-input">
+                            </div>
+                            <div class="form-row">
+                                <label for="confShoutMinFeatures">Min voice features passed (1-4)</label>
+                                <input type="number" id="confShoutMinFeatures" step="1" min="1" max="4" class="form-input">
+                            </div>
+                            <div class="form-row">
+                                <label for="confShoutGapFrames">Gap tolerance (16ms frames, 0-20)</label>
+                                <input type="number" id="confShoutGapFrames" step="1" min="0" max="20" class="form-input">
                             </div>
                             <div class="form-row">
                                 <label for="confShoutEnergyMultiplier">Energy Multiplier</label>
                                 <input type="number" id="confShoutEnergyMultiplier" step="0.1" class="form-input">
                             </div>
                             <div class="form-row">
-                                <label for="confVadThreshold">VAD Accuracy (0.0-1.0)</label>
-                                <input type="number" id="confVadThreshold" step="0.01" min="0" max="1"
-                                    class="form-input">
+                                <label for="confVadThreshold">VAD threshold (0.0-1.0)</label>
+                                <input type="number" id="confVadThreshold" step="0.01" min="0" max="1" class="form-input">
                             </div>
                         </div>
 
@@ -317,6 +336,28 @@
                             <button type="submit" class="btn btn-primary">Save Configuration</button>
                             <button type="button" class="btn" onclick="loadConfig()">Reset to Current</button>
                         </div>
+                    </form>
+                </section>
+
+                <section class="config-section">
+                    <h2>Record Audio Clip</h2>
+                    <p class="form-hint">Saves the last few seconds of microphone audio and features to the clip directory.</p>
+                    <form id="clipForm" onsubmit="event.preventDefault(); recordClip();">
+                        <div class="config-group">
+                            <div class="form-row">
+                                <label for="clipReason">Reason</label>
+                                <input type="text" id="clipReason" value="manual" maxlength="40" class="form-input">
+                            </div>
+                            <div class="form-row">
+                                <label for="clipSeconds">Seconds (blank = default)</label>
+                                <input type="number" id="clipSeconds" step="0.5" min="0.5" max="5" class="form-input">
+                            </div>
+                        </div>
+                        <div class="config-actions">
+                            <button type="submit" class="btn btn-primary" id="clipBtn">Record Clip</button>
+                        </div>
+                        <div class="form-error" id="clipError" role="alert"></div>
+                        <div class="form-ok" id="clipOk"></div>
                     </form>
                 </section>
             </div>

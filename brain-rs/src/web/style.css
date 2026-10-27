@@ -951,3 +951,4 @@ body {
 #effectForm input[type=range] { width: 100%; min-height: 32px; }
 .form-error { color: var(--danger); margin-top: 0.75rem; min-height: 1.2em; word-break: break-word; }
 .form-ok { color: var(--success); margin-top: 0.5rem; }
+.form-hint { color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 0.75rem; }
