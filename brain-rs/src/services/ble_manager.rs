@@ -62,10 +62,16 @@ impl BleManager {
                         // Start listening for notifications
                         if let Err(e) = self.start_notifications().await {
                             error!("Failed to start notifications: {}", e);
+                            self.event_bus.publish(Event::BleConnectionError {
+                                error: format!("notifications: {e}"),
+                            });
                         }
                     }
                     Err(e) => {
                         warn!("Failed to connect to punching bag: {}", e);
+                        self.event_bus.publish(Event::BleConnectionError {
+                            error: format!("{e:#}"),
+                        });
                     }
                 }
             }
@@ -220,6 +226,9 @@ impl BleManager {
                 Ok(stream) => stream,
                 Err(e) => {
                     error!("Failed to get notification stream: {}", e);
+                    event_bus.publish(Event::BleConnectionError {
+                        error: format!("notification stream: {e}"),
+                    });
                     return;
                 }
             };
@@ -234,6 +243,9 @@ impl BleManager {
                     }
                     None => {
                         warn!("Notification stream ended");
+                        event_bus.publish(Event::BleDeviceDisconnected {
+                            reason: "notification stream ended".to_string(),
+                        });
                         break;
                     }
                 }

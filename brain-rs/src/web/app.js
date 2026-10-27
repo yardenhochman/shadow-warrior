@@ -265,6 +265,85 @@ function updateHardwareStatus(hardware) {
     } else {
         updateMusicStatus(false, null);
     }
+
+    renderDeviceHealth(hardware.health);
+}
+
+// "12s ago", "5m ago", "3h ago" for an ISO timestamp
+function relativeTime(iso) {
+    if (!iso) return null;
+    const sec = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+    if (sec < 5) return 'just now';
+    if (sec < 60) return `${sec}s ago`;
+    if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
+    if (sec < 86400) return `${Math.floor(sec / 3600)}h ago`;
+    return `${Math.floor(sec / 86400)}d ago`;
+}
+
+// Flatten hardware.health into [{label, device}] rows
+function healthRows(health) {
+    if (!health) return [];
+    const rows = [
+        { label: 'BLE' + (health.ble.name ? ` (${health.ble.name})` : ''), device: health.ble },
+        { label: 'Audio' + (health.audio.name ? ` (${health.audio.name})` : ''), device: health.audio },
+        { label: 'Music', device: health.music },
+    ];
+    for (const [ip, d] of Object.entries(health.wled || {})) rows.push({ label: `WLED ${ip}`, device: d });
+    for (const [name, d] of Object.entries(health.tasmota || {})) rows.push({ label: `Tasmota ${name}`, device: d });
+    return rows;
+}
+
+function healthBadge(d) {
+    if (!d.connected) return ['Disconnected', 'down'];
+    if (d.stale) return ['Stale', 'stale'];
+    return ['Connected', 'up'];
+}
+
+// Render hardware.health (status registry) as one row per device.
+// Uses textContent only, so device-supplied error strings cannot inject markup.
+function renderDeviceHealth(health) {
+    const root = document.getElementById('deviceHealth');
+    if (!root) return;
+    const el = (tag, cls, text) => {
+        const n = document.createElement(tag);
+        if (cls) n.className = cls;
+        if (text !== undefined) n.textContent = text;
+        return n;
+    };
+    const fact = (k, v, cls) => {
+        const row = el('div', 'health-fact' + (cls ? ' ' + cls : ''));
+        row.appendChild(el('span', 'health-k', k));
+        row.appendChild(el('span', 'health-v', v));
+        return row;
+    };
+    root.replaceChildren();
+    const rows = healthRows(health);
+    if (rows.length === 0) {
+        root.appendChild(el('div', 'health-empty', 'No health data'));
+        return;
+    }
+    for (const { label, device: d } of rows) {
+        const [badgeText, badgeCls] = healthBadge(d);
+        const card = el('div', `health-row ${badgeCls}`);
+        const head = el('div', 'health-head');
+        head.appendChild(el('span', 'health-name', label));
+        head.appendChild(el('span', `health-badge ${badgeCls}`, badgeText));
+        card.appendChild(head);
+
+        const seen = relativeTime(d.last_seen);
+        card.appendChild(fact('Last seen', seen || 'never', d.stale ? 'warn' : ''));
+        if (!d.connected) {
+            const when = relativeTime(d.disconnected_at);
+            card.appendChild(fact('Disconnected', when || 'never connected'));
+            if (d.disconnect_reason) card.appendChild(fact('Reason', d.disconnect_reason, 'err'));
+        }
+        if (d.last_error) {
+            const when = relativeTime(d.last_error_at);
+            card.appendChild(fact('Last error', when ? `${d.last_error} (${when})` : d.last_error, 'err'));
+        }
+        if (d.error_count > 0) card.appendChild(fact('Errors', String(d.error_count)));
+        root.appendChild(card);
+    }
 }
 
 // Update statistics

@@ -109,7 +109,9 @@ async fn main() -> Result<()> {
 
     // Start hardware managers
     info!("Starting hardware managers...");
-    let health_registry = Arc::new(core::status_registry::StatusRegistry::new());
+    let health_registry = Arc::new(core::status_registry::StatusRegistry::with_stale_after(
+        std::time::Duration::from_secs(config.server.health_stale_sec),
+    ));
     health_registry.spawn(&event_bus);
     ble_manager.start().await?;
     audio_manager.start().await?;

@@ -32,6 +32,10 @@ pub struct DeviceHealth {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_error_at: Option<DateTime<Utc>>,
     pub error_count: u64,
+    /// Derived at read time: connected but nothing heard for longer than the
+    /// stale timeout. Never set by events.
+    #[serde(default)]
+    pub stale: bool,
     /// Device specific: tasmota power state, music playing, ...
     #[serde(skip_serializing_if = "Option::is_none")]
     pub powered: Option<bool>,
@@ -77,18 +81,56 @@ pub struct HardwareHealth {
     pub tasmota: BTreeMap<String, DeviceHealth>,
 }
 
-#[derive(Default)]
+impl HardwareHealth {
+    fn devices_mut(&mut self) -> impl Iterator<Item = &mut DeviceHealth> {
+        [&mut self.ble, &mut self.audio, &mut self.music]
+            .into_iter()
+            .chain(self.wled.values_mut())
+            .chain(self.tasmota.values_mut())
+    }
+}
+
+/// Default for [`StatusRegistry::new`]; the daemon passes `server.health_stale_sec`.
+const DEFAULT_STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(300);
+
 pub struct StatusRegistry {
     inner: Mutex<HardwareHealth>,
+    stale_after: chrono::Duration,
+}
+
+impl Default for StatusRegistry {
+    fn default() -> Self {
+        Self::with_stale_after(DEFAULT_STALE_AFTER)
+    }
 }
 
 impl StatusRegistry {
+    #[cfg(test)]
     pub fn new() -> Self {
         Self::default()
     }
 
+    pub fn with_stale_after(d: std::time::Duration) -> Self {
+        Self {
+            inner: Mutex::new(HardwareHealth::default()),
+            stale_after: chrono::Duration::from_std(d).unwrap_or(chrono::Duration::MAX),
+        }
+    }
+
     pub fn snapshot(&self) -> HardwareHealth {
-        self.inner.lock().unwrap().clone()
+        self.snapshot_at(Utc::now())
+    }
+
+    /// Snapshot with `stale` derived against the supplied clock: a connected
+    /// device whose `last_seen` is older than the timeout is stale.
+    pub fn snapshot_at(&self, now: DateTime<Utc>) -> HardwareHealth {
+        let mut h = self.inner.lock().unwrap().clone();
+        for d in h.devices_mut() {
+            d.stale = d.connected
+                && d.last_seen
+                    .is_some_and(|t| now.signed_duration_since(t) > self.stale_after);
+        }
+        h
     }
 
     /// Fold one event into the registry (pure w.r.t. the supplied clock).
@@ -99,7 +141,11 @@ impl StatusRegistry {
                 h.audio.name = Some(device_name.clone());
                 h.audio.up(now);
             }
-            Event::AudioDeviceDisconnected => h.audio.down(now, None),
+            Event::AudioDeviceDisconnected => {
+                let reason = h.audio.last_error.clone();
+                h.audio.down(now, reason);
+            }
+            Event::AudioError { error } => h.audio.fail(now, error.clone()),
             Event::AudioLevelChanged { .. } | Event::ShoutDetected { .. } => h.audio.seen(now),
             Event::BleDeviceConnected { device_name, address } => {
                 h.ble.name = Some(device_name.clone());
@@ -127,7 +173,8 @@ impl StatusRegistry {
             Event::WledDisconnected { ip } => {
                 let d = h.wled.entry(ip.clone()).or_default();
                 d.address = Some(ip.clone());
-                d.down(now, None);
+                let reason = d.last_error.clone();
+                d.down(now, reason);
             }
             Event::WledError { ip, error } => {
                 let d = h.wled.entry(ip.clone()).or_default();
@@ -242,6 +289,77 @@ mod tests {
         assert_eq!(s.audio.last_seen, Some(t + Duration::seconds(1)));
         assert_eq!(s.music.detail.as_deref(), Some("x"));
         assert_eq!(s.music.last_error.as_deref(), Some("no sink"));
+    }
+
+    #[test]
+    fn stale_is_derived_at_read_time() {
+        let r = StatusRegistry::with_stale_after(std::time::Duration::from_secs(60));
+        let t = Utc::now();
+        r.apply(&Event::AudioDeviceConnected { device_name: "usb".into() }, t);
+        r.apply(&Event::WledConnected { ip: "1.2.3.4".into() }, t);
+        r.apply(&Event::WledConnected { ip: "5.6.7.8".into() }, t + Duration::seconds(50));
+        let s = r.snapshot_at(t + Duration::seconds(60));
+        assert!(!s.audio.stale, "exactly at the timeout is not stale yet");
+        let s = r.snapshot_at(t + Duration::seconds(61));
+        assert!(s.audio.stale);
+        assert!(s.wled["1.2.3.4"].stale);
+        assert!(!s.wled["5.6.7.8"].stale, "recent event keeps it fresh");
+        // a fresh event clears staleness without any timer
+        r.apply(&Event::AudioLevelChanged { level_db: -30.0 }, t + Duration::seconds(100));
+        assert!(!r.snapshot_at(t + Duration::seconds(120)).audio.stale);
+        // stored state is untouched by reads
+        assert!(!r.inner.lock().unwrap().audio.stale);
+    }
+
+    #[test]
+    fn disconnected_or_never_seen_is_not_stale() {
+        let r = StatusRegistry::with_stale_after(std::time::Duration::from_secs(1));
+        let t = Utc::now();
+        r.apply(&Event::BleDeviceConnected { device_name: "bag".into(), address: "aa".into() }, t);
+        r.apply(&Event::BleDeviceDisconnected { reason: "gone".into() }, t);
+        let s = r.snapshot_at(t + Duration::hours(1));
+        assert!(!s.ble.connected && !s.ble.stale);
+        assert!(!s.music.stale && !s.audio.stale);
+    }
+
+    #[test]
+    fn audio_error_then_disconnect_records_reason_and_reconnect_clears_it() {
+        let r = StatusRegistry::new();
+        let t = Utc::now();
+        r.apply(&Event::AudioDeviceConnected { device_name: "usb".into() }, t);
+        r.apply(&Event::AudioError { error: "unplugged".into() }, t + Duration::seconds(1));
+        r.apply(&Event::AudioDeviceDisconnected, t + Duration::seconds(1));
+        let a = r.snapshot().audio;
+        assert!(!a.connected);
+        assert_eq!(a.disconnect_reason.as_deref(), Some("unplugged"));
+        assert_eq!(a.error_count, 1);
+        r.apply(&Event::AudioDeviceConnected { device_name: "usb".into() }, t + Duration::seconds(5));
+        let a = r.snapshot().audio;
+        assert!(a.connected && a.disconnect_reason.is_none());
+        assert_eq!(a.error_count, 1);
+    }
+
+    #[test]
+    fn wled_disconnect_after_error_carries_reason() {
+        let r = StatusRegistry::new();
+        let t = Utc::now();
+        r.apply(&Event::WledError { ip: "9.9.9.9".into(), error: "timed out".into() }, t);
+        r.apply(&Event::WledDisconnected { ip: "9.9.9.9".into() }, t);
+        let w = &r.snapshot().wled["9.9.9.9"];
+        assert!(!w.connected);
+        assert_eq!(w.disconnect_reason.as_deref(), Some("timed out"));
+    }
+
+    #[test]
+    fn ble_connection_error_is_counted() {
+        let r = StatusRegistry::new();
+        let t = Utc::now();
+        r.apply(&Event::BleConnectionError { error: "no adapter".into() }, t);
+        r.apply(&Event::BleConnectionError { error: "no device".into() }, t);
+        let b = r.snapshot().ble;
+        assert_eq!(b.error_count, 2);
+        assert_eq!(b.last_error.as_deref(), Some("no device"));
+        assert!(!b.connected);
     }
 
     #[tokio::test]

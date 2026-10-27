@@ -238,6 +238,75 @@ h2 {
     color: var(--success);
 }
 
+/* Device health (hardware.health) */
+.health-heading {
+    margin: 1.5rem 0 0.75rem;
+    font-size: 1.1rem;
+    color: var(--primary);
+}
+
+.health-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 0.75rem;
+}
+
+.health-row {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--danger);
+    border-radius: 12px;
+    padding: 0.9rem 1rem;
+    min-width: 0;
+}
+
+.health-row.up { border-left-color: var(--success); }
+.health-row.stale { border-left-color: var(--warning); }
+.health-row.down { border-left-color: var(--danger); }
+
+.health-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+}
+
+.health-name {
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+.health-badge {
+    flex-shrink: 0;
+    font-size: 0.75rem;
+    padding: 0.15rem 0.6rem;
+    border-radius: 999px;
+    border: 1px solid currentColor;
+}
+
+.health-badge.up { color: var(--success); }
+.health-badge.stale { color: var(--warning); }
+.health-badge.down { color: var(--danger); }
+
+.health-fact {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.75rem;
+    font-size: 0.85rem;
+    padding: 0.15rem 0;
+}
+
+.health-k { color: var(--text-secondary); flex-shrink: 0; }
+.health-v { text-align: right; overflow-wrap: anywhere; min-width: 0; }
+.health-fact.warn .health-v { color: var(--warning); }
+.health-fact.err .health-v { color: var(--danger); }
+
+.health-empty {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+}
+
 .audio-level {
     margin-top: 0.5rem;
     height: 8px;

@@ -76,6 +76,8 @@ pub async fn get_state(State(state): State<AppState>) -> Json<ApiResponse<BrainS
     let mut wled = state.wled.get_status().await;
     for w in &mut wled {
         if let Some(d) = health.wled.get(&w.ip) {
+            // The registry (call outcomes + discovery) beats the socket-count heuristic.
+            w.connected = d.connected;
             if w.last_error.is_none() {
                 w.last_error = d.last_error.clone();
             }

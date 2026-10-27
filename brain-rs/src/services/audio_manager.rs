@@ -72,6 +72,8 @@ impl AudioManager {
             Box::new(Detector::default()),
         ));
 
+        let err_bus = self.event_bus.clone();
+        let err_connected = self.connected.clone();
         let stream = device.build_input_stream(
             &stream_config,
             move |data: &[f32], _: &cpal::InputCallbackInfo| {
@@ -79,6 +81,7 @@ impl AudioManager {
             },
             move |err| {
                 error!("Audio stream error: {}", err);
+                Self::report_stream_error(&err_bus, &err_connected, &err);
             },
             None,
         )?;
@@ -94,6 +97,19 @@ impl AudioManager {
         self.start_energy_decay_task();
 
         Ok(())
+    }
+
+    /// Translate a cpal stream error into health events. Device loss / invalidated
+    /// streams also publish `AudioDeviceDisconnected`; glitches only publish `AudioError`.
+    fn report_stream_error(bus: &SharedEventBus, connected: &AtomicBool, err: &cpal::StreamError) {
+        bus.publish(Event::AudioError { error: err.to_string() });
+        if matches!(
+            err,
+            cpal::StreamError::DeviceNotAvailable | cpal::StreamError::StreamInvalidated
+        ) {
+            connected.store(false, Ordering::Relaxed);
+            bus.publish(Event::AudioDeviceDisconnected);
+        }
     }
 
     /// Negotiate best supported input config — prefers 16kHz mono, falls back to device default.
@@ -402,6 +418,25 @@ unsafe impl Sync for AudioManager {}
 mod tests {
     use super::*;
     use crate::core::EventBus;
+
+    #[test]
+    fn stream_errors_publish_health_events() {
+        let bus: SharedEventBus = Arc::new(EventBus::new(16));
+        let mut rx = bus.subscribe();
+        let connected = AtomicBool::new(true);
+
+        // glitch: error only, still connected
+        AudioManager::report_stream_error(&bus, &connected, &cpal::StreamError::BufferUnderrun);
+        assert!(matches!(rx.try_recv(), Ok(Event::AudioError { .. })));
+        assert!(rx.try_recv().is_err());
+        assert!(connected.load(Ordering::Relaxed));
+
+        // device loss: error then disconnect
+        AudioManager::report_stream_error(&bus, &connected, &cpal::StreamError::DeviceNotAvailable);
+        assert!(matches!(rx.try_recv(), Ok(Event::AudioError { .. })));
+        assert!(matches!(rx.try_recv(), Ok(Event::AudioDeviceDisconnected)));
+        assert!(!connected.load(Ordering::Relaxed));
+    }
 
     fn tunables(am_cfg: &AudioConfig) -> crate::models::GameTunables {
         crate::models::GameTunables {

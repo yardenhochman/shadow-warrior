@@ -25,6 +25,14 @@ pub struct ServerConfig {
     pub host: String,
     pub port: u16,
     pub log_level: String,
+    /// A connected device with no event for this long is reported `stale` in
+    /// `hardware.health`.
+    #[serde(default = "default_health_stale_sec")]
+    pub health_stale_sec: u64,
+}
+
+fn default_health_stale_sec() -> u64 {
+    300
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -303,6 +311,7 @@ impl Default for Config {
                 host: "0.0.0.0".to_string(),
                 port: 8000,
                 log_level: "info".to_string(),
+                health_stale_sec: default_health_stale_sec(),
             },
             arena: ArenaConfig {
                 warming_energy_threshold: 100.0,

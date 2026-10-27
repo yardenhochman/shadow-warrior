@@ -13,7 +13,9 @@ use crate::core::{ArenaState, Event, SharedEventBus};
 use crate::services::database_manager::SharedDatabaseManager;
 use crate::models::WledStatus;
 
+mod health;
 mod protocol;
+use health::LinkHealth;
 use protocol::{build_effect_payload, fetch_name_list, post_state, resolve_effect_id, resolve_palette_id};
 
 pub struct WledManager {
@@ -27,6 +29,8 @@ pub struct WledManager {
     current_state: Arc<RwLock<ArenaState>>,
     effect_cache: RwLock<Vec<String>>,
     palette_cache: RwLock<Vec<String>>,
+    /// Publishes disconnect/error/reconnect events from call outcomes.
+    link: Arc<LinkHealth>,
 }
 
 impl WledManager {
@@ -39,7 +43,7 @@ impl WledManager {
         Self {
             config,
             db,
-            event_bus,
+            event_bus: event_bus.clone(),
             http_client,
             controllers: Arc::new(RwLock::new(Vec::new())),
             udp_sockets: Arc::new(RwLock::new(Vec::new())),
@@ -47,6 +51,7 @@ impl WledManager {
             current_state: Arc::new(RwLock::new(ArenaState::Idle)),
             effect_cache: RwLock::new(Vec::new()),
             palette_cache: RwLock::new(Vec::new()),
+            link: Arc::new(LinkHealth::new(event_bus.clone())),
         }
     }
 
@@ -136,8 +141,10 @@ impl WledManager {
         });
         let url = format!("http://{}/json/state", ip);
         if let Err(e) = self.http_client.post(&url).json(&green_payload).send().await {
+            self.link.fail(&ip, &e);
             warn!("Green flash failed for {}: {}", ip, e);
         } else {
+            self.link.ok(&ip);
             info!("Flashed green on new controller {}", ip);
         }
 
@@ -311,10 +318,14 @@ impl WledManager {
         for ip in &ips {
             match fetch_name_list(&self.http_client, ip, path).await {
                 Ok(list) => {
+                    self.link.ok(ip);
                     *cache.write().await = list.clone();
                     return Ok(list);
                 }
-                Err(e) => warn!("Failed to fetch WLED {} from {}: {}", path, ip, e),
+                Err(e) => {
+                    self.link.fail(ip, &e);
+                    warn!("Failed to fetch WLED {} from {}: {}", path, ip, e)
+                }
             }
         }
         let cached = cache.read().await.clone();
@@ -341,10 +352,14 @@ impl WledManager {
         for ip in &ips {
             match post_state(&self.http_client, ip, &payload).await {
                 Ok(()) => {
+                    self.link.ok(ip);
                     info!("Set effect on {}: {}", ip, effect.effect);
                     ok += 1;
                 }
-                Err(e) => error!("Failed to set effect on {}: {}", ip, e),
+                Err(e) => {
+                    self.link.fail(ip, &e);
+                    error!("Failed to set effect on {}: {}", ip, e)
+                }
             }
         }
         Ok(ok)
@@ -358,10 +373,16 @@ impl WledManager {
         for controller in controllers.iter() {
             let url = format!("http://{}/json/state", controller.ip);
             match self.http_client.post(&url).json(&payload).send().await {
-                Ok(_) => {
+                Ok(resp) if resp.status().is_success() => {
+                    self.link.ok(&controller.ip);
                     info!("Set power {} on {}", if on { "on" } else { "off" }, controller.ip);
                 }
+                Ok(resp) => {
+                    self.link.fail(&controller.ip, format!("status {}", resp.status()));
+                    error!("Set power on {} returned {}", controller.ip, resp.status());
+                }
                 Err(e) => {
+                    self.link.fail(&controller.ip, &e);
                     error!("Failed to set power on {}: {}", controller.ip, e);
                 }
             }
@@ -378,6 +399,7 @@ impl WledManager {
         info!("Starting realtime mode for state: {}", state);
 
         let sockets = self.udp_sockets.clone();
+        let link = self.link.clone();
         let fps = self.config.udp_fps;
         
         let controllers = self.controllers.read().await;
@@ -385,6 +407,9 @@ impl WledManager {
 
         let handle = tokio::spawn(async move {
             let mut ticker = interval(Duration::from_millis(1000 / fps as u64));
+            // UDP send errors are reported at most once per second per controller.
+            let mut last_report: std::collections::HashMap<std::net::IpAddr, std::time::Instant> =
+                std::collections::HashMap::new();
 
             loop {
                 ticker.tick().await;
@@ -402,6 +427,15 @@ impl WledManager {
                     if let Err(e) = socket.send(&frame) {
                         if e.kind() != std::io::ErrorKind::WouldBlock {
                             debug!("UDP send error: {}", e);
+                            if let Ok(peer) = socket.peer_addr() {
+                                let due = last_report
+                                    .get(&peer.ip())
+                                    .is_none_or(|t| t.elapsed() >= Duration::from_secs(1));
+                                if due {
+                                    last_report.insert(peer.ip(), std::time::Instant::now());
+                                    link.fail(&peer.ip().to_string(), format!("udp: {e}"));
+                                }
+                            }
                         }
                     }
                 }
@@ -516,4 +550,83 @@ fn hsv_to_rgb(h: f32, s: f32, v: f32) -> (u8, u8, u8) {
         ((g + m) * 255.0) as u8,
         ((b + m) * 255.0) as u8,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::core::status_registry::StatusRegistry;
+    use crate::core::EventBus;
+    use crate::services::database_manager::DatabaseManager;
+    use crate::test_util::{dead_addr, mock_http};
+
+    async fn wait_connected(reg: &StatusRegistry, addr: &str, want: bool) -> bool {
+        for _ in 0..100 {
+            if reg.snapshot().wled.get(addr).is_some_and(|d| d.connected == want) {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        false
+    }
+
+    /// Failing controller -> disconnected after N failures; device coming back
+    /// -> reconnected. Registry fed from the real bus.
+    #[tokio::test]
+    async fn http_failures_disconnect_and_success_reconnects() {
+        let config = Config::default();
+        let db = Arc::new(DatabaseManager::new("sqlite::memory:").await.unwrap());
+        let bus: SharedEventBus = Arc::new(EventBus::new(100));
+        let reg = Arc::new(StatusRegistry::new());
+        reg.spawn(&bus);
+        tokio::task::yield_now().await;
+        let wled = WledManager::new(config.wled.clone(), db, bus.clone());
+
+        let (addr, routes, _) = mock_http(&[("*", 200, "{}"), ("GET /json/effects", 200, r#"["Solid"]"#)]).await;
+        wled.set_controllers_for_test(&[&addr]).await;
+        let fx = WledEffect { effect: "solid".into(), ..Default::default() };
+
+        assert_eq!(wled.apply_effect(&fx).await.unwrap(), 1);
+        assert!(wait_connected(&reg, &addr, true).await);
+
+        // device starts failing (HTTP 500): below the threshold stays connected
+        routes.lock().await.insert("*".into(), (500, "{}".into()));
+        for _ in 0..health::FAIL_THRESHOLD - 1 {
+            wled.apply_effect(&fx).await.unwrap();
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(reg.snapshot().wled[&addr].connected);
+        wled.apply_effect(&fx).await.unwrap();
+        assert!(wait_connected(&reg, &addr, false).await);
+        let d = reg.snapshot().wled[&addr].clone();
+        assert!(d.error_count >= health::FAIL_THRESHOLD as u64);
+        assert!(d.disconnect_reason.is_some());
+
+        // recovery
+        routes.lock().await.insert("*".into(), (200, "{}".into()));
+        wled.apply_effect(&fx).await.unwrap();
+        assert!(wait_connected(&reg, &addr, true).await);
+        assert!(reg.snapshot().wled[&addr].disconnect_reason.is_none());
+    }
+
+    #[tokio::test]
+    async fn connection_refused_counts_as_failure() {
+        let config = Config::default();
+        let db = Arc::new(DatabaseManager::new("sqlite::memory:").await.unwrap());
+        let bus: SharedEventBus = Arc::new(EventBus::new(100));
+        let mut rx = bus.subscribe();
+        let wled = WledManager::new(config.wled.clone(), db, bus);
+        let dead = dead_addr().await;
+        wled.set_controllers_for_test(&[&dead]).await;
+        let fx = WledEffect { effect: "solid".into(), ..Default::default() };
+        for _ in 0..health::FAIL_THRESHOLD {
+            assert_eq!(wled.apply_effect(&fx).await.unwrap(), 0);
+        }
+        let mut kinds = Vec::new();
+        while let Ok(e) = rx.try_recv() {
+            kinds.push(e.event_type().to_string());
+        }
+        assert!(kinds.contains(&"WledDisconnected".to_string()), "{kinds:?}");
+    }
 }

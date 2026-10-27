@@ -71,6 +71,7 @@ pub enum Event {
     // Audio events
     AudioDeviceConnected { device_name: String },
     AudioDeviceDisconnected,
+    AudioError { error: String },
     ShoutDetected {
         intensity: f32,
         duration_sec: f32,
@@ -180,6 +181,7 @@ impl Event {
             Event::ActivityTimeout => "ActivityTimeout",
             Event::AudioDeviceConnected { .. } => "AudioDeviceConnected",
             Event::AudioDeviceDisconnected => "AudioDeviceDisconnected",
+            Event::AudioError { .. } => "AudioError",
             Event::ShoutDetected { .. } => "ShoutDetected",
             Event::AudioLevelChanged { .. } => "AudioLevelChanged",
             Event::BleDeviceConnected { .. } => "BleDeviceConnected",
