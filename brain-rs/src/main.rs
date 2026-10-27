@@ -245,7 +245,7 @@ fn spawn_music_event_loop(
 /// plus presence (tracked from events) and the schedule gate.
 fn ble_status_snapshot_fn(state: Arc<SharedState>) -> services::ble_status::SnapshotFn {
     use crate::api::status::ArenaCommand;
-    use crate::services::ble_status::{DeviceFlag, StatusSnapshot};
+    use crate::services::ble_status::{DeviceFlag, DeviceKind, StatusSnapshot};
     use std::sync::atomic::{AtomicBool, Ordering};
 
     let presence = Arc::new(AtomicBool::new(false));
@@ -273,14 +273,24 @@ fn ble_status_snapshot_fn(state: Arc<SharedState>) -> services::ble_status::Snap
             let arena = st_rx.await.ok();
             let stats = stats_rx.await.unwrap_or_default();
             let health = state.health.snapshot();
-            let flag = |n: &str, d: &core::status_registry::DeviceHealth| DeviceFlag {
-                name: n.to_string(),
+            // Names (WLED IPs, Tasmota labels) are used only for ordering and never
+            // leave this function: the BLE encoder derives opaque ids from position.
+            let flag = |k: DeviceKind, d: &core::status_registry::DeviceHealth| DeviceFlag {
+                kind: k,
                 connected: d.connected,
                 stale: d.stale,
             };
-            let mut devices = vec![flag("ble", &health.ble), flag("audio", &health.audio), flag("music", &health.music)];
-            devices.extend(health.wled.iter().map(|(k, d)| flag(k, d)));
-            devices.extend(health.tasmota.iter().map(|(k, d)| flag(k, d)));
+            let mut devices = vec![
+                flag(DeviceKind::Ble, &health.ble),
+                flag(DeviceKind::Audio, &health.audio),
+                flag(DeviceKind::Music, &health.music),
+            ];
+            let mut wled: Vec<_> = health.wled.iter().collect();
+            wled.sort_by(|a, b| a.0.cmp(b.0));
+            devices.extend(wled.into_iter().map(|(_, d)| flag(DeviceKind::Wled, d)));
+            let mut tasmota: Vec<_> = health.tasmota.iter().collect();
+            tasmota.sort_by(|a, b| a.0.cmp(b.0));
+            devices.extend(tasmota.into_iter().map(|(_, d)| flag(DeviceKind::Tasmota, d)));
             StatusSnapshot {
                 state: arena
                     .as_ref()

@@ -15,6 +15,12 @@
 //! * `SUMMARY_UUID` compact JSON, <= [`MAX_SUMMARY_BYTES`], see [`encode_summary`]
 //! * `HEALTH_UUID`  device health bitmap, see [`encode_health`]
 //!
+//! Privacy: the BLE link is reachable by anyone within tens of meters, so
+//! (a) device names (IPs, user labels) never leave the process, only opaque
+//! ids from [`assign_ids`]; (b) occupancy/activity data (presence, uptime,
+//! energy, fight stats) is only encoded when `expose_activity` is set; (c)
+//! `require_encryption` makes BlueZ demand an encrypted link for reads.
+//!
 //! Hook for later: a writable control characteristic can be added next to
 //! these in `bluez.rs` (currently no characteristic has a write handler).
 
@@ -43,15 +49,65 @@ pub const ATT_OVERHEAD: usize = 3;
 /// Default ATT MTU when none was negotiated.
 pub const DEFAULT_MTU: usize = 23;
 
-/// Health of one device in the snapshot.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// Kind of a device; the only identity that is ever sent over BLE.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DeviceKind {
+    Ble,
+    Audio,
+    Music,
+    Wled,
+    Tasmota,
+}
+
+impl DeviceKind {
+    fn prefix(self) -> &'static str {
+        match self {
+            DeviceKind::Ble => "ble",
+            DeviceKind::Audio => "audio",
+            DeviceKind::Music => "music",
+            DeviceKind::Wled => "wled",
+            DeviceKind::Tasmota => "tasmota",
+        }
+    }
+    /// ble/audio/music exist once; wled/tasmota get an index suffix.
+    fn indexed(self) -> bool {
+        matches!(self, DeviceKind::Wled | DeviceKind::Tasmota)
+    }
+}
+
+/// Health of one device in the snapshot. Deliberately carries no name: the
+/// producer must order devices stably (kind, then sorted original key) and
+/// the encoder derives opaque ids from position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DeviceFlag {
-    #[serde(rename = "n")]
-    pub name: String,
-    #[serde(rename = "c")]
+    pub kind: DeviceKind,
     pub connected: bool,
-    #[serde(rename = "s")]
     pub stale: bool,
+}
+
+/// Opaque stable ids: `ble`, `audio`, `music`, `wled0`, `wled1`, `tasmota0`...
+/// (index = position among devices of the same kind in snapshot order).
+pub fn assign_ids(devices: &[DeviceFlag]) -> Vec<String> {
+    let mut counts = std::collections::HashMap::<DeviceKind, usize>::new();
+    devices
+        .iter()
+        .map(|d| {
+            let n = counts.entry(d.kind).or_insert(0);
+            let id = if d.kind.indexed() { format!("{}{}", d.kind.prefix(), n) } else { d.kind.prefix().to_string() };
+            *n += 1;
+            id
+        })
+        .collect()
+}
+
+#[derive(Serialize)]
+struct DeviceOut<'a> {
+    #[serde(rename = "n")]
+    id: &'a str,
+    #[serde(rename = "c")]
+    connected: bool,
+    #[serde(rename = "s")]
+    stale: bool,
 }
 
 /// Everything the GATT service publishes, gathered from the existing sources
@@ -68,7 +124,7 @@ pub struct StatusSnapshot {
     pub schedule_active: bool,
     pub presence: bool,
     pub uptime_sec: f64,
-    /// Stable order: ble, audio, music, then wled by ip, then tasmota by name.
+    /// Stable order: ble, audio, music, then wled sorted by key, then tasmota sorted by key.
     pub devices: Vec<DeviceFlag>,
 }
 
@@ -98,8 +154,8 @@ impl Changed {
     }
 }
 
-pub fn encode(s: &StatusSnapshot) -> Encoded {
-    Encoded { state: encode_state(s), summary: encode_summary(s), health: encode_health(&s.devices) }
+pub fn encode(s: &StatusSnapshot, expose_activity: bool) -> Encoded {
+    Encoded { state: encode_state(s), summary: encode_summary(s, expose_activity), health: encode_health(&s.devices) }
 }
 
 pub fn diff(prev: Option<&Encoded>, new: &Encoded) -> Changed {
@@ -124,7 +180,7 @@ pub fn encode_state(s: &StatusSnapshot) -> Vec<u8> {
 /// Health bitmap: byte 0 = device count (clamped to [`MAX_HEALTH_DEVICES`]),
 /// then 2 bits per device, device `i` in byte `1 + i/4`, shift `(i%4)*2`:
 /// bit0 = connected, bit1 = stale. Device order is that of `StatusSnapshot::devices`
-/// (names are in the summary JSON when it fits).
+/// (opaque ids are in the summary JSON when it fits).
 pub fn encode_health(devices: &[DeviceFlag]) -> Vec<u8> {
     let n = devices.len().min(MAX_HEALTH_DEVICES);
     let mut out = vec![0u8; 1 + n.div_ceil(4)];
@@ -143,9 +199,11 @@ struct Summary<'a> {
     e: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     rem: Option<u32>,
-    p: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    p: Option<u32>,
     sch: u8,
-    pr: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pr: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
     mp: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -157,10 +215,14 @@ struct Summary<'a> {
     dn: usize,
     ds: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
-    d: Option<&'a [DeviceFlag]>,
+    d: Option<Vec<DeviceOut<'a>>>,
 }
 
 /// Compact summary JSON, always valid and <= [`MAX_SUMMARY_BYTES`].
+///
+/// With `expose_activity == false` only coarse state (`s`), schedule (`sch`),
+/// device counts and per-device connected/stale are emitted: no presence,
+/// energy, remaining fight time, punches, power, session count or uptime.
 ///
 /// Truncation rule (applied in order until it fits):
 /// 1. drop the per-device list `d` (the health bitmap still has every device),
@@ -168,22 +230,30 @@ struct Summary<'a> {
 /// 3. as a last resort emit only `{"s":..}` with the state truncated.
 ///
 /// The counts `dc`/`dn`/`ds` (connected/total/stale) are kept in steps 1-2.
-pub fn encode_summary(s: &StatusSnapshot) -> Vec<u8> {
+pub fn encode_summary(s: &StatusSnapshot, expose_activity: bool) -> Vec<u8> {
     let state = if s.state.is_empty() { "unknown" } else { s.state.as_str() };
+    let ids = assign_ids(&s.devices);
+    let act = expose_activity;
     let mut sum = Summary {
         s: state,
-        e: s.energy_pct.map(|v| v.clamp(0.0, 100.0).round() as u32),
-        rem: s.fight_remaining_sec.map(|v| v.max(0.0).round() as u32),
-        p: s.punches,
+        e: s.energy_pct.filter(|_| act).map(|v| v.clamp(0.0, 100.0).round() as u32),
+        rem: s.fight_remaining_sec.filter(|_| act).map(|v| v.max(0.0).round() as u32),
+        p: act.then_some(s.punches),
         sch: s.schedule_active as u8,
-        pr: s.presence as u8,
-        mp: Some(s.max_power.max(0.0).round() as u32),
-        ts: Some(s.total_sessions),
-        up: Some(s.uptime_sec.max(0.0) as u64),
+        pr: act.then_some(s.presence as u8),
+        mp: act.then_some(s.max_power.max(0.0).round() as u32),
+        ts: act.then_some(s.total_sessions),
+        up: act.then_some(s.uptime_sec.max(0.0) as u64),
         dc: s.devices.iter().filter(|d| d.connected).count(),
         dn: s.devices.len(),
         ds: s.devices.iter().filter(|d| d.stale).count(),
-        d: Some(&s.devices),
+        d: Some(
+            s.devices
+                .iter()
+                .zip(ids.iter())
+                .map(|(d, id)| DeviceOut { id, connected: d.connected, stale: d.stale })
+                .collect(),
+        ),
     };
     let ser = |x: &Summary| serde_json::to_vec(x).unwrap_or_default();
     let mut out = ser(&sum);
@@ -291,9 +361,11 @@ pub fn spawn(
 mod tests {
     use super::*;
 
-    fn dev(n: &str, c: bool, s: bool) -> DeviceFlag {
-        DeviceFlag { name: n.into(), connected: c, stale: s }
+    fn dev(kind: DeviceKind, c: bool, s: bool) -> DeviceFlag {
+        DeviceFlag { kind, connected: c, stale: s }
     }
+
+    const X: DeviceKind = DeviceKind::Wled;
 
     fn snap() -> StatusSnapshot {
         StatusSnapshot {
@@ -306,7 +378,11 @@ mod tests {
             schedule_active: true,
             presence: true,
             uptime_sec: 3600.9,
-            devices: vec![dev("ble", true, false), dev("audio", true, true), dev("music", false, false)],
+            devices: vec![
+                dev(DeviceKind::Ble, true, false),
+                dev(DeviceKind::Audio, true, true),
+                dev(DeviceKind::Music, false, false),
+            ],
         }
     }
 
@@ -318,7 +394,7 @@ mod tests {
 
     #[test]
     fn summary_is_compact_valid_json() {
-        let v: serde_json::Value = serde_json::from_slice(&encode_summary(&snap())).unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&encode_summary(&snap(), true)).unwrap();
         assert_eq!(v["s"], "fight");
         assert_eq!(v["e"], 100);
         assert_eq!(v["rem"], 61);
@@ -337,15 +413,15 @@ mod tests {
         let mut s = snap();
         s.energy_pct = None;
         s.fight_remaining_sec = None;
-        let v: serde_json::Value = serde_json::from_slice(&encode_summary(&s)).unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&encode_summary(&s, true)).unwrap();
         assert!(v.get("e").is_none() && v.get("rem").is_none());
     }
 
     #[test]
     fn summary_drops_device_list_first_when_too_big() {
         let mut s = snap();
-        s.devices = (0..40).map(|i| dev(&format!("wled-192.168.1.{i}"), i % 2 == 0, false)).collect();
-        let out = encode_summary(&s);
+        s.devices = (0..40).map(|i| dev(X, i % 2 == 0, false)).collect();
+        let out = encode_summary(&s, true);
         assert!(out.len() <= MAX_SUMMARY_BYTES);
         let v: serde_json::Value = serde_json::from_slice(&out).unwrap();
         assert!(v.get("d").is_none());
@@ -359,7 +435,7 @@ mod tests {
     fn summary_last_resort_with_huge_state() {
         let mut s = snap();
         s.state = "x".repeat(2000);
-        let out = encode_summary(&s);
+        let out = encode_summary(&s, true);
         assert!(out.len() <= MAX_SUMMARY_BYTES);
         let v: serde_json::Value = serde_json::from_slice(&out).unwrap();
         assert_eq!(v["s"].as_str().unwrap().len(), 64);
@@ -371,7 +447,7 @@ mod tests {
         s.energy_pct = Some(250.0);
         s.fight_remaining_sec = Some(-3.0);
         s.max_power = -1.0;
-        let v: serde_json::Value = serde_json::from_slice(&encode_summary(&s)).unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&encode_summary(&s, true)).unwrap();
         assert_eq!(v["e"], 100);
         assert_eq!(v["rem"], 0);
         assert_eq!(v["mp"], 0);
@@ -382,14 +458,14 @@ mod tests {
         // ble: c, audio: c+stale, music: none
         assert_eq!(encode_health(&snap().devices), vec![3, 0b0000_1101]);
         // 5 devices -> 2 bytes of bits; 5th device sits in byte 2 bits 0-1
-        let d: Vec<_> = (0..5).map(|i| dev("x", true, i == 4)).collect();
+        let d: Vec<_> = (0..5).map(|i| dev(X, true, i == 4)).collect();
         assert_eq!(encode_health(&d), vec![5, 0b0101_0101, 0b0000_0011]);
         assert_eq!(encode_health(&[]), vec![0]);
     }
 
     #[test]
     fn health_bitmap_caps_devices() {
-        let d: Vec<_> = (0..100).map(|_| dev("x", true, false)).collect();
+        let d: Vec<_> = (0..100).map(|_| dev(X, true, false)).collect();
         let b = encode_health(&d);
         assert_eq!(b[0] as usize, MAX_HEALTH_DEVICES);
         assert_eq!(b.len(), 1 + MAX_HEALTH_DEVICES / 4);
@@ -397,18 +473,18 @@ mod tests {
 
     #[test]
     fn diff_first_then_only_changes() {
-        let a = encode(&snap());
+        let a = encode(&snap(), true);
         assert_eq!(diff(None, &a), Changed { state: true, summary: true, health: true });
         assert!(!diff(Some(&a), &a).any());
         let mut s = snap();
         s.punches += 1;
-        let b = encode(&s);
+        let b = encode(&s, true);
         assert_eq!(diff(Some(&a), &b), Changed { state: false, summary: true, health: false });
         s.devices[2].connected = true;
-        let c = encode(&s);
+        let c = encode(&s, true);
         assert!(diff(Some(&b), &c).health);
         s.state = "cooldown".into();
-        assert!(diff(Some(&c), &encode(&s)).state);
+        assert!(diff(Some(&c), &encode(&s, true)).state);
     }
 
     #[test]
@@ -445,6 +521,71 @@ mod tests {
         assert!(frames.len() <= 255);
         let joined: Vec<u8> = frames.iter().flat_map(|f| f[2..].to_vec()).collect();
         assert_eq!(joined, v);
+    }
+
+    #[test]
+    fn ids_are_kind_plus_index() {
+        let d = vec![
+            dev(DeviceKind::Ble, true, false),
+            dev(DeviceKind::Audio, true, false),
+            dev(DeviceKind::Music, true, false),
+            dev(DeviceKind::Wled, true, false),
+            dev(DeviceKind::Wled, true, false),
+            dev(DeviceKind::Tasmota, true, false),
+        ];
+        assert_eq!(assign_ids(&d), ["ble", "audio", "music", "wled0", "wled1", "tasmota0"]);
+        assert_eq!(assign_ids(&d), assign_ids(&d));
+    }
+
+    #[test]
+    fn no_ip_or_label_in_any_output() {
+        // DeviceFlag has no name field, so names cannot reach the encoder; also
+        // verify every device id in the output is an opaque kind+index token.
+        let mut s = snap();
+        s.devices.push(dev(DeviceKind::Wled, true, false));
+        s.devices.push(dev(DeviceKind::Tasmota, false, true));
+        for act in [false, true] {
+            let e = encode(&s, act);
+            let text = String::from_utf8_lossy(&[e.state.clone(), e.summary.clone(), e.health.clone()].concat())
+                .to_string();
+            assert!(!text.contains("192.") && !text.contains("10.0."), "{text}");
+            let v: serde_json::Value = serde_json::from_slice(&e.summary).unwrap();
+            let allowed = ["ble", "audio", "music", "wled0", "tasmota0"];
+            for d in v["d"].as_array().unwrap() {
+                assert!(allowed.contains(&d["n"].as_str().unwrap()));
+            }
+        }
+    }
+
+    #[test]
+    fn privacy_mode_hides_activity() {
+        let v: serde_json::Value = serde_json::from_slice(&encode_summary(&snap(), false)).unwrap();
+        for k in ["e", "rem", "p", "pr", "mp", "ts", "up"] {
+            assert!(v.get(k).is_none(), "{k} leaked");
+        }
+        assert_eq!(v["s"], "fight");
+        assert_eq!(v["sch"], 1);
+        assert_eq!(v["dc"], 2);
+        assert_eq!(v["d"][1]["n"], "audio");
+        assert_eq!(v["d"][1]["s"], true);
+    }
+
+    #[test]
+    fn activity_mode_shows_activity() {
+        let v: serde_json::Value = serde_json::from_slice(&encode_summary(&snap(), true)).unwrap();
+        assert_eq!(v["pr"], 1);
+        assert_eq!(v["up"], 3600);
+        assert_eq!(v["ts"], 40);
+        assert_eq!(v["mp"], 8);
+        assert_eq!(v["p"], 12);
+    }
+
+    #[test]
+    fn security_config_defaults() {
+        let c = crate::config::BleStatusConfig::default();
+        assert!(c.require_encryption && !c.expose_activity && !c.enabled);
+        let p: crate::config::BleStatusConfig = serde_yaml::from_str("enabled: true").unwrap();
+        assert!(p.require_encryption && !p.expose_activity);
     }
 
     #[test]

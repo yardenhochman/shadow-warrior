@@ -83,6 +83,29 @@ music:
   volume: 0.8
 ```
 
+### BLE status service: threat model
+
+The optional `ble_status` GATT server (off by default) is reachable by any BLE
+device within tens of meters, through walls. Two flags control exposure:
+
+- `require_encryption` (default `true`): BlueZ requires an encrypted (bonded)
+  link to read the characteristics. Pair the owner's phone out of band
+  (`bluetoothctl`, pairable on, then pair/trust from the phone) and keep the
+  brain non-pairable otherwise. Just-Works pairing is encrypted but not
+  authenticated (no MITM protection); authenticated pairing would need a BlueZ
+  agent with IO capabilities. `false` is a debug opt-out (e.g. nRF Connect
+  without pairing): anyone in range can then read, and a warning is logged.
+  Note bluer has no security flag on notifications; verify on hardware that an
+  unpaired client cannot subscribe.
+- `expose_activity` (default `false`): with `false` only coarse game state,
+  the schedule-active flag and per-device connected/stale are published. With
+  `true` the summary also carries presence, uptime, energy %, remaining fight
+  time, punches, max power and total sessions, which reveal occupancy and
+  activity patterns.
+
+Devices are identified only by opaque ids (`ble`, `audio`, `music`, `wled0`,
+`tasmota1`, ... by sorted order); IPs and user labels are never sent over BLE.
+
 ## Development
 
 ### System dependencies

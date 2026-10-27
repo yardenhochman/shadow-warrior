@@ -78,11 +78,24 @@ pub struct BleStatusConfig {
     pub adapter: Option<String>,
     /// How often the brain state is sampled for change detection / notify.
     pub poll_ms: u64,
+    /// Require an encrypted (paired/bonded) link to read characteristics. `false` is a
+    /// debugging opt-out that lets any phone in range read the status; a warning is logged.
+    pub require_encryption: bool,
+    /// Also publish occupancy/activity data (presence, uptime, energy, fight stats).
+    /// Off: only coarse state, schedule flag and per-device connected/stale.
+    pub expose_activity: bool,
 }
 
 impl Default for BleStatusConfig {
     fn default() -> Self {
-        Self { enabled: false, name_prefix: "ShadowWarrior".into(), adapter: None, poll_ms: 1000 }
+        Self {
+            enabled: false,
+            name_prefix: "ShadowWarrior".into(),
+            adapter: None,
+            poll_ms: 1000,
+            require_encryption: true,
+            expose_activity: false,
+        }
     }
 }
 

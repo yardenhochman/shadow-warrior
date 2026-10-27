@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{broadcast, watch};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use super::{
@@ -39,6 +39,7 @@ fn char_ro(
     get: impl Fn() -> Vec<u8> + Send + Sync + Clone + 'static,
     tx: broadcast::Sender<Vec<u8>>,
     mtu_hint: Arc<AtomicUsize>,
+    require_encryption: bool,
 ) -> Characteristic {
     let get_read = get.clone();
     let mtu_read = mtu_hint.clone();
@@ -46,6 +47,17 @@ fn char_ro(
         uuid: uuid(id),
         read: Some(CharacteristicRead {
             read: true,
+            // Security flag choice: `encrypt_read` = link must be encrypted (any pairing,
+            // including Just-Works, which is encrypted but NOT authenticated/MITM-safe).
+            // `encrypt_authenticated_read` would need authenticated pairing (passkey /
+            // numeric comparison) and therefore a BlueZ agent with IO capabilities; on a
+            // headless brain without one, pairing would fail and the service be unusable,
+            // so we do not use it. Pair the owner's phone out of band (bluetoothctl).
+            // bluer exposes no security flags on `CharacteristicNotify`: BlueZ derives
+            // the CCCD (subscribe) permission from the characteristic flags, so the read
+            // flag is the only knob; verify on hardware that an unpaired client cannot
+            // subscribe (see README).
+            encrypt_read: require_encryption,
             fun: Box::new(move |req| {
                 // bluer does not expose the MTU on the notifier, so remember the
                 // largest MTU seen on a read request and use it for notifications.
@@ -110,7 +122,15 @@ pub(super) async fn run(
     let addr = adapter.address().await.context("reading adapter address")?;
     let name = local_name(&cfg.name_prefix, [addr.0[4], addr.0[5]]);
 
-    let first = encode(&snapshot().await);
+    if !cfg.require_encryption {
+        warn!("ble_status.require_encryption is false: ANY device in BLE range can read the status (debug only)");
+    }
+    if cfg.expose_activity {
+        info!("ble_status.expose_activity is true: presence/uptime/fight stats are published over BLE");
+    }
+    let act = cfg.expose_activity;
+    let enc = cfg.require_encryption;
+    let first = encode(&snapshot().await, act);
     let shared: Shared = Arc::new(Mutex::new(first));
     let (tx_state, _) = broadcast::channel::<Vec<u8>>(8);
     let (tx_summary, _) = broadcast::channel::<Vec<u8>>(8);
@@ -126,9 +146,9 @@ pub(super) async fn run(
             uuid: uuid(SERVICE_UUID),
             primary: true,
             characteristics: vec![
-                char_ro(STATE_UUID, getter(|e| &e.state), tx_state.clone(), mtu_hint.clone()),
-                char_ro(SUMMARY_UUID, getter(|e| &e.summary), tx_summary.clone(), mtu_hint.clone()),
-                char_ro(HEALTH_UUID, getter(|e| &e.health), tx_health.clone(), mtu_hint.clone()),
+                char_ro(STATE_UUID, getter(|e| &e.state), tx_state.clone(), mtu_hint.clone(), enc),
+                char_ro(SUMMARY_UUID, getter(|e| &e.summary), tx_summary.clone(), mtu_hint.clone(), enc),
+                char_ro(HEALTH_UUID, getter(|e| &e.health), tx_health.clone(), mtu_hint.clone(), enc),
             ],
             ..Default::default()
         }],
@@ -152,7 +172,7 @@ pub(super) async fn run(
         tokio::select! {
             _ = stop.changed() => break,
             _ = tick.tick() => {
-                let new = encode(&snapshot().await);
+                let new = encode(&snapshot().await, act);
                 let changed = {
                     let mut cur = shared.lock().unwrap_or_else(|p| p.into_inner());
                     let ch = diff(Some(&cur), &new);

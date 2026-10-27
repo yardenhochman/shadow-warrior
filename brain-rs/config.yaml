@@ -40,6 +40,14 @@ ble_status:
   name_prefix: "ShadowWarrior"   # advertised as ShadowWarrior-XXXX
   # adapter: hci1                # unset = same as ble.adapter
   poll_ms: 1000                  # change-detection / notify interval
+  # Threat model: BLE reaches tens of meters; anyone in range can try to connect.
+  # Pair the owner's phone out of band (bluetoothctl) and leave this true.
+  # false = anyone in range can read (debug with nRF Connect only; logs a warning).
+  require_encryption: true
+  # false: only coarse state, schedule-active and per-device connected/stale are sent.
+  # true also publishes presence, uptime, energy %, fight stats (occupancy/activity leak).
+  expose_activity: false
+  # Devices appear only as opaque ids (ble, audio, music, wled0, tasmota1...); never IPs/labels.
 
 audio:
   sample_rate: 16000
