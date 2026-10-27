@@ -247,6 +247,9 @@ fn build_router(app_state: Arc<SharedState>) -> Router {
         .route("/api/arena/config", get(arena::get_config))
         .route("/api/arena/config", post(arena::update_config))
         .route("/api/audio/clip", post(api::audio::record_clip))
+        .route("/api/audio/record/start", post(api::audio::record_start))
+        .route("/api/audio/record/stop", post(api::audio::record_stop))
+        .route("/api/audio/record/status", get(api::audio::record_status))
         .route("/api/schedule", get(api::schedule::get_schedule))
         .route("/api/schedule", post(api::schedule::update_schedule))
         // WLED routes

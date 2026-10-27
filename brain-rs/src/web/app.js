@@ -35,9 +35,11 @@ function showTab(tabId) {
     });
     document.getElementById(tabId + 'Tab').classList.add('active');
 
+    stopRecordPolling();
     // Load data if switching to config
     if (tabId === 'config') {
         loadConfig();
+        startRecordPolling();
     } else if (tabId === 'schedule') {
         loadSchedule();
     } else if (tabId === 'lights') {
@@ -695,6 +697,7 @@ async function recordClip() {
     showMsg('clipError', '');
     showMsg('clipOk', '');
     const body = { reason: document.getElementById('clipReason').value.trim() || 'manual' };
+    body.raw = document.getElementById('clipRaw').checked;
     const secs = document.getElementById('clipSeconds').value;
     if (secs !== '') body.seconds = parseFloat(secs);
     const btn = document.getElementById('clipBtn');
@@ -707,12 +710,85 @@ async function recordClip() {
         });
         const result = await response.json();
         if (result.success) {
-            showMsg('clipOk', 'Saved: ' + result.data.path);
+            showMsg('clipOk', 'Saved: ' + result.data.path + (result.data.raw_path ? ' (+ raw)' : ''));
         } else {
             showMsg('clipError', 'Clip failed: ' + result.error);
         }
     } catch (e) {
         showMsg('clipError', 'Clip failed: ' + e.message);
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+// ---- Record session (long recording) ----
+let recTimer = null;
+let recActive = false;
+
+function fmtBytes(n) {
+    if (n < 1024) return n + ' B';
+    if (n < 1048576) return (n / 1024).toFixed(1) + ' KiB';
+    if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MiB';
+    return (n / 1073741824).toFixed(2) + ' GiB';
+}
+
+function fmtElapsed(sec) {
+    sec = Math.floor(sec);
+    const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+    const mm = (h ? String(m).padStart(2, '0') : m) + ':' + String(s).padStart(2, '0');
+    return h ? h + ':' + mm : mm;
+}
+
+function renderRecordStatus(st) {
+    recActive = st.active;
+    document.getElementById('recState').textContent = st.active ? 'Recording' : (st.stop_reason || 'Idle');
+    document.getElementById('recElapsed').textContent = fmtElapsed(st.elapsed_sec || 0);
+    document.getElementById('recBytes').textContent = fmtBytes(st.bytes || 0);
+    document.getElementById('recDropped').textContent = st.dropped_frames || 0;
+    document.getElementById('recDir').textContent = st.session_dir ? 'Folder: ' + st.session_dir : '';
+    const btn = document.getElementById('recBtn');
+    btn.textContent = st.active ? 'Stop Recording' : 'Start Recording';
+    btn.classList.toggle('btn-danger', st.active);
+    btn.classList.toggle('btn-primary', !st.active);
+    document.getElementById('recLabel').disabled = st.active;
+    showMsg('recError', st.error ? 'Recording ended: ' + st.error : '');
+}
+
+async function pollRecordStatus() {
+    try {
+        const r = await (await fetch('/api/audio/record/status')).json();
+        if (r.success) renderRecordStatus(r.data);
+    } catch (e) {
+        showMsg('recError', 'Status failed: ' + e.message);
+    }
+}
+
+function startRecordPolling() {
+    stopRecordPolling();
+    pollRecordStatus();
+    recTimer = setInterval(pollRecordStatus, 1000);
+}
+
+function stopRecordPolling() {
+    if (recTimer) { clearInterval(recTimer); recTimer = null; }
+}
+
+async function toggleRecording() {
+    showMsg('recError', '');
+    const btn = document.getElementById('recBtn');
+    btn.disabled = true;
+    try {
+        const url = recActive ? '/api/audio/record/stop' : '/api/audio/record/start';
+        const body = recActive ? {} : { label: document.getElementById('recLabel').value.trim() || 'session' };
+        const r = await (await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        })).json();
+        if (r.success) renderRecordStatus(r.data);
+        else showMsg('recError', 'Failed: ' + r.error);
+    } catch (e) {
+        showMsg('recError', 'Failed: ' + e.message);
     } finally {
         btn.disabled = false;
     }

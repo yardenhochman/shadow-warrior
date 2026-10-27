@@ -2484,6 +2484,7 @@ dependencies = [
  "earshot",
  "figment",
  "futures",
+ "libc",
  "mdns-sd",
  "rand 0.8.5",
  "reqwest",

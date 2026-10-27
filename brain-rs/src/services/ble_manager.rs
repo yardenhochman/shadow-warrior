@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use btleplug::api::{
     Central, Manager as _, Peripheral as _, ScanFilter, WriteType,
 };
-use btleplug::platform::{Manager, Peripheral};
+use btleplug::platform::{Adapter, Manager, Peripheral};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
@@ -81,14 +81,23 @@ impl BleManager {
         }
     }
 
+    /// Resolve the configured adapter (default: first).
+    async fn pick_adapter(&self, manager: &Manager) -> Result<Adapter> {
+        let adapters = manager.adapters().await?;
+        let mut names = Vec::with_capacity(adapters.len());
+        for a in &adapters {
+            names.push(a.adapter_info().await.unwrap_or_else(|_| "unknown".into()));
+        }
+        let wanted = self.config.read().await.adapter.clone();
+        let idx = select_adapter(&names, wanted.as_deref()).map_err(anyhow::Error::msg)?;
+        info!("Using Bluetooth adapter: {}", names[idx]);
+        Ok(adapters.into_iter().nth(idx).expect("index validated"))
+    }
+
     /// Connect to the punching bag
     async fn connect(&self) -> Result<()> {
         let manager = Manager::new().await?;
-        let adapters = manager.adapters().await?;
-        let adapter = adapters
-            .into_iter()
-            .next()
-            .context("No Bluetooth adapter found")?;
+        let adapter = self.pick_adapter(&manager).await?;
 
         info!("Starting BLE scan...");
         adapter
@@ -169,11 +178,7 @@ impl BleManager {
     /// Explicitly scan for devices and return found punching bags
     pub async fn scan_for_devices(&self) -> Result<Vec<(String, String)>> {
         let manager = Manager::new().await?;
-        let adapters = manager.adapters().await?;
-        let adapter = adapters
-            .into_iter()
-            .next()
-            .context("No Bluetooth adapter found")?;
+        let adapter = self.pick_adapter(&manager).await?;
 
         adapter.start_scan(ScanFilter::default()).await?;
         sleep(Duration::from_secs(5)).await;
@@ -378,7 +383,59 @@ impl BleManager {
     }
 }
 
+/// Pick an adapter from the names reported by BlueZ (`"hci0 (usb:...)"`).
+/// `None` -> first. Digits-only -> index. Otherwise exact id (first token), then
+/// case-insensitive substring. Errors list the available adapters.
+pub(crate) fn select_adapter(names: &[String], wanted: Option<&str>) -> std::result::Result<usize, String> {
+    let list = || {
+        if names.is_empty() { "none".to_string() } else {
+            names.iter().enumerate().map(|(i, n)| format!("{i}: {n}")).collect::<Vec<_>>().join(", ")
+        }
+    };
+    let Some(w) = wanted.map(str::trim).filter(|w| !w.is_empty()) else {
+        return if names.is_empty() { Err("No Bluetooth adapter found".into()) } else { Ok(0) };
+    };
+    if let Ok(i) = w.parse::<usize>() {
+        if i < names.len() { return Ok(i); }
+    } else if let Some(i) = names.iter().position(|n| n.split_whitespace().next() == Some(w)) {
+        return Ok(i);
+    } else if let Some(i) = names.iter().position(|n| n.to_lowercase().contains(&w.to_lowercase())) {
+        return Ok(i);
+    }
+    Err(format!("Configured Bluetooth adapter '{w}' not found; available: {}", list()))
+}
+
 // SAFETY: BleManager is always wrapped in Arc and access is synchronized
 unsafe impl Send for BleManager {}
 unsafe impl Sync for BleManager {}
 
+
+#[cfg(test)]
+mod adapter_tests {
+    use super::select_adapter;
+
+    fn names() -> Vec<String> {
+        vec!["hci0 (usb:v1D6Bp0246d0540)".into(), "hci1 (usb:v0A12p0001d8891)".into()]
+    }
+
+    #[test]
+    fn default_is_first() {
+        assert_eq!(select_adapter(&names(), None), Ok(0));
+        assert_eq!(select_adapter(&names(), Some("  ")), Ok(0));
+    }
+
+    #[test]
+    fn by_id_index_and_substring() {
+        assert_eq!(select_adapter(&names(), Some("hci1")), Ok(1));
+        assert_eq!(select_adapter(&names(), Some("1")), Ok(1));
+        assert_eq!(select_adapter(&names(), Some("0A12")), Ok(1));
+    }
+
+    #[test]
+    fn missing_lists_available() {
+        let e = select_adapter(&names(), Some("hci7")).unwrap_err();
+        assert!(e.contains("hci7") && e.contains("0: hci0") && e.contains("1: hci1"), "{e}");
+        assert!(select_adapter(&names(), Some("5")).is_err());
+        assert!(select_adapter(&[], None).is_err());
+    }
+}

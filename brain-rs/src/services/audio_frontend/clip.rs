@@ -12,9 +12,20 @@ struct ClipMeta<'a> {
     samples: usize,
     frame_size: usize,
     frames: &'a [FrameFeatures],
+    /// Raw (pre band-pass) WAV next to this clip, if written.
+    raw_file: Option<String>,
+    raw_sample_rate: Option<u32>,
 }
 
-/// Writes `<dir>/<stamp>_<reason>.wav` and a matching `.json` of per-frame features.
+/// Files written for one clip.
+#[derive(Debug)]
+pub struct ClipOutput {
+    pub wav: PathBuf,
+    pub raw: Option<PathBuf>,
+}
+
+/// Writes `<dir>/<stamp>_<reason>.wav` (band-passed, 16 kHz), a matching `.json` of per-frame
+/// features and optionally `<stamp>_<reason>_raw.wav` (pre-filter, device rate).
 pub struct ClipRecorder {
     dir: PathBuf,
 }
@@ -30,23 +41,34 @@ impl ClipRecorder {
         stamp: &str,
         audio: &[f32],
         features: &[FrameFeatures],
-    ) -> std::io::Result<PathBuf> {
+        raw: Option<(&[f32], u32)>,
+    ) -> std::io::Result<ClipOutput> {
         std::fs::create_dir_all(&self.dir)?;
         let safe: String =
             reason.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect();
         let base = format!("{stamp}_{safe}");
         let wav_path = self.dir.join(format!("{base}.wav"));
         write_wav_16(&wav_path, audio, TARGET_RATE)?;
+        let raw_path = match raw {
+            Some((samples, rate)) => {
+                let p = self.dir.join(format!("{base}_raw.wav"));
+                write_wav_16(&p, samples, rate)?;
+                Some(p)
+            }
+            None => None,
+        };
         let meta = ClipMeta {
             reason,
             sample_rate: TARGET_RATE,
             samples: audio.len(),
             frame_size: FRAME_SIZE,
             frames: features,
+            raw_file: raw_path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()),
+            raw_sample_rate: raw.map(|(_, r)| r),
         };
         let json = serde_json::to_vec_pretty(&meta).map_err(std::io::Error::other)?;
         std::fs::write(self.dir.join(format!("{base}.json")), json)?;
-        Ok(wav_path)
+        Ok(ClipOutput { wav: wav_path, raw: raw_path })
     }
 }
 
