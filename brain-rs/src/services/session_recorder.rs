@@ -25,6 +25,8 @@ pub fn disk_free_bytes(path: &Path) -> Option<u64> {
     if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
         return None;
     }
+    // statvfs field widths differ by platform (u32 on macOS, u64 on Linux).
+    #[allow(clippy::unnecessary_cast)]
     Some((st.f_bavail as u64).saturating_mul(st.f_frsize as u64))
 }
 #[cfg(not(unix))]
