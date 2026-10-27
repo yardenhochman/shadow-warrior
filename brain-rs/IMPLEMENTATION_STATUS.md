@@ -61,7 +61,7 @@ Everything has only run against synthetic inputs. Expect tuning:
   educated guesses. They need real clips from the clip recorder: party noise at ~100 m,
   distant crowd, shouts, bag hits, wind, our own playback.
 - **Earshot VAD on real audio** (it is trained on normal speech and may score shouts low).
-- **Gapless music**: audible gap at track boundaries, stutter on a Pi Zero, whether
+- **Gapless music**: audible gap at track boundaries, stutter on a Pi 3 or Orange Pi Zero 3W, whether
   `Player::len()` behaves as assumed on the real backend.
 - **Tasmota/WLED/BLE** behaviour on flaky Wi-Fi and BLE links.
 

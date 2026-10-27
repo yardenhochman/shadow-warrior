@@ -118,15 +118,13 @@ cargo build --release
 ### Cross-compiling for Raspberry Pi
 
 Targets:
-- Pi 4: `aarch64-unknown-linux-gnu`
-- Pi Zero W: `arm-unknown-linux-gnueabihf` (ARMv6)
+- Raspberry Pi 3 / Orange Pi Zero 3W: `aarch64-unknown-linux-gnu`
 
-The same three libraries are needed **for the target architecture** (e.g. `libdbus-1-dev:arm64`, `libasound2-dev:armhf`), along with a cross linker and `PKG_CONFIG_ALLOW_CROSS=1`. Rather than setting this up on the host, use the podman build image (`Dockerfile.build`), which installs them for both targets:
+The same three libraries are needed **for the target architecture** (e.g. `libdbus-1-dev:arm64`, `libasound2-dev:arm64`), along with a cross linker and `PKG_CONFIG_ALLOW_CROSS=1`. Rather than setting this up on the host, use the podman build image (`Dockerfile.build`), which installs them:
 
 ```bash
 just image       # build the podman image once
-just build-pi4   # aarch64
-just build-pi0   # armhf
+just build-arm64   # aarch64
 ```
 
 `Cross.toml` holds the equivalent package list for [`cross`](https://github.com/cross-rs/cross) (`cross build --target <triple>`).

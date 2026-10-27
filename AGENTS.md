@@ -14,7 +14,7 @@ The punching bag has IMU sensors that detect punches and send them to the game. 
 
 # Hardware setup
 
-Brain runs on Raspberry Pi 4, or a Pi zero w.
+Brain runs on a Raspberry Pi 3 or an Orange Pi Zero 3W (both aarch64). The Pi Zero W is no longer a target.
 
 # The Code
 
