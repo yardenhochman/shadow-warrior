@@ -40,6 +40,7 @@ are both clean). **"Tested" means synthetic signals and mock HTTP servers, not r
 | Music | `services/music_manager.rs` | rodio playlist, gapless queue-ahead advance |
 | WLED | `services/wled_manager.rs` (+ `protocol`) | HTTP effects/palettes with device name resolution + cache, UDP realtime |
 | Tasmota | `services/tasmota_manager.rs` | per-state plug mapping (`on_states`), concurrent, retry once |
+| BLE status GATT service | `services/ble_status.rs`, `ble_status/bluez.rs` | Read-only, off by default (`ble_status.enabled`). Pure encoding unit-tested; BlueZ glue compiles for aarch64 Linux but is **unverified against real BlueZ/hardware** |
 | BLE punching bag | `services/ble_manager.rs` | Nordic UART via btleplug; optional `ble.adapter` to pick the BlueZ adapter |
 | Discovery / devices | `services/discovery_manager.rs`, `database_manager.rs` | SQLite devices + settings tables |
 | Web dashboard | `src/web/` | state, energy bar, stats, hardware, controls, schedule editor, lights (WLED) tab, shout tunables, clip recording, device health |

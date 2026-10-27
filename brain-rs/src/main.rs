@@ -179,6 +179,17 @@ async fn main() -> Result<()> {
         presence_manual,
     });
 
+    // Optional read-only BLE GATT status service (never fatal).
+    let ble_status = if config.ble_status.enabled {
+        services::ble_status::spawn(
+            config.ble_status.clone(),
+            config.ble.adapter.clone(),
+            ble_status_snapshot_fn(app_state.clone()),
+        )
+    } else {
+        None
+    };
+
     let app = build_router(app_state);
 
     // Start server
@@ -191,6 +202,9 @@ async fn main() -> Result<()> {
 
     // Cleanup on shutdown
     info!("Shutting down...");
+    if let Some(h) = ble_status {
+        h.shutdown().await;
+    }
     event_bus.publish(core::Event::SystemShutdown);
 
     Ok(())
@@ -225,6 +239,65 @@ fn spawn_music_event_loop(
             }
         }
     });
+}
+
+/// Gather the BLE status snapshot from the same sources as `/api/state`
+/// plus presence (tracked from events) and the schedule gate.
+fn ble_status_snapshot_fn(state: Arc<SharedState>) -> services::ble_status::SnapshotFn {
+    use crate::api::status::ArenaCommand;
+    use crate::services::ble_status::{DeviceFlag, StatusSnapshot};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let presence = Arc::new(AtomicBool::new(false));
+    {
+        let presence = presence.clone();
+        let mut rx = state.event_bus.subscribe();
+        tokio::spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(core::Event::PresenceDetected { detected }) => presence.store(detected, Ordering::Relaxed),
+                    Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+    }
+    Arc::new(move || {
+        let state = state.clone();
+        let presence = presence.clone();
+        Box::pin(async move {
+            let (st_tx, st_rx) = tokio::sync::oneshot::channel();
+            let (stats_tx, stats_rx) = tokio::sync::oneshot::channel();
+            let _ = state.arena_tx.send(ArenaCommand::GetState(st_tx));
+            let _ = state.arena_tx.send(ArenaCommand::GetStatistics(stats_tx));
+            let arena = st_rx.await.ok();
+            let stats = stats_rx.await.unwrap_or_default();
+            let health = state.health.snapshot();
+            let flag = |n: &str, d: &core::status_registry::DeviceHealth| DeviceFlag {
+                name: n.to_string(),
+                connected: d.connected,
+                stale: d.stale,
+            };
+            let mut devices = vec![flag("ble", &health.ble), flag("audio", &health.audio), flag("music", &health.music)];
+            devices.extend(health.wled.iter().map(|(k, d)| flag(k, d)));
+            devices.extend(health.tasmota.iter().map(|(k, d)| flag(k, d)));
+            StatusSnapshot {
+                state: arena
+                    .as_ref()
+                    .map(|a| format!("{:?}", a.current_state).to_ascii_lowercase())
+                    .unwrap_or_else(|| "unknown".into()),
+                energy_pct: arena.as_ref().and_then(|a| a.energy_percentage),
+                fight_remaining_sec: arena.as_ref().and_then(|a| a.fight_remaining_sec),
+                punches: stats.current_session_punches,
+                max_power: stats.current_session_max_power,
+                total_sessions: stats.total_sessions,
+                schedule_active: state.schedule.status().await.active,
+                presence: presence.load(Ordering::Relaxed),
+                uptime_sec: stats.uptime_sec,
+                devices,
+            }
+        })
+    })
 }
 
 /// Build the HTTP router: web UI, static files and all `/api` routes.

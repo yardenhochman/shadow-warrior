@@ -18,6 +18,8 @@ pub struct Config {
     pub schedule: ScheduleConfig,
     #[serde(default)]
     pub presence: PresenceConfig,
+    #[serde(default)]
+    pub ble_status: BleStatusConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -62,6 +64,26 @@ pub struct BleConfig {
     // Punching bag parameters
     pub alpha: f32,
     pub threshold: f32,
+}
+
+/// Read-only BLE GATT status service (BlueZ peripheral role, Linux only).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct BleStatusConfig {
+    pub enabled: bool,
+    /// Advertised name is `<name_prefix>-XXXX` (XXXX = last 2 bytes of the adapter address).
+    pub name_prefix: String,
+    /// BlueZ adapter for the peripheral role (`hci1`, index or name substring).
+    /// Unset = same selection as `ble.adapter`.
+    pub adapter: Option<String>,
+    /// How often the brain state is sampled for change detection / notify.
+    pub poll_ms: u64,
+}
+
+impl Default for BleStatusConfig {
+    fn default() -> Self {
+        Self { enabled: false, name_prefix: "ShadowWarrior".into(), adapter: None, poll_ms: 1000 }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -430,6 +452,7 @@ impl Default for Config {
             tasmota: TasmotaConfig { plugs: vec![] },
             schedule: ScheduleConfig::default(),
             presence: PresenceConfig::default(),
+            ble_status: BleStatusConfig::default(),
         }
     }
 }

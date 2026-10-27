@@ -54,3 +54,7 @@ mdns-sd = "0.11"
 
 # Database
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "macros"] }
+
+# BLE peripheral (GATT server) via BlueZ; Linux only. Uses libdbus like btleplug.
+[target.'cfg(target_os = "linux")'.dependencies]
+bluer = { version = "0.17", features = ["bluetoothd"] }

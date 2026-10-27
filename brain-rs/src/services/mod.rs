@@ -2,6 +2,7 @@ pub mod arena_manager;
 pub mod audio_frontend;
 pub mod audio_manager;
 pub mod ble_manager;
+pub mod ble_status;
 pub mod database_manager;
 pub mod discovery_manager;
 pub mod music_manager;

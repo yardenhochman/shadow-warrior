@@ -13,6 +13,7 @@ Modern Rust rewrite of the Shadow Warrior training system brain with improved ar
 
 ### Hardware Integration
 - **BLE** - Punching bag via btleplug (Nordic UART Service)
+- **BLE status service** - optional read-only GATT server (`ble_status` config, BlueZ via `bluer`, Linux only) so a phone can read state/health; no extra build deps beyond `libdbus-1-dev`, needs `bluetoothd` at runtime
 - **WLED** - LED controllers via HTTP JSON API + UDP realtime (WARLS protocol)
 - **Tasmota** - Smart plugs via HTTP
 - **Audio** - Microphone capture via cpal with shout detection
@@ -90,7 +91,7 @@ Several crates link against system C libraries, which need their development hea
 
 | Library | Pulled in by | Fedora | Debian / Raspberry Pi OS |
 |---------|--------------|--------|--------------------------|
-| D-Bus | `btleplug` (BLE, via `libdbus-sys`) | `dbus-devel` | `libdbus-1-dev` |
+| D-Bus | `btleplug` (BLE central) and `bluer` (BLE status GATT server, Linux only), both via `libdbus-sys` | `dbus-devel` | `libdbus-1-dev` |
 | ALSA | `cpal` / `rodio` (audio, via `alsa-sys`) | `alsa-lib-devel` | `libasound2-dev` |
 | OpenSSL | `reqwest` (native-tls, via `openssl-sys`) | `openssl-devel` | `libssl-dev` |
 | pkg-config | build scripts of the above | `pkgconf-pkg-config` | `pkg-config` |

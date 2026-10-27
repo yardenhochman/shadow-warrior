@@ -31,6 +31,16 @@ ble:
   alpha: 0.8
   threshold: 2.0
 
+# Read-only BLE GATT status service so a phone (nRF Connect / LightBlue) can read
+# brain state without WiFi. Linux/BlueZ only; needs bluetoothd. Never blocks the
+# daemon: if BlueZ or the adapter is missing it logs and carries on.
+# Prefer a different adapter than the punching-bag central (ble.adapter).
+ble_status:
+  enabled: false
+  name_prefix: "ShadowWarrior"   # advertised as ShadowWarrior-XXXX
+  # adapter: hci1                # unset = same as ble.adapter
+  poll_ms: 1000                  # change-detection / notify interval
+
 audio:
   sample_rate: 16000
   channels: 1
