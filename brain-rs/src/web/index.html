@@ -356,12 +356,39 @@
                                 <label for="clipSeconds">Seconds (blank = default)</label>
                                 <input type="number" id="clipSeconds" step="0.5" min="0.5" max="5" class="form-input">
                             </div>
+                            <div class="form-row">
+                                <label class="inline-check"><input type="checkbox" id="clipRaw" checked> Also save raw (unfiltered) WAV</label>
+                            </div>
                         </div>
                         <div class="config-actions">
                             <button type="submit" class="btn btn-primary" id="clipBtn">Record Clip</button>
                         </div>
                         <div class="form-error" id="clipError" role="alert"></div>
                         <div class="form-ok" id="clipOk"></div>
+                    </form>
+                </section>
+
+                <section class="config-section" id="recordSection">
+                    <h2>Record Session</h2>
+                    <p class="form-hint">Long recording for on-site data collection: raw audio in rotating WAV chunks plus a per-frame feature log, in a new folder under the clip directory.</p>
+                    <form id="recordForm" onsubmit="event.preventDefault(); toggleRecording();">
+                        <div class="config-group">
+                            <div class="form-row">
+                                <label for="recLabel">Label</label>
+                                <input type="text" id="recLabel" value="session" maxlength="40" class="form-input">
+                            </div>
+                            <div class="rec-stats" id="recStats">
+                                <div><span class="rec-k">State</span><span id="recState">Idle</span></div>
+                                <div><span class="rec-k">Elapsed</span><span id="recElapsed">0:00</span></div>
+                                <div><span class="rec-k">Written</span><span id="recBytes">0 B</span></div>
+                                <div><span class="rec-k">Dropped frames</span><span id="recDropped">0</span></div>
+                            </div>
+                            <div class="form-hint" id="recDir"></div>
+                        </div>
+                        <div class="config-actions">
+                            <button type="submit" class="btn btn-primary" id="recBtn">Start Recording</button>
+                        </div>
+                        <div class="form-error" id="recError" role="alert"></div>
                     </form>
                 </section>
             </div>

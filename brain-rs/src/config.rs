@@ -54,6 +54,10 @@ pub struct BleConfig {
     pub scan_timeout_sec: u64,
     pub retry_interval_sec: u64,
     pub device_name_patterns: Vec<String>,
+    /// BlueZ adapter to use: `hci1`, a numeric index (`1`) or a name substring.
+    /// Unset = first adapter.
+    #[serde(default)]
+    pub adapter: Option<String>,
 
     // Punching bag parameters
     pub alpha: f32,
@@ -122,7 +126,29 @@ pub struct AudioConfig {
     /// Minimum seconds between automatic shout clips.
     #[serde(default = "default_clip_cooldown_sec")]
     pub clip_cooldown_sec: f32,
+    /// Also write a raw (pre band-pass, device-rate) WAV next to each clip by default.
+    #[serde(default = "d_true")]
+    pub clip_raw: bool,
+    /// Long-session recorder: seconds of raw audio per WAV chunk.
+    #[serde(default = "d_record_chunk")]
+    pub record_chunk_sec: f32,
+    /// Long-session recorder: stop when free disk space drops below this (MiB).
+    #[serde(default = "d_record_min_free")]
+    pub record_min_free_mb: u64,
+    /// Long-session recorder: hard cap on session length, seconds.
+    #[serde(default = "d_record_max")]
+    pub record_max_session_sec: f32,
+    /// Long-session recorder: bounded queue (audio callbacks) between the audio
+    /// thread and the writer; overflow drops frames and counts them.
+    #[serde(default = "d_record_queue")]
+    pub record_queue_len: usize,
 }
+
+fn d_true() -> bool { true }
+fn d_record_chunk() -> f32 { 60.0 }
+fn d_record_min_free() -> u64 { 500 }
+fn d_record_max() -> f32 { 4.0 * 3600.0 }
+fn d_record_queue() -> usize { 512 }
 
 fn d_margin() -> f32 { 15.0 }
 fn d_playback_margin() -> f32 { 8.0 }
@@ -331,6 +357,7 @@ impl Default for Config {
                     "punch".to_string(),
                     "bag".to_string(),
                 ],
+                adapter: None,
                 alpha: 0.8,
                 threshold: 2.0,
             },
@@ -358,6 +385,11 @@ impl Default for Config {
                 clip_seconds: default_clip_seconds(),
                 clip_on_shout: default_clip_on_shout(),
                 clip_cooldown_sec: default_clip_cooldown_sec(),
+                clip_raw: d_true(),
+                record_chunk_sec: d_record_chunk(),
+                record_min_free_mb: d_record_min_free(),
+                record_max_session_sec: d_record_max(),
+                record_queue_len: d_record_queue(),
             },
             music: MusicConfig {
                 playlist_dir: PathBuf::from("./music"),

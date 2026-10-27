@@ -23,6 +23,9 @@ ble:
     - "warrior"
     - "punch"
     - "bag"
+  # BlueZ adapter for BLE (e.g. a USB dongle separate from the A2DP speaker's adapter).
+  # "hci1", an index ("1") or a substring of the adapter info. Unset = first adapter.
+  # adapter: hci1
 
   # Punching bag parameters
   alpha: 0.8
@@ -60,6 +63,14 @@ audio:
   clip_seconds: 5.0          # length of each clip (capped by the front-end ring buffer)
   clip_on_shout: true        # record a clip whenever a shout is detected
   clip_cooldown_sec: 10.0    # min seconds between automatic shout clips
+  clip_raw: true             # also write <clip>_raw.wav (pre band-pass, device rate, mono)
+
+  # Long-session recorder (POST /api/audio/record/start|stop, GET .../status).
+  # Writes <clip_dir>/session_<time>_<label>/ with rotating raw WAV chunks + features.jsonl.
+  record_chunk_sec: 60.0         # raw WAV chunk length
+  record_min_free_mb: 500        # stop the session when free disk space falls below this
+  record_max_session_sec: 14400  # hard cap on session length (4 h)
+  record_queue_len: 512          # audio->writer queue (callbacks); overflow drops + counts
 
 music:
   playlist_dir: "./music"

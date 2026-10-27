@@ -10,7 +10,8 @@ use anyhow::{Context, Result};
 use earshot::Detector;
 
 use super::shout_detector::ShoutDetector;
-use super::audio_frontend::{ClipRecorder, FrameFeatures, FrontEnd, FrontEndConfig};
+use super::session_recorder::{disk_free_bytes, sanitize_label, RecordStatus, SessionParams, SessionRecorder};
+use super::audio_frontend::{ClipOutput, ClipRecorder, FrameFeatures, FrontEnd, FrontEndConfig};
 
 use crate::config::AudioConfig;
 use crate::core::{Event, SharedEventBus};
@@ -25,6 +26,7 @@ pub struct AudioManager {
     features_tx: tokio::sync::watch::Sender<Option<FrameFeatures>>,
     actual_sample_rate: Arc<RwLock<u32>>,
     actual_channels: Arc<RwLock<u16>>,
+    recorder: SessionRecorder,
 }
 
 impl AudioManager {
@@ -41,6 +43,7 @@ impl AudioManager {
             features_tx: tokio::sync::watch::channel(None).0,
             actual_sample_rate: Arc::new(RwLock::new(16000)),
             actual_channels: Arc::new(RwLock::new(1)),
+            recorder: SessionRecorder::default(),
         }
     }
 
@@ -234,22 +237,79 @@ impl AudioManager {
     }
 
     /// Dump the last `seconds` of audio + features to `dir` (detector triggers / on demand).
-    pub fn record_clip(&self, dir: &std::path::Path, reason: &str, seconds: f32) -> Result<std::path::PathBuf> {
-        let (audio, feats) = {
+    /// With `raw`, also writes the pre-filter device-rate audio as `<clip>_raw.wav`.
+    pub fn record_clip(&self, dir: &std::path::Path, reason: &str, seconds: f32, raw: bool) -> Result<ClipOutput> {
+        let (audio, feats, raw_audio) = {
             let g = self.frontend.lock().map_err(|_| anyhow::anyhow!("frontend poisoned"))?;
-            g.as_ref().context("audio not started")?.snapshot_clip(seconds)
+            let fe = g.as_ref().context("audio not started")?;
+            let (a, f) = fe.snapshot_clip(seconds);
+            (a, f, raw.then(|| fe.snapshot_raw(seconds)))
         };
         let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%.3f").to_string();
-        Ok(ClipRecorder::new(dir).record(reason, &stamp, &audio, &feats)?)
+        Ok(ClipRecorder::new(dir).record(
+            reason,
+            &stamp,
+            &audio,
+            &feats,
+            raw_audio.as_ref().map(|(a, r)| (a.as_slice(), *r)),
+        )?)
     }
 
-    /// Record a clip using the configured directory and length.
-    pub async fn record_clip_default(&self, reason: &str) -> Result<std::path::PathBuf> {
-        let (dir, seconds) = {
+    /// Record a clip using the configured directory, length and raw default.
+    pub async fn record_clip_default(&self, reason: &str, raw: Option<bool>) -> Result<ClipOutput> {
+        let (dir, seconds, cfg_raw) = {
             let c = self.config.read().await;
-            (c.clip_dir.clone(), c.clip_seconds)
+            (c.clip_dir.clone(), c.clip_seconds, c.clip_raw)
         };
-        self.record_clip(&dir, reason, seconds)
+        self.record_clip(&dir, reason, seconds, raw.unwrap_or(cfg_raw))
+    }
+
+    /// Start a long recording session (raw WAV chunks + per-frame feature log).
+    pub async fn start_recording(&self, label: &str) -> Result<RecordStatus> {
+        let c = self.config.read().await.clone();
+        let rate = *self.actual_sample_rate.read().await;
+        let label = sanitize_label(label);
+        let dir = c.clip_dir.join(format!(
+            "session_{}_{}",
+            chrono::Utc::now().format("%Y%m%dT%H%M%S"),
+            label
+        ));
+        let params = SessionParams {
+            dir,
+            label,
+            sample_rate: rate,
+            chunk_sec: c.record_chunk_sec.max(1.0),
+            min_free_bytes: c.record_min_free_mb.saturating_mul(1 << 20),
+            max_duration_sec: c.record_max_session_sec,
+        };
+        let mut g = self.frontend.lock().map_err(|_| anyhow::anyhow!("frontend poisoned"))?;
+        let fe = g.as_mut().context("audio not started")?;
+        let tap = self.recorder.start(
+            params,
+            Arc::new(disk_free_bytes),
+            self.event_bus.subscribe(),
+            c.record_queue_len,
+        )?;
+        fe.set_tap(Some(tap));
+        drop(g);
+        Ok(self.recorder.status())
+    }
+
+    /// Stop the session, flush files and return the final status.
+    pub async fn stop_recording(&self) -> RecordStatus {
+        if let Ok(mut g) = self.frontend.lock() {
+            if let Some(fe) = g.as_mut() {
+                fe.set_tap(None); // drops the sender; writer drains and finishes
+            }
+        }
+        if let Some(h) = self.recorder.take_thread() {
+            let _ = tokio::task::spawn_blocking(move || h.join()).await;
+        }
+        self.recorder.status()
+    }
+
+    pub fn recording_status(&self) -> RecordStatus {
+        self.recorder.status()
     }
 
     /// Record a clip on every shout (rate limited by `clip_cooldown_sec`).
@@ -268,8 +328,8 @@ impl AudioManager {
                             continue;
                         }
                         last = Some(Instant::now());
-                        match self.record_clip_default("shout").await {
-                            Ok(p) => info!("Shout clip saved ({:.2}): {}", intensity, p.display()),
+                        match self.record_clip_default("shout", None).await {
+                            Ok(p) => info!("Shout clip saved ({:.2}): {}", intensity, p.wav.display()),
                             Err(e) => warn!("Shout clip failed: {}", e),
                         }
                     }
@@ -537,9 +597,12 @@ mod tests {
         *am.frontend.lock().unwrap() = Some(fe);
         am.set_playback_active(true);
         let dir = std::env::temp_dir().join(format!("sw_clip_am_test_{}", std::process::id()));
-        let p = am.record_clip(&dir, "unit", 0.5).unwrap();
-        assert!(p.exists());
-        assert!(p.with_extension("json").exists());
+        let out = am.record_clip(&dir, "unit", 0.5, true).unwrap();
+        assert!(out.wav.exists());
+        assert!(out.wav.with_extension("json").exists());
+        let raw = out.raw.unwrap();
+        assert!(raw.exists());
+        assert!(am.record_clip(&dir, "unit2", 0.5, false).unwrap().raw.is_none());
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -569,5 +632,34 @@ mod tests {
         // Reset
         energy_bar.reset().await;
         assert_eq!(energy_bar.current().await, 0.0);
+    }
+
+    #[tokio::test]
+    async fn recording_start_stop_via_manager() {
+        use crate::services::audio_frontend::ConstVad;
+        let bus = Arc::new(EventBus::new(10));
+        let dir = std::env::temp_dir().join(format!("sw_rec_am_test_{}", std::process::id()));
+        let mut cfg = crate::config::Config::default().audio;
+        cfg.clip_dir = dir.clone();
+        cfg.record_min_free_mb = 0;
+        let am = AudioManager::new(cfg, bus);
+        assert!(am.start_recording("x").await.is_err(), "needs started audio");
+        *am.frontend.lock().unwrap() =
+            Some(FrontEnd::new(16000, FrontEndConfig::default(), Box::new(ConstVad(0.9))));
+        let st = am.start_recording("my label/1").await.unwrap();
+        assert!(st.active && st.session_dir.contains("my_label_1"));
+        assert!(am.start_recording("again").await.is_err());
+        let tone: Vec<f32> = (0..16000).map(|i| (i as f32 * 0.05).sin() * 0.3).collect();
+        for c in tone.chunks(1024) {
+            am.frontend.lock().unwrap().as_mut().unwrap().process(c);
+        }
+        let st = am.stop_recording().await;
+        assert!(!st.active && st.error.is_none(), "{st:?}");
+        assert_eq!(st.frames, 62);
+        assert!((st.elapsed_sec - 1.0).abs() < 1e-3);
+        let d = std::path::PathBuf::from(&st.session_dir);
+        assert!(d.join("raw_0000.wav").exists() && d.join("features.jsonl").exists());
+        assert!(!am.recording_status().active);
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

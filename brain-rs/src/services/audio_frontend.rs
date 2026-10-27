@@ -330,7 +330,7 @@ pub fn pitch_autocorr(frame: &[f32]) -> (f32, f32) {
 
 mod clip;
 mod ring;
-pub use clip::ClipRecorder;
+pub use clip::{ClipOutput, ClipRecorder};
 pub use ring::RingBuffer;
 
 // ---------------------------------------------------------------- front-end
@@ -340,15 +340,23 @@ pub struct FrontEndConfig {
     pub low_hz: f32,
     pub high_hz: f32,
     pub ring_seconds: f32,
+    /// Seconds of raw (pre band-pass, device-rate) mono audio kept for raw clips.
+    pub raw_ring_seconds: f32,
 }
 
 impl Default for FrontEndConfig {
     fn default() -> Self {
-        Self { low_hz: 250.0, high_hz: 4000.0, ring_seconds: 5.0 }
+        Self { low_hz: 250.0, high_hz: 4000.0, ring_seconds: 5.0, raw_ring_seconds: 5.0 }
     }
 }
 
+/// Per-callback tap: raw mono input (device rate) + the features of frames completed by it.
+pub type FrameTap = Box<dyn FnMut(&[f32], &[FrameFeatures]) + Send>;
+
 pub struct FrontEnd {
+    input_rate: u32,
+    raw: RingBuffer<f32>,
+    tap: Option<FrameTap>,
     bandpass: BandPass,
     resampler: StreamResampler,
     vad: Box<dyn VadProbe>,
@@ -365,7 +373,11 @@ impl FrontEnd {
     pub fn new(input_rate: u32, cfg: FrontEndConfig, vad: Box<dyn VadProbe>) -> Self {
         let audio_cap = (cfg.ring_seconds * TARGET_RATE as f32) as usize;
         let feat_cap = (cfg.ring_seconds / FRAME_SECS).ceil() as usize;
+        let raw_cap = ((cfg.raw_ring_seconds * input_rate as f32) as usize).max(1);
         Self {
+            input_rate,
+            raw: RingBuffer::new(raw_cap),
+            tap: None,
             bandpass: BandPass::new(input_rate as f32, cfg.low_hz, cfg.high_hz),
             resampler: StreamResampler::new(input_rate),
             vad,
@@ -379,6 +391,11 @@ impl FrontEnd {
         }
     }
 
+    /// Install (or clear) the recorder tap. Called from the audio callback: must not block.
+    pub fn set_tap(&mut self, tap: Option<FrameTap>) {
+        self.tap = tap;
+    }
+
     pub fn set_playback_active(&mut self, active: bool) {
         self.playback_active = active;
     }
@@ -386,6 +403,7 @@ impl FrontEnd {
     /// Feed mono samples at the device rate. Returns one `(filtered 16k frame, features)`
     /// per completed 16ms frame.
     pub fn process(&mut self, mono: &[f32]) -> Vec<(Vec<f32>, FrameFeatures)> {
+        self.raw.push_slice(mono);
         let filtered: Vec<f32> = mono.iter().map(|&x| self.bandpass.process(x)).collect();
         self.scratch.clear();
         self.resampler.process(&filtered, &mut self.scratch);
@@ -398,6 +416,10 @@ impl FrontEnd {
             self.audio.push_slice(&frame);
             self.features.push(f.clone());
             out.push((frame, f));
+        }
+        if let Some(tap) = self.tap.as_mut() {
+            let feats: Vec<FrameFeatures> = out.iter().map(|(_, f)| f.clone()).collect();
+            tap(mono, &feats);
         }
         out
     }
@@ -433,6 +455,11 @@ impl FrontEnd {
         let ns = (seconds * TARGET_RATE as f32) as usize;
         let nf = (seconds / FRAME_SECS).ceil() as usize;
         (self.audio.last_n(ns), self.features.last_n(nf))
+    }
+
+    /// Last `seconds` of raw mono input (pre band-pass) and its sample rate.
+    pub fn snapshot_raw(&self, seconds: f32) -> (Vec<f32>, u32) {
+        (self.raw.last_n((seconds * self.input_rate as f32) as usize), self.input_rate)
     }
 }
 
@@ -562,13 +589,45 @@ mod tests {
     }
 
     #[test]
+    fn raw_ring_is_prefilter_at_device_rate() {
+        // 50 Hz is rejected by the band-pass but must survive in the raw ring.
+        let mut fe = FrontEnd::new(48000, FrontEndConfig::default(), Box::new(ConstVad(0.0)));
+        fe.process(&sine(50.0, 48000, 1.0, 0.5));
+        let (raw, rate) = fe.snapshot_raw(0.5);
+        assert_eq!(rate, 48000);
+        assert_eq!(raw.len(), 24000);
+        assert!(rms(&raw) > 0.3, "raw must be unfiltered");
+        let (proc, _) = fe.snapshot_clip(0.5);
+        assert!(rms(&proc) < 0.05);
+    }
+
+    #[test]
+    fn tap_sees_raw_and_features() {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new((0usize, 0usize)));
+        let s2 = seen.clone();
+        let mut fe = FrontEnd::new(16000, FrontEndConfig::default(), Box::new(ConstVad(0.0)));
+        fe.set_tap(Some(Box::new(move |raw, feats| {
+            let mut g = s2.lock().unwrap();
+            g.0 += raw.len();
+            g.1 += feats.len();
+        })));
+        fe.process(&sine(440.0, 16000, 1.0, 0.2));
+        assert_eq!(*seen.lock().unwrap(), (16000, 62));
+    }
+
+    #[test]
     fn clip_recorder_writes_wav_and_json() {
         let dir = std::env::temp_dir().join(format!("sw_clip_test_{}", std::process::id()));
         let mut fe = FrontEnd::new(16000, FrontEndConfig::default(), Box::new(ConstVad(0.5)));
         fe.process(&sine(440.0, 16000, 1.0, 0.2));
         let (a, f) = fe.snapshot_clip(1.0);
         let rec = ClipRecorder::new(&dir);
-        let p = rec.record("shout/test", "20260101T000000", &a, &f).unwrap();
+        let (raw, rate) = fe.snapshot_raw(1.0);
+        let out = rec.record("shout/test", "20260101T000000", &a, &f, Some((&raw, rate))).unwrap();
+        let p = out.wav;
+        let rawp = out.raw.unwrap();
+        assert!(rawp.to_string_lossy().ends_with("_raw.wav"));
+        assert_eq!(std::fs::read(&rawp).unwrap().len(), 44 + raw.len() * 2);
         let wav = std::fs::read(&p).unwrap();
         assert_eq!(&wav[0..4], b"RIFF");
         assert_eq!(&wav[8..12], b"WAVE");
