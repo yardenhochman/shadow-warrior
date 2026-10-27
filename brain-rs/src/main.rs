@@ -114,14 +114,18 @@ async fn main() -> Result<()> {
     ble_manager.start().await?;
     audio_manager.start().await?;
     audio_manager.clone().start_shout_clip_trigger();
-    if config.presence.enabled {
-        Arc::new(services::presence::PresenceService::new(
+    let presence_manual = if config.presence.enabled {
+        let svc = Arc::new(services::presence::PresenceService::new(
             config.presence.clone(),
             event_bus.clone(),
-        ))
-        .start(audio_manager.subscribe_features());
+        ));
+        let manual = svc.manual_sender();
+        svc.start(audio_manager.subscribe_features());
         info!("Presence service started");
-    }
+        Some(manual)
+    } else {
+        None
+    };
     wled_manager.start().await?;
     wled_manager.clone().start_event_loop();
     wled_manager.clone().spawn_cache_warmup();
@@ -170,6 +174,7 @@ async fn main() -> Result<()> {
         schedule: schedule_manager.clone(),
         health: health_registry.clone(),
         audio: audio_manager.clone(),
+        presence_manual,
     });
 
     let app = build_router(app_state);

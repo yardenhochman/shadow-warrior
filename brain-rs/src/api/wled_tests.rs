@@ -36,6 +36,7 @@ async fn state_with(ips: &[&str]) -> AppState {
         wled,
         schedule,
         audio: Arc::new(crate::services::AudioManager::new(config.audio.clone(), bus.clone())),
+        presence_manual: None,
     })
 }
 

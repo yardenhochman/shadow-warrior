@@ -6,23 +6,31 @@ use crate::models::{
     ApiResponse, GameTunables, PresenceRequest, PunchRequest, ShoutRequest, StateTransitionRequest,
 };
 
-/// POST /api/arena/presence - Trigger presence detection
+/// Apply a manual presence override. With the fusion service running, the
+/// override is applied to the fused state (single source of truth), which
+/// publishes `PresenceDetected` only if the state changes. Without the
+/// service (presence disabled) the event is published directly.
+fn set_presence(state: &AppState, detected: bool) {
+    match &state.presence_manual {
+        Some(tx) if tx.send(detected).is_ok() => {}
+        _ => state.event_bus.publish(Event::PresenceDetected { detected }),
+    }
+}
+
+/// POST /api/arena/presence - Manually set presence (routed through fusion;
+/// no event if it matches the fused state)
 pub async fn presence(
     State(state): State<AppState>,
     Json(payload): Json<PresenceRequest>,
 ) -> Json<ApiResponse<()>> {
-    state.event_bus.publish(Event::PresenceDetected {
-        detected: payload.detected,
-    });
+    set_presence(&state, payload.detected);
 
     Json(ApiResponse::<()>::ok())
 }
 
 /// POST /api/arena/suspend - Force suspend the arena
 pub async fn suspend(State(state): State<AppState>) -> Json<ApiResponse<()>> {
-    state.event_bus.publish(Event::PresenceDetected {
-        detected: false,
-    });
+    set_presence(&state, false);
 
     Json(ApiResponse::<()>::ok())
 }

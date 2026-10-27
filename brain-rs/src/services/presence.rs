@@ -12,6 +12,11 @@
 //! `presence.source_weights` entry. `ArenaManager` is untouched; it only sees
 //! `PresenceDetected`.
 //!
+//! Manual overrides (API) use [`PresenceService::manual_sender`] and are applied
+//! to the fusion, never published directly. On `ScheduleChanged{active:true}`
+//! the current state is re-published if present (the arena ignores presence
+//! while scheduled off).
+//!
 //! Hook: a YAMNet classifier (Speech/Laughter/Shout/Footsteps) can sit inside
 //! `MicSource::observe`, run only when the near-field gate passes, and scale
 //! the returned units by class confidence.
@@ -100,7 +105,6 @@ impl PresenceFusion {
         Self::default()
     }
 
-    #[cfg(test)]
     pub fn present(&self) -> bool {
         self.present
     }
@@ -136,6 +140,23 @@ impl PresenceFusion {
         None
     }
 
+    /// Operator override: force the fused state at `now`. Returns the new
+    /// state if it changed. Forcing present seeds the score and the leave
+    /// timer as if enough evidence had just arrived, so the normal leave
+    /// timeout applies afterwards.
+    pub fn force(&mut self, now: Duration, present: bool, cfg: &PresenceConfig) -> Option<bool> {
+        self.advance(now, cfg);
+        let changed = self.present != present;
+        self.present = present;
+        if present {
+            self.last_evidence = now;
+            self.score = cfg.enter_threshold;
+        } else {
+            self.score = 0.0;
+        }
+        changed.then_some(present)
+    }
+
     /// Advance time without evidence (call periodically). Returns the new
     /// state if it changed.
     pub fn tick(&mut self, now: Duration, cfg: &PresenceConfig) -> Option<bool> {
@@ -151,6 +172,38 @@ impl PresenceFusion {
     }
 }
 
+/// Inputs to one fusion step of the runtime loop.
+#[derive(Default)]
+struct Step {
+    evidence: Vec<Evidence>,
+    /// Manual override from the API (`Some(present)`).
+    force: Option<bool>,
+    /// The schedule just turned on.
+    schedule_resumed: bool,
+}
+
+/// Apply one step at `now`; returns the `PresenceDetected` values to publish,
+/// in order. Normally one per fused-state change. Additionally, when the
+/// schedule resumes while fused presence is "present", the current state is
+/// re-published: `ArenaManager` ignored the earlier event while scheduled off
+/// and nothing else would tell it a player is still there.
+fn step(fusion: &mut PresenceFusion, now: Duration, cfg: &PresenceConfig, s: Step) -> Vec<bool> {
+    let mut out = Vec::new();
+    for e in &s.evidence {
+        out.extend(fusion.add(now, e, cfg));
+    }
+    out.extend(fusion.tick(now, cfg));
+    if let Some(p) = s.force {
+        out.extend(fusion.force(now, p, cfg));
+    }
+    // A resume re-fire is only needed if this step did not already publish
+    // the (present) state itself.
+    if s.schedule_resumed && fusion.present() && out.last() != Some(&true) {
+        out.push(true);
+    }
+    out
+}
+
 /// Runtime glue. Owns the fusion and publishes `PresenceDetected` on changes.
 pub struct PresenceService {
     config: Arc<RwLock<PresenceConfig>>,
@@ -158,12 +211,17 @@ pub struct PresenceService {
     #[allow(dead_code)] // kept for evidence_sender (extra sensors not yet wired)
     tx: mpsc::UnboundedSender<Evidence>,
     rx: std::sync::Mutex<Option<mpsc::UnboundedReceiver<Evidence>>>,
+    manual_tx: mpsc::UnboundedSender<bool>,
+    manual_rx: std::sync::Mutex<Option<mpsc::UnboundedReceiver<bool>>>,
 }
 
 impl PresenceService {
     pub fn new(config: PresenceConfig, event_bus: SharedEventBus) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
+        let (manual_tx, manual_rx) = mpsc::unbounded_channel();
         Self {
+            manual_tx,
+            manual_rx: std::sync::Mutex::new(Some(manual_rx)),
             config: Arc::new(RwLock::new(config)),
             event_bus,
             tx,
@@ -177,6 +235,14 @@ impl PresenceService {
         self.tx.clone()
     }
 
+    /// Handle for manual (API) presence overrides: `true` = force present,
+    /// `false` = force absent. The override goes through the fusion, so the
+    /// fused state stays the single source of truth and `PresenceDetected` is
+    /// published only if the state actually changes.
+    pub fn manual_sender(&self) -> mpsc::UnboundedSender<bool> {
+        self.manual_tx.clone()
+    }
+
     /// Spawn the service. `features` is `AudioManager::subscribe_features()`.
     /// Call once.
     pub fn start(
@@ -184,6 +250,9 @@ impl PresenceService {
         mut features: tokio::sync::watch::Receiver<Option<FrameFeatures>>,
     ) {
         let Some(mut ev_rx) = self.rx.lock().ok().and_then(|mut g| g.take()) else { return };
+        let Some(mut manual_rx) = self.manual_rx.lock().ok().and_then(|mut g| g.take()) else {
+            return;
+        };
         let mut bus_rx = self.event_bus.subscribe();
         tokio::spawn(async move {
             let epoch = tokio::time::Instant::now();
@@ -194,7 +263,7 @@ impl PresenceService {
             let mut ticker = tokio::time::interval(Duration::from_millis(250));
             let mut features_open = true;
             loop {
-                let mut evidence: Vec<Evidence> = Vec::new();
+                let mut st = Step::default();
                 let cfg = self.config.read().await.clone();
                 tokio::select! {
                     r = features.changed(), if features_open => {
@@ -210,30 +279,26 @@ impl PresenceService {
                         };
                         last_index = Some(f.index);
                         if let Some(u) = mic.observe(&f, &cfg) {
-                            evidence.push(Evidence { source: mic.name(), units: u * missed as f32 });
+                            st.evidence.push(Evidence { source: mic.name(), units: u * missed as f32 });
                         }
                     }
                     r = bus_rx.recv() => {
                         match r {
                             Ok(Event::PunchDetected { power, .. }) => {
                                 if let Some(u) = punch.observe(&power, &cfg) {
-                                    evidence.push(Evidence { source: punch.name(), units: u });
+                                    st.evidence.push(Evidence { source: punch.name(), units: u });
                                 }
                             }
+                            Ok(Event::ScheduleChanged { active: true }) => st.schedule_resumed = true,
                             Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                             _ => {}
                         }
                     }
-                    Some(e) = ev_rx.recv() => evidence.push(e),
+                    Some(e) = ev_rx.recv() => st.evidence.push(e),
+                    Some(p) = manual_rx.recv() => st.force = Some(p),
                     _ = ticker.tick() => {}
                 }
-                let now = epoch.elapsed();
-                let mut change = None;
-                for e in &evidence {
-                    change = fusion.add(now, e, &cfg).or(change);
-                }
-                change = fusion.tick(now, &cfg).or(change);
-                if let Some(detected) = change {
+                for detected in step(&mut fusion, epoch.elapsed(), &cfg, st) {
                     info!("Fused presence -> {detected}");
                     self.event_bus.publish(Event::PresenceDetected { detected });
                 }
@@ -462,5 +527,116 @@ mod tests {
         assert_eq!(c.leave_timeout_sec, 12.0);
         assert_eq!(c.enter_threshold, 1.0);
         assert_eq!(c.source_weights.get("punch"), Some(&1.0));
+    }
+
+    fn punch() -> Evidence {
+        Evidence { source: SOURCE_PUNCH, units: 1.0 }
+    }
+
+    fn secs(s: u64) -> Duration {
+        Duration::from_secs(s)
+    }
+
+    fn ev(e: Evidence) -> Step {
+        Step { evidence: vec![e], ..Default::default() }
+    }
+
+    fn force(p: bool) -> Step {
+        Step { force: Some(p), ..Default::default() }
+    }
+
+    fn resume() -> Step {
+        Step { schedule_resumed: true, ..Default::default() }
+    }
+
+    #[test]
+    fn resume_refires_when_present() {
+        let c = cfg();
+        let mut f = PresenceFusion::new();
+        assert_eq!(step(&mut f, secs(0), &c, ev(punch())), vec![true]);
+        assert_eq!(step(&mut f, secs(5), &c, resume()), vec![true]);
+    }
+
+    #[test]
+    fn resume_does_not_refire_when_absent() {
+        let c = cfg();
+        let mut f = PresenceFusion::new();
+        assert!(step(&mut f, secs(0), &c, resume()).is_empty());
+        // Left, then resume: still nothing.
+        step(&mut f, secs(1), &c, ev(punch()));
+        assert_eq!(step(&mut f, secs(1000), &c, Step::default()), vec![false]);
+        assert!(step(&mut f, secs(1001), &c, resume()).is_empty());
+    }
+
+    #[test]
+    fn resume_in_same_step_as_enter_publishes_once() {
+        let c = cfg();
+        let mut f = PresenceFusion::new();
+        let s = Step { evidence: vec![punch()], schedule_resumed: true, ..Default::default() };
+        assert_eq!(step(&mut f, secs(0), &c, s), vec![true]);
+    }
+
+    #[test]
+    fn manual_force_consistent_with_fusion() {
+        let c = cfg();
+        let mut f = PresenceFusion::new();
+        // Manual absent while already absent: no event.
+        assert!(step(&mut f, secs(0), &c, force(false)).is_empty());
+        // Manual present: one event, fused state present.
+        assert_eq!(step(&mut f, secs(1), &c, force(true)), vec![true]);
+        assert!(f.present());
+        // Repeated manual present and real evidence: no duplicate events.
+        assert!(step(&mut f, secs(2), &c, force(true)).is_empty());
+        assert!(step(&mut f, secs(3), &c, ev(punch())).is_empty());
+        // Manual left: one event, stays absent without evidence.
+        assert_eq!(step(&mut f, secs(4), &c, force(false)), vec![false]);
+        assert!(!f.present());
+        assert!(step(&mut f, secs(5), &c, Step::default()).is_empty());
+        // Forced present then leaves via the normal leave timer.
+        step(&mut f, secs(10), &c, force(true));
+        let later = secs(10) + Duration::from_secs_f32(c.leave_timeout_sec);
+        assert_eq!(step(&mut f, later, &c, Step::default()), vec![false]);
+    }
+
+    #[test]
+    fn manual_present_while_scheduled_off_refires_on_resume() {
+        let c = cfg();
+        let mut f = PresenceFusion::new();
+        step(&mut f, secs(0), &c, force(true));
+        assert_eq!(step(&mut f, secs(10), &c, resume()), vec![true]);
+    }
+
+    fn drain(rx: &mut tokio::sync::broadcast::Receiver<Event>) -> Vec<bool> {
+        let mut v = vec![];
+        while let Ok(e) = rx.try_recv() {
+            if let Event::PresenceDetected { detected } = e {
+                v.push(detected);
+            }
+        }
+        v
+    }
+
+    #[tokio::test]
+    async fn service_routes_manual_and_resume_through_fusion() {
+        use crate::core::EventBus;
+        let bus = Arc::new(EventBus::new(64));
+        let mut rx = bus.subscribe();
+        let svc = Arc::new(PresenceService::new(cfg(), bus.clone()));
+        let manual = svc.manual_sender();
+        let (_ftx, frx) = tokio::sync::watch::channel(None);
+        svc.start(frx);
+        let settle = || tokio::time::sleep(Duration::from_millis(100));
+        manual.send(true).unwrap();
+        settle().await;
+        assert_eq!(drain(&mut rx), vec![true]);
+        bus.publish(Event::ScheduleChanged { active: true });
+        settle().await;
+        assert_eq!(drain(&mut rx), vec![true]);
+        manual.send(false).unwrap();
+        settle().await;
+        assert_eq!(drain(&mut rx), vec![false]);
+        bus.publish(Event::ScheduleChanged { active: true });
+        settle().await;
+        assert!(drain(&mut rx).is_empty());
     }
 }

@@ -38,6 +38,9 @@ pub struct SharedState {
     pub schedule: Arc<crate::services::schedule_manager::ScheduleManager>,
     pub health: Arc<crate::core::status_registry::StatusRegistry>,
     pub audio: Arc<crate::services::audio_manager::AudioManager>,
+    /// Manual presence overrides into the fusion service (None when the
+    /// presence service is disabled).
+    pub presence_manual: Option<UnboundedSender<bool>>,
 }
 
 /// GET /api/state - Get complete brain state
