@@ -97,9 +97,11 @@ device within tens of meters, through walls. Two flags control exposure:
   without pairing): anyone in range can then read, and a warning is logged.
   Note bluer has no security flag on notifications; verify on hardware that an
   unpaired client cannot subscribe.
-- `expose_activity` (default `false`): with `false` only coarse game state,
-  the schedule-active flag and per-device connected/stale are published. With
-  `true` the summary also carries presence, uptime, energy %, remaining fight
+- `expose_activity` (default `false`): with `false` only `on` or `suspended`
+  (the exact arena state is hidden, since warming/fight/cooldown reveal that
+  someone is in the arena), the schedule-active flag and per-device
+  connected/stale are published. With `true` the exact state is published and
+  the summary also carries presence, uptime, energy %, remaining fight
   time, punches, max power and total sessions, which reveal occupancy and
   activity patterns.
 

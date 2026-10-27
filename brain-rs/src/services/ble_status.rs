@@ -18,7 +18,8 @@
 //! Privacy: the BLE link is reachable by anyone within tens of meters, so
 //! (a) device names (IPs, user labels) never leave the process, only opaque
 //! ids from [`assign_ids`]; (b) occupancy/activity data (presence, uptime,
-//! energy, fight stats) is only encoded when `expose_activity` is set; (c)
+//! energy, fight stats, and the exact arena state, which is collapsed to
+//! `on`/`suspended`) is only encoded when `expose_activity` is set; (c)
 //! `require_encryption` makes BlueZ demand an encrypted link for reads.
 //!
 //! Hook for later: a writable control characteristic can be added next to
@@ -155,7 +156,7 @@ impl Changed {
 }
 
 pub fn encode(s: &StatusSnapshot, expose_activity: bool) -> Encoded {
-    Encoded { state: encode_state(s), summary: encode_summary(s, expose_activity), health: encode_health(&s.devices) }
+    Encoded { state: encode_state(s, expose_activity), summary: encode_summary(s, expose_activity), health: encode_health(&s.devices) }
 }
 
 pub fn diff(prev: Option<&Encoded>, new: &Encoded) -> Changed {
@@ -169,12 +170,21 @@ pub fn diff(prev: Option<&Encoded>, new: &Encoded) -> Changed {
     }
 }
 
-pub fn encode_state(s: &StatusSnapshot) -> Vec<u8> {
+/// The state label that may go over BLE. The exact arena state (warming, fight,
+/// cooldown) reveals whether someone is in the arena, so unless `expose_activity`
+/// is set everything except `suspended` and `unknown` collapses to `on`.
+fn public_state(s: &StatusSnapshot, expose_activity: bool) -> &str {
     if s.state.is_empty() {
-        b"unknown".to_vec()
-    } else {
-        s.state.as_bytes().to_vec()
+        return "unknown";
     }
+    if expose_activity || s.state.eq_ignore_ascii_case("suspended") {
+        return s.state.as_str();
+    }
+    "on"
+}
+
+pub fn encode_state(s: &StatusSnapshot, expose_activity: bool) -> Vec<u8> {
+    public_state(s, expose_activity).as_bytes().to_vec()
 }
 
 /// Health bitmap: byte 0 = device count (clamped to [`MAX_HEALTH_DEVICES`]),
@@ -231,7 +241,7 @@ struct Summary<'a> {
 ///
 /// The counts `dc`/`dn`/`ds` (connected/total/stale) are kept in steps 1-2.
 pub fn encode_summary(s: &StatusSnapshot, expose_activity: bool) -> Vec<u8> {
-    let state = if s.state.is_empty() { "unknown" } else { s.state.as_str() };
+    let state = public_state(s, expose_activity);
     let ids = assign_ids(&s.devices);
     let act = expose_activity;
     let mut sum = Summary {
@@ -388,8 +398,24 @@ mod tests {
 
     #[test]
     fn state_bytes() {
-        assert_eq!(encode_state(&snap()), b"fight");
-        assert_eq!(encode_state(&StatusSnapshot::default()), b"unknown");
+        assert_eq!(encode_state(&snap(), true), b"fight");
+        assert_eq!(encode_state(&StatusSnapshot::default(), true), b"unknown");
+        assert_eq!(encode_state(&StatusSnapshot::default(), false), b"unknown");
+    }
+
+    #[test]
+    fn privacy_mode_collapses_arena_state() {
+        for st in ["idle", "warming", "fight", "cooldown", "Fight"] {
+            let mut x = snap();
+            x.state = st.into();
+            assert_eq!(encode_state(&x, false), b"on", "{st}");
+            let v: serde_json::Value = serde_json::from_slice(&encode_summary(&x, false)).unwrap();
+            assert_eq!(v["s"], "on", "{st}");
+        }
+        let mut x = snap();
+        x.state = "suspended".into();
+        assert_eq!(encode_state(&x, false), b"suspended");
+        assert_eq!(encode_state(&x, true), b"suspended");
     }
 
     #[test]
@@ -563,7 +589,7 @@ mod tests {
         for k in ["e", "rem", "p", "pr", "mp", "ts", "up"] {
             assert!(v.get(k).is_none(), "{k} leaked");
         }
-        assert_eq!(v["s"], "fight");
+        assert_eq!(v["s"], "on");
         assert_eq!(v["sch"], 1);
         assert_eq!(v["dc"], 2);
         assert_eq!(v["d"][1]["n"], "audio");

@@ -44,8 +44,8 @@ ble_status:
   # Pair the owner's phone out of band (bluetoothctl) and leave this true.
   # false = anyone in range can read (debug with nRF Connect only; logs a warning).
   require_encryption: true
-  # false: only coarse state, schedule-active and per-device connected/stale are sent.
-  # true also publishes presence, uptime, energy %, fight stats (occupancy/activity leak).
+  # false: only on/suspended (exact arena state hidden), schedule-active and per-device connected/stale are sent.
+  # true also publishes exact arena state, presence, uptime, energy %, fight stats (occupancy/activity leak).
   expose_activity: false
   # Devices appear only as opaque ids (ble, audio, music, wled0, tasmota1...); never IPs/labels.
 
