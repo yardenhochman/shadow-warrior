@@ -33,13 +33,14 @@ are both clean). **"Tested" means synthetic signals and mock HTTP servers, not r
 | Arena game logic | `services/arena_manager.rs` | state flow, energy bar, fight timers |
 | Audio front-end | `services/audio_frontend.rs` (+ `ring`, `clip`) | band-pass/anti-alias, noise floor, frame features, ring buffer, clip recorder (WAV + JSON) |
 | Audio capture | `services/audio_manager.rs` | cpal mic -> front-end -> features channel |
+| Data collection | `services/session_recorder.rs`, clip recorder | raw + processed clips; long sessions as rotating raw WAV chunks + per-frame feature log (JSONL); disk and duration guards |
 | Shout detection | `services/shout_detector.rs` | VAD-gated, dB-above-floor, pitch/spectral checks, playback-aware margin, <300 ms in frame counts |
 | Presence | `services/presence.rs` | fused evidence (mic + punches, pluggable `PresenceSource`), enter/leave hysteresis; re-fires on schedule resume; manual API goes through fusion |
 | Schedule | `services/schedule_manager.rs` | daily windows (local time, optional days, overnight), persisted in SQLite |
 | Music | `services/music_manager.rs` | rodio playlist, gapless queue-ahead advance |
 | WLED | `services/wled_manager.rs` (+ `protocol`) | HTTP effects/palettes with device name resolution + cache, UDP realtime |
 | Tasmota | `services/tasmota_manager.rs` | per-state plug mapping (`on_states`), concurrent, retry once |
-| BLE punching bag | `services/ble_manager.rs` | Nordic UART via btleplug |
+| BLE punching bag | `services/ble_manager.rs` | Nordic UART via btleplug; optional `ble.adapter` to pick the BlueZ adapter |
 | Discovery / devices | `services/discovery_manager.rs`, `database_manager.rs` | SQLite devices + settings tables |
 | Web dashboard | `src/web/` | state, energy bar, stats, hardware, controls, schedule editor, lights (WLED) tab, shout tunables, clip recording, device health |
 
@@ -50,7 +51,7 @@ Arena: `POST /api/arena/{presence,suspend,shout,punch,state,reset_stats}`,
 `GET|POST /api/arena/config`.
 Schedule: `GET|POST /api/schedule`.
 WLED: `GET /api/wled/{effects,palettes}`, `POST /api/wled/effect`.
-Audio: `POST /api/audio/clip` (on-demand clip recording).
+Audio: `POST /api/audio/clip` (on-demand clip, optional raw), `POST /api/audio/record/{start,stop}`, `GET /api/audio/record/status` (long sessions).
 Devices: `POST /api/discovery/scan`, `GET|POST /api/devices`, `POST /api/devices/:id`.
 
 ## Not verified on real hardware
