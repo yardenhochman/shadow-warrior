@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#07070c">
+  <title>Shadow Warrior - arena simulator</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">SHADOW <span>WARRIOR</span><small>arena simulator</small></div>
+    <div class="states" id="stateChips" aria-label="arena state">
+      <span data-s="SUSPENDED">SUSP</span><span data-s="IDLE">IDLE</span><span data-s="WARMING">WARM</span><span data-s="FIGHT">FIGHT</span><span data-s="COOLDOWN">COOL</span>
+    </div>
+    <div class="topbtns">
+      <button id="micBtn" class="btn small" title="Use the microphone for shout detection">Enable mic</button>
+      <button id="soundBtn" class="btn small" title="Sound effects and fight music">Sound on</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="stage">
+      <div class="sceneWrap">
+        <canvas id="scene" aria-label="Arena: tap the bag to punch"></canvas>
+        <div class="stateTag" id="stateTag">IDLE</div>
+      </div>
+      <div class="controls">
+        <label class="toggle big" title="P: simulated presence sensor (sim proposal); mic and punches also count">
+          <input type="checkbox" id="presenceToggle"><span class="sw"></span><span>Someone in arena <kbd>P</kbd></span>
+        </label>
+        <button id="shoutBtn" class="btn shout" title="Hold to shout (synthetic frames through the ported detector)">SHOUT <kbd>S</kbd></button>
+        <div class="punches">
+          <button class="btn punch" data-power="25">Jab <kbd>J</kbd></button>
+          <button class="btn punch" data-power="55">Hook <kbd>K</kbd></button>
+          <button class="btn punch heavy" data-power="90">Heavy <kbd>L</kbd></button>
+        </div>
+        <div class="hint">Tap/click the arena to punch; hold to charge (or hold <kbd>Space</kbd>).</div>
+      </div>
+      <div class="panel strips">
+        <div class="panelHead">
+          <h2>LED columns</h2>
+          <select id="ledMode" aria-label="LED effect source">
+            <option value="brain-rs">brain-rs effects (config.yaml)</option>
+            <option value="proposal">Sim proposal effects</option>
+          </select>
+        </div>
+        <div class="effectLabel" id="effectLabel"></div>
+        <canvas id="strips" aria-label="Per-LED view of the four columns"></canvas>
+      </div>
+    </section>
+
+    <aside class="side">
+      <div class="panel">
+        <h2>Arena</h2>
+        <div class="kv">
+          <div><span>State</span><b id="stState">-</b></div>
+          <div><span>In state</span><b id="stTime">-</b></div>
+          <div><span>Presence</span><b id="stPresence">-</b></div>
+          <div><span>Sessions</span><b id="stSessions">0</b></div>
+        </div>
+        <div class="meter"><label>Presence evidence <em id="presVal"></em></label><div class="bar"><i id="presBar"></i><s id="presThr"></s></div></div>
+        <div class="meter"><label>Energy <em id="energyVal">-</em></label><div class="bar energy"><i id="energyBar"></i></div></div>
+        <div class="kv" id="fightKv">
+          <div><span>Fight left</span><b id="fightLeft">-</b></div>
+          <div><span>No punch for</span><b id="inactive">-</b></div>
+          <div><span>Punches</span><b id="punches">0</b></div>
+          <div><span>Max power</span><b id="maxPower">0</b></div>
+          <div><span>Cooldown left</span><b id="coolLeft">-</b></div>
+          <div><span>Shadow KOs</span><b id="kos">0</b></div>
+        </div>
+        <div class="row">
+          <button class="btn small" id="forceAbsent" title="API override: PresenceFusion::force(false)">Force absent</button>
+          <button class="btn small" id="forcePresent" title="API override: PresenceFusion::force(true)">Force present</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panelHead"><h2>Shout detector</h2><span class="micStatus" id="micStatus">synthetic frames</span></div>
+        <div class="meter"><label>Band level <em id="lvlVal"></em></label>
+          <div class="bar level"><i id="lvlBar"></i><s id="floorMark" title="noise floor"></s><s id="marginMark" class="margin" title="floor + margin"></s></div>
+        </div>
+        <div class="meter"><label>VAD (proxy) <em id="vadVal"></em></label><div class="bar"><i id="vadBar"></i><s id="vadThr"></s></div></div>
+        <div class="checks" id="checks">
+          <span data-k="gate">VAD gate</span><span data-k="loud">margin</span>
+          <span data-k="voiced">voiced</span><span data-k="centroid">centroid</span><span data-k="tilt">tilt</span><span data-k="flatness">flatness</span>
+        </div>
+        <div class="featVals" id="featVals"></div>
+        <div class="meter"><label>Score <em id="scoreVal"></em></label><div class="bar score"><i id="scoreBar"></i><s id="scoreThr"></s></div></div>
+        <div class="meter"><label>Sustained <em id="runVal"></em></label><div class="bar"><i id="runBar"></i><s id="runThr"></s></div></div>
+        <div class="shoutFlash" id="shoutFlash">SHOUT DETECTED</div>
+        <div class="row"><button class="btn small" id="resetFloor">Reset noise floor</button></div>
+      </div>
+
+      <div class="panel">
+        <div class="panelHead"><h2>Tunables</h2>
+          <div class="row tight"><button class="btn small" id="exportBtn">Export YAML</button><button class="btn small ghost" id="resetBtn">Reset</button></div>
+        </div>
+        <div id="yamlBox" class="yamlBox" hidden>
+          <textarea id="yamlOut" readonly rows="8" aria-label="YAML export"></textarea>
+          <button class="btn small" id="copyYaml">Copy</button>
+        </div>
+        <details class="fid" open>
+          <summary>brain-rs fidelity</summary>
+          <label class="toggle"><input type="checkbox" id="fixInactivity"><span class="sw"></span><span>Fix: reset inactivity timer when FIGHT starts</span></label>
+          <label class="toggle"><input type="checkbox" id="fixRearm"><span class="sw"></span><span>Fix: re-arm WARMING when presence persists (IDLE)</span></label>
+          <label class="toggle"><input type="checkbox" id="koEnds"><span class="sw"></span><span>Proposal: knocking out the shadow ends the fight</span></label>
+          <label class="toggle"><input type="checkbox" id="musicPlayback" checked><span class="sw"></span><span>Music in FIGHT sets playback_active</span></label>
+          <p class="note">Unticked fixes reproduce brain-rs as written (see README).</p>
+        </details>
+        <div id="tunables"></div>
+      </div>
+
+      <div class="panel">
+        <div class="panelHead"><h2>Event log</h2><button class="btn small ghost" id="clearLog">Clear</button></div>
+        <ol class="log" id="log"></ol>
+      </div>
+    </aside>
+  </main>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
