@@ -89,28 +89,11 @@ impl WledManager {
         
         *self.controllers.write().await = loaded_controllers.clone();
 
-        // Create UDP sockets for each controller
-        let mut sockets = Vec::new();
-        for controller in &loaded_controllers {
-            match UdpSocket::bind("0.0.0.0:0") {
-                Ok(socket) => {
-                    socket.set_nonblocking(true)?;
-                    let addr = format!("{}:21324", controller.ip);
-                    socket.connect(&addr)?;
-                    info!("UDP socket connected to {}", addr);
-                    sockets.push(socket);
-                }
-                Err(e) => {
-                    error!("Failed to create UDP socket for {}: {}", controller.ip, e);
-                }
-            }
-        }
-
-        *self.udp_sockets.write().await = sockets;
-
-        Ok(())
+        // Offline-tolerant: an unreachable/unresolvable controller is skipped
+        // (and retried by the health poll / discovery), never fatal at startup.
+        self.rebuild_sockets().await
     }
-    
+
     pub async fn get_status(&self) -> Vec<WledStatus> {
         let controllers = self.controllers.read().await;
         let socket_count = self.udp_sockets.read().await.len();
@@ -220,10 +203,17 @@ impl WledManager {
         for controller in controllers.iter() {
             match std::net::UdpSocket::bind("0.0.0.0:0") {
                 Ok(socket) => {
-                    socket.set_nonblocking(true)?;
+                    if let Err(e) = socket.set_nonblocking(true) {
+                        warn!("UDP socket for {} not usable: {}", controller.ip, e);
+                        continue;
+                    }
                     let addr = format!("{}:21324", controller.ip);
-                    if let Ok(()) = socket.connect(&addr) {
-                        sockets.push(socket);
+                    match socket.connect(&addr) {
+                        Ok(()) => {
+                            info!("UDP socket connected to {}", addr);
+                            sockets.push(socket);
+                        }
+                        Err(e) => warn!("UDP connect to {} failed (offline?): {}", addr, e),
                     }
                 }
                 Err(e) => {
@@ -522,6 +512,17 @@ impl WledManager {
         });
     }
 
+    /// Rebuild UDP sockets if some controller has none (it was unreachable or
+    /// unresolvable at startup and is reachable now).
+    async fn ensure_sockets(&self) {
+        let missing = self.udp_sockets.read().await.len() < self.controllers.read().await.len();
+        if missing {
+            if let Err(e) = self.rebuild_sockets().await {
+                warn!("WLED socket rebuild failed: {}", e);
+            }
+        }
+    }
+
     /// Subscribe to StateChanged and WledConnected events.
     pub fn start_event_loop(self: Arc<Self>) {
         let mut event_rx = self.event_bus.subscribe();
@@ -540,6 +541,7 @@ impl WledManager {
                         if let Err(e) = self.add_controller(ip).await {
                             error!("WLED add_controller error: {}", e);
                         }
+                        self.ensure_sockets().await;
                     }
                     Err(e) => {
                         warn!("WLED event bus error: {}", e);
@@ -683,5 +685,35 @@ mod tests {
         routes.lock().await.insert("GET /json/info".into(), (200, "{}".into()));
         wled.poll_health_once().await;
         assert!(wait_connected(&reg, &addr, true).await);
+    }
+
+    /// No network / bad host must not abort startup.
+    #[tokio::test]
+    async fn start_survives_unconnectable_controller() {
+        let mut config = Config::default();
+        config.wled.controllers = vec![crate::config::WledController {
+            ip: "no-such-host.invalid".into(),
+            num_leds: 10,
+        }];
+        let db = Arc::new(DatabaseManager::new("sqlite::memory:").await.unwrap());
+        let bus: SharedEventBus = Arc::new(EventBus::new(100));
+        let wled = WledManager::new(config.wled.clone(), db, bus);
+        wled.start().await.expect("start must not fail offline");
+        assert_eq!(wled.get_status().await.len(), 1);
+        assert!(!wled.get_status().await[0].connected);
+    }
+
+    /// A controller without a UDP socket (skipped at boot) gets one once it is
+    /// seen alive again.
+    #[tokio::test]
+    async fn ensure_sockets_recovers_missing_socket() {
+        let config = Config::default();
+        let db = Arc::new(DatabaseManager::new("sqlite::memory:").await.unwrap());
+        let bus: SharedEventBus = Arc::new(EventBus::new(100));
+        let wled = WledManager::new(config.wled.clone(), db, bus);
+        wled.set_controllers_for_test(&["127.0.0.1"]).await;
+        assert!(!wled.get_status().await[0].connected);
+        wled.ensure_sockets().await;
+        assert!(wled.get_status().await[0].connected);
     }
 }

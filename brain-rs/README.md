@@ -108,6 +108,38 @@ device within tens of meters, through walls. Two flags control exposure:
 Devices are identified only by opaque ids (`ble`, `audio`, `music`, `wled0`,
 `tasmota1`, ... by sorted order); IPs and user labels are never sent over BLE.
 
+## Networking and offline operation
+
+The arena must work with no internet and with the venue WiFi absent. The brain
+only needs a local network to reach the WLED controllers, Tasmota plugs and
+dashboard clients; BLE (punching bag, speakers) and the microphone do not use it.
+
+**Provisioning (OS configuration, not part of the brain):**
+
+- Run a dedicated 2.4 GHz access point for the arena (WLED/Tasmota ESPs are
+  2.4 GHz only). Pin it to channel 1, 6 or 11 (no auto channel) to avoid
+  channel hopping that drops the ESPs.
+- Connect the brain over ethernet, and have the AP bridge/route to it (a router
+  with DHCP reservations is simplest). Give WLED controllers and plugs fixed
+  addresses or DHCP reservations, since `config.yaml` refers to them by IP.
+- The server listens on `0.0.0.0:<server.port>`, so the dashboard is reachable
+  from any client on the arena network.
+
+**Behaviour when the network is missing or flaky:**
+
+- Startup never waits on the network. An unreachable or unresolvable WLED
+  controller is skipped with a warning (`wled_manager::start`); the BLE manager
+  retries every `ble.retry_interval_sec`; Tasmota calls use short timeouts and
+  one retry and never block the state machine.
+- A 30 s `GET /json/info` poll keeps WLED health current while idle: three
+  consecutive failures mark a controller disconnected (`WledDisconnected`),
+  and the next success reconnects it. A controller skipped at boot gets its
+  UDP realtime socket created once the poll sees it alive.
+- The punching bag link is probed every `ble.retry_interval_sec`; a dropped
+  bag is detected, reconnected and has fight mode restored.
+- Device health, including `stale`, is exposed under `hardware` in
+  `GET /api/state`.
+
 ## Development
 
 ### System dependencies
