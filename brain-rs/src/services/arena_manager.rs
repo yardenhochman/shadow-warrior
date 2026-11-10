@@ -110,6 +110,7 @@ impl ArenaManager {
             state_machine: self.state_machine.clone(),
             energy_bar: self.energy_bar.clone(),
             fight_started_at: self.fight_started_at.clone(),
+            last_activity_at: self.last_activity_at.clone(),
             total_sessions: self.total_sessions.clone(),
             current_session_punches: self.current_session_punches.clone(),
             current_session_max_power: self.current_session_max_power.clone(),
@@ -438,6 +439,7 @@ struct ArenaStateHook {
     state_machine: Arc<StateMachine>,
     energy_bar: Arc<RwLock<Option<EnergyBar>>>,
     fight_started_at: Arc<RwLock<Option<DateTime<Utc>>>>,
+    last_activity_at: Arc<RwLock<DateTime<Utc>>>,
     total_sessions: Arc<RwLock<u64>>,
     current_session_punches: Arc<RwLock<u32>>,
     current_session_max_power: Arc<RwLock<f32>>,
@@ -470,7 +472,11 @@ impl StateHook for ArenaStateHook {
                 *self.energy_bar.write().await = Some(energy_bar);
             }
             ArenaState::Fight => {
-                *self.fight_started_at.write().await = Some(Utc::now());
+                let now = Utc::now();
+                *self.fight_started_at.write().await = Some(now);
+                // Inactivity clock starts with the fight, not at the last punch of
+                // a previous fight (or process start), or the fight ends in 1s.
+                *self.last_activity_at.write().await = now;
                 *self.current_session_punches.write().await = 0;
                 *self.current_session_max_power.write().await = 0.0;
                 *self.total_sessions.write().await += 1;
