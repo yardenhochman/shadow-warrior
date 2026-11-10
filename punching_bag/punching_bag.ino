@@ -3,10 +3,11 @@
  * Hardware: Seeed Studio XIAO Sense
  * Libraries required:
  * - Bluefruit52Lib (from Seeed nRF52 core)
- * - Adafruit_LSM6DS3 (or similar for LSM6DS3)
+ * - Seeed Arduino LSM6DS3 (vendor driver; the Adafruit driver hangs on the
+ *   Sense IMU bus)
  */
 
-#include <Adafruit_LSM6DS3.h>
+#include <LSM6DS3.h>
 #include <bluefruit.h>
 #include <Wire.h>
 #include <string.h>
@@ -32,7 +33,9 @@ const int BLE_TX_POWER = 0;
 const char *BLE_DEVICE_NAME = "ShadowWarriorPunchingBag";
 
 // IMU Instance
-Adafruit_LSM6DS3 imu;
+LSM6DS3 imu(I2C_MODE, 0x6A);
+const float G_TO_MS2 = 9.80665f;      // keep m/s^2 units for accel
+const float DPS_TO_RADS = 0.0174533f;  // keep rad/s units for gyro
 
 // Configuration Variables
 float accelerationAlpha = 0.8f;
@@ -42,8 +45,9 @@ float emaAcceleration = 0.0f;
 
 
 
-// IMU is always powered on for XIAO nRF52840 Plus
-const int IMU_PWR_PIN = -1; // No power pin control
+// XIAO nRF52840 Sense: the LSM6DS3TR-C sits on the internal Wire1 bus (0x6A)
+// and is only powered while PIN_LSM6DS3TR_C_POWER is driven high.
+const int IMU_PWR_PIN = PIN_LSM6DS3TR_C_POWER;
 
 void connectCallback(uint16_t connHandle) {
   BLEConnection *connection = Bluefruit.Connection(connHandle);
@@ -57,6 +61,9 @@ void connectCallback(uint16_t connHandle) {
   Serial.println(centralName);
 }
 
+// -1 = no request, 0 = stop, 1 = start (set by BLE callback, handled in loop)
+volatile int8_t pendingFightMode = -1;
+
 void stopFightMode() {
   if (!fightMode) {
     return;
@@ -64,6 +71,7 @@ void stopFightMode() {
 
   fightMode = false;
   fightModeCharacteristic.write8(0);
+  digitalWrite(IMU_PWR_PIN, LOW); // save power while idle
   Serial.println("Fight mode: OFF");
 }
 
@@ -72,12 +80,16 @@ void startFightMode() {
     return;
   }
 
-  if (!imu.begin_I2C()) {
+  // imu.begin() powers the IMU via PIN_LSM6DS3TR_C_POWER and inits Wire1.
+  if (imu.begin() != 0) {
     Serial.println("IMU Initialization failed!");
+    digitalWrite(IMU_PWR_PIN, LOW);
     fightModeCharacteristic.write8(0);
     return;
   }
 
+  delay(100); // first samples after power-up are not ready (read as ~0)
+  emaAcceleration = 0.0f;
   fightMode = true;
   fightModeCharacteristic.write8(1);
   Serial.println("Fight mode: ON");
@@ -124,12 +136,8 @@ void fightModeWriteCallback(uint16_t connHandle, BLECharacteristic *chr,
     return;
   }
 
-  bool enable = data[0] != 0;
-  if (enable) {
-    startFightMode();
-  } else {
-    stopFightMode();
-  }
+  // Runs in the BLE stack context: no I2C or delay() here. loop() applies it.
+  pendingFightMode = data[0] != 0 ? 1 : 0;
 }
 
 void startAdvertising() {
@@ -199,6 +207,15 @@ void setup() {
 }
 
 void loop() {
+  int8_t req = pendingFightMode;
+  if (req >= 0) {
+    pendingFightMode = -1;
+    if (req == 1) {
+      startFightMode();
+    } else {
+      stopFightMode();
+    }
+  }
   if (fightMode && Bluefruit.connected()) {
     processImuData();
   } else {
@@ -207,14 +224,14 @@ void loop() {
 }
 
 void processImuData() {
-  sensors_event_t accel, gyro, temp;
-  imu.getEvent(&accel, &gyro, &temp);
-
-  float ax = accel.acceleration.x;
-  float ay = accel.acceleration.y;
-  float az = accel.acceleration.z;
+  float ax = imu.readFloatAccelX() * G_TO_MS2;
+  float ay = imu.readFloatAccelY() * G_TO_MS2;
+  float az = imu.readFloatAccelZ() * G_TO_MS2;
 
   float currentAccelTotal = sqrt(ax * ax + ay * ay + az * az);
+  // Remove gravity: only deviation from 1 g counts, so a bag at rest reads ~0
+  // and thresholds are in m/s^2 of real motion.
+  currentAccelTotal = fabsf(currentAccelTotal - G_TO_MS2);
 
   // Exponential Moving Average
   emaAcceleration = (accelerationAlpha * currentAccelTotal) +
@@ -224,9 +241,9 @@ void processImuData() {
     accelCharacteristic.notify32(emaAcceleration);
 
     // Also send raw gyro data if needed
-    float gx = gyro.gyro.x;
-    float gy = gyro.gyro.y;
-    float gz = gyro.gyro.z;
+    float gx = imu.readFloatGyroX() * DPS_TO_RADS;
+    float gy = imu.readFloatGyroY() * DPS_TO_RADS;
+    float gz = imu.readFloatGyroZ() * DPS_TO_RADS;
     float gyroData[3] = {gx, gy, gz};
     gyroCharacteristic.notify((uint8_t *)gyroData, 12);
 
