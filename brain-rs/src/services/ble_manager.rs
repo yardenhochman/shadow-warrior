@@ -25,6 +25,9 @@ pub struct BleManager {
     config: Arc<RwLock<BleConfig>>,
     event_bus: SharedEventBus,
     peripheral: Arc<RwLock<Option<Peripheral>>>,
+    /// Keeps the btleplug Manager/Adapter (and its event loop) alive while connected;
+    /// dropping them leaves the peripheral's connection state stale.
+    keepalive: Arc<RwLock<Option<(Manager, Adapter)>>>,
     connected: Arc<RwLock<bool>>,
     /// True while the arena is in FIGHT; the bag only streams while this is set.
     fight_wanted: Arc<AtomicBool>,
@@ -36,6 +39,7 @@ impl BleManager {
             config: Arc::new(RwLock::new(config)),
             event_bus,
             peripheral: Arc::new(RwLock::new(None)),
+            keepalive: Arc::new(RwLock::new(None)),
             connected: Arc::new(RwLock::new(false)),
             fight_wanted: Arc::new(AtomicBool::new(false)),
         }
@@ -79,6 +83,9 @@ impl BleManager {
     /// Auto-connect loop with retry logic
     async fn auto_connect_loop(&self) {
         loop {
+            if *self.connected.read().await && !self.link_is_up().await {
+                self.mark_disconnected("link lost").await;
+            }
             if !*self.connected.read().await {
                 info!("Attempting to connect to punching bag...");
                 match self.connect().await {
@@ -164,6 +171,7 @@ impl BleManager {
             .unwrap_or_else(|| "Unknown".to_string());
 
         *self.peripheral.write().await = Some(peripheral);
+        *self.keepalive.write().await = Some((manager, adapter));
         *self.connected.write().await = true;
 
         self.event_bus.publish(Event::BleDeviceConnected {
@@ -250,6 +258,7 @@ impl BleManager {
 
         // Spawn notification handler
         let event_bus = self.event_bus.clone();
+        let manager = self.clone_for_task();
         let peripheral_clone = peripheral.clone();
         let accel_char_clone = accel_char.clone();
 
@@ -275,9 +284,7 @@ impl BleManager {
                     }
                     None => {
                         warn!("Notification stream ended");
-                        event_bus.publish(Event::BleDeviceDisconnected {
-                            reason: "notification stream ended".to_string(),
-                        });
+                        manager.mark_disconnected("notification stream ended").await;
                         break;
                     }
                 }
@@ -378,6 +385,41 @@ impl BleManager {
         self.config.clone()
     }
 
+    /// Whether the BLE link to the stored peripheral is still up.
+    ///
+    /// btleplug calls on a dead link can hang forever (observed on macOS after
+    /// the bag reset: `is_connected()` never returned, freezing the reconnect
+    /// loop), so the whole probe is bounded: a hang counts as "down".
+    async fn link_is_up(&self) -> bool {
+        let Some(p) = self.peripheral.read().await.clone() else {
+            return false;
+        };
+        let probe = async {
+            if !p.is_connected().await.unwrap_or(false) {
+                return false;
+            }
+            let Some(ch) = p.characteristics().into_iter().find(|c| c.uuid == FIGHT_MODE_UUID)
+            else {
+                return false;
+            };
+            p.read(&ch).await.is_ok()
+        };
+        tokio::time::timeout(Duration::from_secs(3), probe).await.unwrap_or(false)
+    }
+
+    /// Clear connection state so the auto-connect loop reconnects, and
+    /// announce the drop once.
+    async fn mark_disconnected(&self, reason: &str) {
+        let was_connected = std::mem::replace(&mut *self.connected.write().await, false);
+        *self.peripheral.write().await = None;
+        *self.keepalive.write().await = None;
+        if was_connected {
+            self.event_bus.publish(Event::BleDeviceDisconnected {
+                reason: reason.to_string(),
+            });
+        }
+    }
+
     /// Push the desired fight mode to the bag if connected; log failures.
     async fn sync_fight_mode(&self) {
         if !*self.connected.read().await {
@@ -415,6 +457,7 @@ impl BleManager {
             config: self.config.clone(),
             event_bus: self.event_bus.clone(),
             peripheral: self.peripheral.clone(),
+            keepalive: self.keepalive.clone(),
             connected: self.connected.clone(),
             fight_wanted: self.fight_wanted.clone(),
         }
