@@ -3,6 +3,8 @@ use btleplug::api::{
     Central, Manager as _, Peripheral as _, ScanFilter, WriteType,
 };
 use btleplug::platform::{Adapter, Manager, Peripheral};
+use std::str::FromStr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
@@ -11,13 +13,12 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::config::BleConfig;
-use crate::core::{Event, SharedEventBus};
+use crate::core::{ArenaState, Event, SharedEventBus};
 
 // Nordic UART Service UUIDs
 const ACCELERATION_UUID: Uuid = Uuid::from_u128(0x6E400002_B5A3_F393_E0A9_E50E24DCCA9E);
 const ALPHA_UUID: Uuid = Uuid::from_u128(0x6E400004_B5A3_F393_E0A9_E50E24DCCA9E);
 const THRESHOLD_UUID: Uuid = Uuid::from_u128(0x6E400005_B5A3_F393_E0A9_E50E24DCCA9E);
-#[allow(dead_code)] // reserved: fight-mode toggle (see set_fight_mode)
 const FIGHT_MODE_UUID: Uuid = Uuid::from_u128(0x6E400006_B5A3_F393_E0A9_E50E24DCCA9E);
 
 pub struct BleManager {
@@ -25,6 +26,8 @@ pub struct BleManager {
     event_bus: SharedEventBus,
     peripheral: Arc<RwLock<Option<Peripheral>>>,
     connected: Arc<RwLock<bool>>,
+    /// True while the arena is in FIGHT; the bag only streams while this is set.
+    fight_wanted: Arc<AtomicBool>,
 }
 
 impl BleManager {
@@ -34,12 +37,34 @@ impl BleManager {
             event_bus,
             peripheral: Arc::new(RwLock::new(None)),
             connected: Arc::new(RwLock::new(false)),
+            fight_wanted: Arc::new(AtomicBool::new(false)),
         }
     }
 
     /// Start the BLE manager (auto-connect loop if enabled)
     pub async fn start(&self) -> Result<()> {
         info!("Starting BLE manager");
+
+        // Mirror arena FIGHT state onto the bag's fight-mode characteristic.
+        let manager = self.clone_for_task();
+        let mut rx = self.event_bus.subscribe();
+        tokio::spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(Event::StateChanged { to, .. }) => {
+                        let fight = ArenaState::from_str(&to) == Ok(ArenaState::Fight);
+                        if manager.fight_wanted.swap(fight, Ordering::SeqCst) != fight {
+                            manager.sync_fight_mode().await;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        warn!("BLE fight-mode listener lagged by {n} events");
+                    }
+                    Err(_) => break,
+                    _ => {}
+                }
+            }
+        });
 
         if self.config.read().await.auto_connect {
             let manager = self.clone_for_task();
@@ -59,6 +84,8 @@ impl BleManager {
                 match self.connect().await {
                     Ok(()) => {
                         info!("Successfully connected to punching bag");
+                        // Bag powers up with fight mode off; match current arena state.
+                        self.sync_fight_mode().await;
                         // Start listening for notifications
                         if let Err(e) = self.start_notifications().await {
                             error!("Failed to start notifications: {}", e);
@@ -351,8 +378,18 @@ impl BleManager {
         self.config.clone()
     }
 
+    /// Push the desired fight mode to the bag if connected; log failures.
+    async fn sync_fight_mode(&self) {
+        if !*self.connected.read().await {
+            return;
+        }
+        let want = self.fight_wanted.load(Ordering::SeqCst);
+        if let Err(e) = self.set_fight_mode(want).await {
+            warn!("Failed to set bag fight mode to {want}: {e:#}");
+        }
+    }
+
     /// Set fight mode
-    #[allow(dead_code)] // reserved: not yet wired to any caller
     pub async fn set_fight_mode(&self, enabled: bool) -> Result<()> {
         let peripheral_guard = self.peripheral.read().await;
         let peripheral = peripheral_guard
@@ -379,6 +416,7 @@ impl BleManager {
             event_bus: self.event_bus.clone(),
             peripheral: self.peripheral.clone(),
             connected: self.connected.clone(),
+            fight_wanted: self.fight_wanted.clone(),
         }
     }
 }
