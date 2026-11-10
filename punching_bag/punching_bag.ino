@@ -153,8 +153,10 @@ void startAdvertising() {
 
 void setup() {
   Serial.begin(115200);
-  while (!Serial) {
-    delay(10); // Wait for Serial to be ready
+  // Wait briefly for a USB host, but never block: on battery there is none
+  // and the bag must still advertise.
+  for (uint32_t t0 = millis(); !Serial && millis() - t0 < 2000;) {
+    delay(10);
   }
   Serial.println("=== Shadow Warrior BLE Device ===");
   Serial.println("Serial initialized successfully!");
