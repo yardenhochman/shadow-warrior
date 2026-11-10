@@ -10,6 +10,7 @@ import { FRAME_SECS } from './audio_frontend.js';
 import { LedRig, COLUMNS, EFFECT_LABELS } from './wled.js';
 import { Scene } from './scene.js';
 import { Sfx } from './sfx.js';
+import { Playlist } from './music.js';
 
 const $ = (id) => document.getElementById(id);
 const S = ArenaState;
@@ -30,6 +31,22 @@ const arena = new ArenaManager(cfg, sm, bus, now, fixes);
 const presence = new PresenceService(cfg, bus, now);
 const detector = new ShoutDetector();
 const sfx = new Sfx(); sfx.enabled = prefs.sound;
+const playlist = new Playlist(sfx); sfx.playlist = playlist;
+const nowPlaying = document.getElementById('nowPlaying');
+playlist.onchange = () => {
+  const n = playlist.tracks.length;
+  if (!n) { nowPlaying.textContent = 'Fight music: synth loop'; nowPlaying.classList.remove('on'); return; }
+  const t = playlist.current;
+  nowPlaying.textContent = `${playlist.playing ? 'Now playing' : 'Next fight'}: ${t.title} (${playlist.idx + 1}/${n})`;
+  nowPlaying.classList.toggle('on', playlist.playing);
+};
+playlist.loadDefault();
+document.getElementById('musicFiles').addEventListener('change', (e) => {
+  const n = playlist.loadFiles(e.target.files);
+  if (n) log(`Loaded ${n} music tracks`, 'state');
+  if (n && sm.currentState === ArenaState.Fight && sfx.enabled) { if (sfx.music) { clearInterval(sfx.music); sfx.music = null; } playlist.play(); }
+});
+document.getElementById('musicNext').addEventListener('click', () => playlist.skip());
 const rig = new LedRig(cfg.leds_per_column); rig.mode = prefs.ledMode;
 const scene = new Scene($('scene'), rig);
 
@@ -405,6 +422,7 @@ log('Simulator ready: brain-rs main.rs sets IDLE at startup', 'state');
 
 // Test / console hook
 window.sim = {
+  playlist,
   get state() { return sm.currentState; }, get info() { return arena.getStateInfo(); }, get game() { return game; },
   get cfg() { return cfg; }, get errors() { return errors; }, get lastFeat() { return lastFeat; }, get detector() { return detector; },
   punch: (p) => punch(p), setSensor, shoutFor: (ms) => feats.pulse(ms), skip: (sec) => { simNow += sec; presence.tick(simNow, sensorOn); arena.tick(simNow); }, arena, presence, sm,

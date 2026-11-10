@@ -1,7 +1,7 @@
 // Synthesised sound (no assets): punch thumps, shout chime, fight start, KO and
-// a simple drum loop standing in for music_manager's FIGHT playlist.
+// fight music: the playlist (music.js) when loaded, else a synth drum loop.
 export class Sfx {
-  constructor() { this.ctx = null; this.enabled = true; this.music = null; this.noise = null; }
+  constructor() { this.ctx = null; this.enabled = true; this.music = null; this.noise = null; this.playlist = null; }
 
   ensure() {
     if (!this.ctx) {
@@ -63,7 +63,9 @@ export class Sfx {
   }
 
   startMusic() {
-    if (!this.enabled || !this.ctx || this.music) return;
+    if (!this.enabled) return;
+    if (this.playlist && this.playlist.available) { if (!this.playlist.playing) this.playlist.play(); return; }
+    if (!this.ctx || this.music) return;
     const c = this.ctx, bpm = 128, beat = 60 / bpm;
     let next = c.currentTime + 0.05, step = 0;
     const tick = () => {
@@ -99,5 +101,5 @@ export class Sfx {
     this.music = setInterval(tick, 50); tick();
   }
 
-  stopMusic() { if (this.music) { clearInterval(this.music); this.music = null; } }
+  stopMusic() { if (this.playlist) this.playlist.stop(); if (this.music) { clearInterval(this.music); this.music = null; } }
 }

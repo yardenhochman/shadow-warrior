@@ -36,6 +36,11 @@
           <button class="btn punch" data-power="55">Hook <kbd>K</kbd></button>
           <button class="btn punch heavy" data-power="90">Heavy <kbd>L</kbd></button>
         </div>
+        <div class="musicBar" id="musicBar">
+          <span class="note">&#9835;</span><span id="nowPlaying">Fight music: synth loop</span>
+          <button id="musicNext" class="btn small" title="Next track">&#9197;</button>
+          <label class="btn small" title="Pick audio files or a folder of tracks">Load music<input id="musicFiles" type="file" accept="audio/*" multiple hidden></label>
+        </div>
         <div class="hint">Tap/click the arena to punch; hold to charge (or hold <kbd>Space</kbd>).</div>
       </div>
       <div class="panel strips">

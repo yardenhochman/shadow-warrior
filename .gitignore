@@ -25,3 +25,6 @@ punching_bag/.claude/
 .vscode/
 .playwright-mcp/
 .claude/worktrees/
+
+# Fight music (downloaded by music/fetch.sh, not committed)
+music/*.mp3

@@ -110,3 +110,16 @@ Turn off the matching toggles under "brain-rs fidelity" to reproduce brain-rs as
 Move sliders (changed keys turn yellow; values persist in localStorage), play, then
 **Export YAML** and merge the printed keys into `brain-rs/config.yaml`. Keys under
 "simulator only" are never exported.
+
+## Fight music
+
+The FIGHT state plays the installation's playlist (`music/playlist.tsv`: Doom,
+Naruto, Pantera, Metallica, RATM, Mortal Kombat…). Audio files are not committed.
+
+- **Locally:** run `music/fetch.sh` once (needs `yt-dlp` and `ffmpeg`), then
+  serve the **repo root** (`python3 -m http.server` in the repo) and open
+  `http://localhost:8000/simulator/web/`. The sim finds `../../music/` by itself.
+- **GitHub Pages / phone:** tap **Load music** and pick the MP3s (or any audio files).
+- With no tracks it falls back to the synth drum loop. ⏭ skips a track; each
+  fight starts the next track (a sim proposal; brain-rs restarts from track 1).
+- The same folder works for brain-rs: point `music.playlist_dir` at `music/`.

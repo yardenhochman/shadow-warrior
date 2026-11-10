@@ -130,3 +130,9 @@ h2 { font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: v
   .controls .hint { display: none; }
   kbd { display: none; }
 }
+
+.musicBar { display: flex; align-items: center; gap: 8px; flex-basis: 100%; min-width: 0; color: var(--dim); font-size: 12px; }
+.musicBar .note { color: #ff5a3c; font-size: 15px; }
+.musicBar #nowPlaying { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.musicBar #nowPlaying.on { color: var(--text); font-weight: 700; }
+.musicBar label.btn { display: inline-flex; align-items: center; }
