@@ -153,7 +153,7 @@ impl StatusRegistry {
                 h.ble.up(now);
             }
             Event::BleDeviceDisconnected { reason } => h.ble.down(now, Some(reason.clone())),
-            Event::PunchDetected { .. } => h.ble.seen(now),
+            Event::PunchDetected { .. } | Event::BleAlive => h.ble.seen(now),
             Event::BleConnectionError { error } => h.ble.fail(now, error.clone()),
             Event::MusicStarted { track_name } => {
                 h.music.powered = Some(true);
@@ -376,5 +376,16 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
         panic!("registry did not observe event");
+    }
+
+    #[test]
+    fn ble_alive_keeps_idle_device_fresh() {
+        let r = StatusRegistry::with_stale_after(std::time::Duration::from_secs(300));
+        let t0 = Utc::now();
+        r.apply(&Event::BleDeviceConnected { device_name: "bag".into(), address: "a".into() }, t0);
+        let later = t0 + chrono::Duration::seconds(400);
+        assert!(r.snapshot_at(later).ble.stale, "no events -> stale");
+        r.apply(&Event::BleAlive, later - chrono::Duration::seconds(10));
+        assert!(!r.snapshot_at(later).ble.stale, "heartbeat refreshes last_seen");
     }
 }

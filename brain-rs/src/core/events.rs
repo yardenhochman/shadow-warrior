@@ -85,6 +85,8 @@ pub enum Event {
         address: String,
     },
     BleDeviceDisconnected { reason: String },
+    /// Link probe succeeded while idle (no punches); refreshes health `last_seen`.
+    BleAlive,
     PunchDetected {
         power: f32,
         acceleration: AccelerationData,
@@ -186,6 +188,7 @@ impl Event {
             Event::AudioLevelChanged { .. } => "AudioLevelChanged",
             Event::BleDeviceConnected { .. } => "BleDeviceConnected",
             Event::BleDeviceDisconnected { .. } => "BleDeviceDisconnected",
+            Event::BleAlive => "BleAlive",
             Event::PunchDetected { .. } => "PunchDetected",
             Event::BleConnectionError { .. } => "BleConnectionError",
             Event::MusicStarted { .. } => "MusicStarted",

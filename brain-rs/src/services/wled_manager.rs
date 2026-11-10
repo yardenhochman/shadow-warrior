@@ -16,6 +16,9 @@ use crate::models::WledStatus;
 mod health;
 mod protocol;
 use health::LinkHealth;
+
+/// Idle liveness poll period; well under `server.health_stale_sec`.
+const HEALTH_POLL_INTERVAL: Duration = Duration::from_secs(30);
 use protocol::{build_effect_payload, fetch_name_list, post_state, resolve_effect_id, resolve_palette_id};
 
 pub struct WledManager {
@@ -495,6 +498,30 @@ impl WledManager {
         frame
     }
 
+    /// Probe every controller once with `GET /json/info`, feeding the link
+    /// health tracker. WLED has no push channel, so without this an idle
+    /// controller (no effect changes) would only ever look stale.
+    pub async fn poll_health_once(&self) {
+        let ips: Vec<String> = self.controllers.read().await.iter().map(|c| c.ip.clone()).collect();
+        for ip in ips {
+            let url = format!("http://{ip}/json/info");
+            match self.http_client.get(&url).send().await.and_then(|r| r.error_for_status()) {
+                Ok(_) => self.link.ok(&ip),
+                Err(e) => self.link.fail(&ip, &e),
+            }
+        }
+    }
+
+    /// Run [`Self::poll_health_once`] forever every `HEALTH_POLL_INTERVAL`.
+    pub fn spawn_health_poll(self: Arc<Self>) {
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(HEALTH_POLL_INTERVAL).await;
+                self.poll_health_once().await;
+            }
+        });
+    }
+
     /// Subscribe to StateChanged and WledConnected events.
     pub fn start_event_loop(self: Arc<Self>) {
         let mut event_rx = self.event_bus.subscribe();
@@ -628,5 +655,33 @@ mod tests {
             kinds.push(e.event_type().to_string());
         }
         assert!(kinds.contains(&"WledDisconnected".to_string()), "{kinds:?}");
+    }
+
+    /// Idle controller: the health poll refreshes last_seen, and failures
+    /// eventually mark it disconnected without any effect traffic.
+    #[tokio::test]
+    async fn health_poll_tracks_idle_controller() {
+        let config = Config::default();
+        let db = Arc::new(DatabaseManager::new("sqlite::memory:").await.unwrap());
+        let bus: SharedEventBus = Arc::new(EventBus::new(100));
+        let reg = Arc::new(StatusRegistry::new());
+        reg.spawn(&bus);
+        tokio::task::yield_now().await;
+        let wled = WledManager::new(config.wled.clone(), db, bus.clone());
+        let (addr, routes, _) = mock_http(&[("GET /json/info", 200, "{}")]).await;
+        wled.set_controllers_for_test(&[&addr]).await;
+
+        wled.poll_health_once().await;
+        assert!(wait_connected(&reg, &addr, true).await);
+
+        routes.lock().await.insert("GET /json/info".into(), (500, "{}".into()));
+        for _ in 0..health::FAIL_THRESHOLD {
+            wled.poll_health_once().await;
+        }
+        assert!(wait_connected(&reg, &addr, false).await);
+
+        routes.lock().await.insert("GET /json/info".into(), (200, "{}".into()));
+        wled.poll_health_once().await;
+        assert!(wait_connected(&reg, &addr, true).await);
     }
 }

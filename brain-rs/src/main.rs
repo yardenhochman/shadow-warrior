@@ -131,6 +131,7 @@ async fn main() -> Result<()> {
     wled_manager.start().await?;
     wled_manager.clone().start_event_loop();
     wled_manager.clone().spawn_cache_warmup();
+    wled_manager.clone().spawn_health_poll();
     tasmota_manager.clone().start_event_loop();
     music_manager.load_playlist().await?;
     music_manager.clone().start_advance_loop();

@@ -83,8 +83,13 @@ impl BleManager {
     /// Auto-connect loop with retry logic
     async fn auto_connect_loop(&self) {
         loop {
-            if *self.connected.read().await && !self.link_is_up().await {
-                self.mark_disconnected("link lost").await;
+            if *self.connected.read().await {
+                if self.link_is_up().await {
+                    // Idle bag sends nothing; keep health `last_seen` fresh.
+                    self.event_bus.publish(Event::BleAlive);
+                } else {
+                    self.mark_disconnected("link lost").await;
+                }
             }
             if !*self.connected.read().await {
                 info!("Attempting to connect to punching bag...");
