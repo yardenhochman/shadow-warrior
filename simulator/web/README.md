@@ -125,3 +125,9 @@ Naruto, Pantera, Metallica, RATM, Mortal Kombat…). Audio files are not committ
 - With no tracks it falls back to the synth drum loop. ⏭ skips a track; each
   fight starts the next track (a sim proposal; brain-rs restarts from track 1).
 - The same folder works for brain-rs: see [music/README.md](../../music/README.md).
+
+## Test
+
+`test/e2e.mjs` drives the whole loop headless (fake mic, shout to FIGHT, music,
+punches, COOLDOWN, re-arm, YAML export) at desktop and phone sizes. Usage is in
+the file header; it exits 1 on any problem.
