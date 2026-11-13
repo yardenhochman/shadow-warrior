@@ -40,7 +40,7 @@ playlist.onchange = () => {
   nowPlaying.textContent = `${playlist.playing ? 'Now playing' : 'Next fight'}: ${t.title} (${playlist.idx + 1}/${n})`;
   nowPlaying.classList.toggle('on', playlist.playing);
 };
-playlist.loadDefault();
+playlist.loadDefault().then((ok) => ok || playlist.loadSaved()).then((ok) => { if (ok && playlist.source === 'saved') log(`Restored ${playlist.tracks.length} saved music tracks`, 'state'); });
 document.getElementById('musicFiles').addEventListener('change', (e) => {
   const n = playlist.loadFiles(e.target.files);
   if (n) log(`Loaded ${n} music tracks`, 'state');

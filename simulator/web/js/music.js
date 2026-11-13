@@ -1,6 +1,8 @@
 // Fight playlist player: stands in for brain-rs music_manager (plays a folder of
 // tracks during FIGHT). Tracks come from ../../music/playlist.tsv when the repo
 // root is served locally (after music/fetch.sh), or from files the user picks.
+// Picked files are kept in IndexedDB, so on GitHub Pages or a phone the playlist
+// is still there after a reload, with no network needed for the audio.
 // Each fight starts the next track (proposal; brain-rs restarts from track 1).
 export class Playlist {
   constructor(sfx) {
@@ -26,14 +28,31 @@ export class Playlist {
     } catch { return false; }
   }
 
+  // Restore tracks picked in an earlier visit. Used when the repo folder is not served.
+  async loadSaved() {
+    try {
+      const rows = await idb('readonly', (st) => st.getAll());
+      if (!rows || !rows.length || this.source === 'repo') return false;
+      rows.sort((a, b) => a.name.localeCompare(b.name));
+      this.tracks = rows.map((r) => ({ title: titleOf(r.name), url: URL.createObjectURL(r.blob) }));
+      this.idx = 0; this.source = 'saved'; this.onchange(); return true;
+    } catch { return false; }
+  }
+
+  async forget() {
+    try { await idb('readwrite', (st) => st.clear()); } catch {}
+  }
+
   loadFiles(files) {
     const audio = [...files].filter((f) => f.type.startsWith('audio/') || /\.(mp3|ogg|opus|flac|wav|m4a)$/i.test(f.name))
       .sort((a, b) => a.name.localeCompare(b.name));
     if (!audio.length) return 0;
     this.stop(true);
-    if (this.source === 'files') this.tracks.forEach((t) => URL.revokeObjectURL(t.url));
-    this.tracks = audio.map((f) => ({ title: f.name.replace(/\.[^.]+$/, '').replace(/^\d+[-_ ]*/, '').replace(/[-_]+/g, ' '), url: URL.createObjectURL(f) }));
-    this.idx = 0; this.source = 'files'; this.onchange(); return audio.length;
+    if (this.source === 'files' || this.source === 'saved') this.tracks.forEach((t) => URL.revokeObjectURL(t.url));
+    this.tracks = audio.map((f) => ({ title: titleOf(f.name), url: URL.createObjectURL(f) }));
+    this.idx = 0; this.source = 'files'; this.onchange();
+    this.saved = idb('readwrite', (st) => { st.clear(); audio.forEach((f) => st.put({ name: f.name, blob: f })); }).then(() => true, () => false);
+    return audio.length;
   }
 
   attach() {
@@ -65,4 +84,22 @@ export class Playlist {
       if (this.audio.volume <= 0) { clearInterval(this.fade); this.audio.pause(); }
     }, 60);
   }
+}
+
+const titleOf = (name) => name.replace(/\.[^.]+$/, '').replace(/^\d+[-_ ]*/, '').replace(/[-_]+/g, ' ');
+
+// One object store of {name, blob}. Rejects when IndexedDB is unavailable (private mode).
+function idb(mode, fn) {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open('shadow-warrior-sim', 1);
+    req.onupgradeneeded = () => req.result.createObjectStore('tracks', { keyPath: 'name' });
+    req.onerror = () => reject(req.error);
+    req.onsuccess = () => {
+      const db = req.result, tx = db.transaction('tracks', mode), st = tx.objectStore('tracks');
+      let out; const r = fn(st);
+      if (r && 'onsuccess' in r) r.onsuccess = () => { out = r.result; };
+      tx.oncomplete = () => { db.close(); resolve(out); };
+      tx.onerror = tx.onabort = () => { db.close(); reject(tx.error); };
+    };
+  });
 }

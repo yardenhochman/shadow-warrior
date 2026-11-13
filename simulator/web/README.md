@@ -120,6 +120,8 @@ Naruto, Pantera, Metallica, RATM, Mortal Kombat…). Audio files are not committ
   serve the **repo root** (`python3 -m http.server` in the repo) and open
   `http://localhost:8000/simulator/web/`. The sim finds `../../music/` by itself.
 - **GitHub Pages / phone:** tap **Load music** and pick the MP3s (or any audio files).
+  The browser keeps them (IndexedDB), so after one load the playlist is back on
+  every visit, offline too. Loading a new set replaces the saved one.
 - With no tracks it falls back to the synth drum loop. ⏭ skips a track; each
   fight starts the next track (a sim proposal; brain-rs restarts from track 1).
-- The same folder works for brain-rs: point `music.playlist_dir` at `music/`.
+- The same folder works for brain-rs: see [music/README.md](../../music/README.md).
