@@ -1,0 +1,20 @@
+# Shadow Warrior brain. Installed by deploy/deploy.py (@USER@ is substituted).
+[Unit]
+Description=Shadow Warrior brain
+# Deliberately no network-online.target: the brain must start with no network
+# (WLED/Tasmota are retried), but it does want BlueZ for the bag and speakers.
+Wants=bluetooth.service
+After=bluetooth.service sound.target
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=/opt/shadow-brain
+ExecStart=/opt/shadow-brain/shadow-warrior-brain
+Restart=on-failure
+RestartSec=5
+# SIGTERM makes the brain disconnect the bag (bounded 3 s) before exiting.
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

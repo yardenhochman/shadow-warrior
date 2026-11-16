@@ -17,3 +17,12 @@ build-arm64:
 # Remove build artifacts
 clean:
     podman run --rm -v "$(pwd)":/project -w /project {{image_name}} cargo clean
+
+# Release build for Raspberry Pi 3 / Orange Pi Zero 3W (AArch64)
+build-arm64-release:
+    podman run --rm -v "$(pwd)":/project -w /project {{image_name}} \
+        cargo build --release --target aarch64-unknown-linux-gnu
+
+# Build and install on a station as a systemd service: `just deploy 10.0.0.28 --ssh-opt HostKeyAlias=x` (see deploy/deploy.py)
+deploy host *args:
+    uv run deploy/deploy.py {{host}} {{args}}
