@@ -4,6 +4,8 @@ mod core;
 mod models;
 mod services;
 #[cfg(test)]
+mod integration_tests;
+#[cfg(test)]
 mod test_util;
 
 use anyhow::Result;
