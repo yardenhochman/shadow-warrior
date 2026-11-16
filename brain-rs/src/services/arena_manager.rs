@@ -34,6 +34,10 @@ pub struct ArenaManager {
 
     // Set false by the schedule service while the game is scheduled off
     schedule_gate: Arc<std::sync::atomic::AtomicBool>,
+
+    // Last fused presence. PresenceDetected fires only on change, so a player
+    // who stays through COOLDOWN (or entered while SUSPENDED) needs this to warm up.
+    present: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl ArenaManager {
@@ -58,6 +62,7 @@ impl ArenaManager {
             current_session_max_power: Arc::new(RwLock::new(0.0)),
             started_at: Utc::now(),
             schedule_gate: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            present: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -114,6 +119,7 @@ impl ArenaManager {
             total_sessions: self.total_sessions.clone(),
             current_session_punches: self.current_session_punches.clone(),
             current_session_max_power: self.current_session_max_power.clone(),
+            present: self.present.clone(),
         };
         self.state_machine
             .register_hook(Box::new(hook))
@@ -176,13 +182,17 @@ impl ArenaManager {
             info!("Presence ignored: game is scheduled off");
             return;
         }
+        self.present.store(detected, std::sync::atomic::Ordering::SeqCst);
         let current_state = self.state_machine.current_state().await;
 
         if detected {
-            // Player entered arena
+            // Player entered arena. Presence fires once, so go on to WARMING
+            // right away instead of waiting in IDLE for a second event.
             if current_state == ArenaState::Suspended {
-                info!("Presence detected, transitioning to IDLE");
-                let _ = self.state_machine.transition(ArenaState::Idle).await;
+                info!("Presence detected, transitioning to IDLE then WARMING");
+                if self.state_machine.transition(ArenaState::Idle).await.is_ok() {
+                    let _ = self.state_machine.transition(ArenaState::Warming).await;
+                }
             } else if current_state == ArenaState::Idle {
                 info!("Presence detected in IDLE, transitioning to WARMING");
                 let _ = self.state_machine.transition(ArenaState::Warming).await;
@@ -443,6 +453,7 @@ struct ArenaStateHook {
     total_sessions: Arc<RwLock<u64>>,
     current_session_punches: Arc<RwLock<u32>>,
     current_session_max_power: Arc<RwLock<f32>>,
+    present: Arc<std::sync::atomic::AtomicBool>,
 }
 
 // Implement StateHook for the lightweight wrapper
@@ -490,6 +501,7 @@ impl StateHook for ArenaStateHook {
                 });
                 let state_machine = self.state_machine.clone();
                 let config_clone = self.config.clone();
+                let present = self.present.clone();
                 tokio::spawn(async move {
                     let cooldown_duration = config_clone.read().await.cooldown_duration_sec;
                     sleep(std::time::Duration::from_secs(cooldown_duration)).await;
@@ -497,6 +509,13 @@ impl StateHook for ArenaStateHook {
                     if current == ArenaState::Cooldown {
                         info!("Cooldown complete, transitioning to IDLE");
                         let _ = state_machine.transition(ArenaState::Idle).await;
+                        // A player still standing there gets the next round.
+                        if present.load(std::sync::atomic::Ordering::SeqCst)
+                            && state_machine.current_state().await == ArenaState::Idle
+                        {
+                            info!("Player still present, transitioning to WARMING");
+                            let _ = state_machine.transition(ArenaState::Warming).await;
+                        }
                     }
                 });
             }
@@ -521,5 +540,48 @@ impl StateHook for ArenaStateHook {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::EventBus;
+    use std::time::Duration;
+
+    async fn wait_state(sm: &StateMachine, want: ArenaState) -> bool {
+        for _ in 0..100 {
+            if sm.current_state().await == want {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        false
+    }
+
+    /// Issue 9: presence fires only on change, so one "present" must reach
+    /// WARMING from SUSPENDED, and a player who stays gets another round.
+    #[tokio::test]
+    async fn present_player_reaches_warming_and_gets_next_round() {
+        let mut config = Config::default();
+        config.arena.cooldown_duration_sec = 0;
+        let bus: SharedEventBus = Arc::new(EventBus::new(100));
+        let sm = Arc::new(StateMachine::new(bus.clone()));
+        let audio = Arc::new(AudioManager::new(config.audio.clone(), bus.clone()));
+        let ble = Arc::new(BleManager::new(config.ble.clone(), bus.clone()));
+        let arena = Arc::new(ArenaManager::new(config, sm.clone(), bus.clone(), audio, ble));
+        let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        arena.clone().start(rx).await.unwrap();
+        assert_eq!(sm.current_state().await, ArenaState::Suspended);
+
+        bus.publish(Event::PresenceDetected { detected: true });
+        assert!(wait_state(&sm, ArenaState::Warming).await, "one presence event reaches WARMING");
+
+        sm.transition(ArenaState::Fight).await.unwrap();
+        sm.transition(ArenaState::Cooldown).await.unwrap();
+        assert!(wait_state(&sm, ArenaState::Warming).await, "still present after COOLDOWN -> WARMING");
+
+        bus.publish(Event::PresenceDetected { detected: false });
+        assert!(wait_state(&sm, ArenaState::Suspended).await);
     }
 }
