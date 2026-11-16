@@ -204,16 +204,30 @@ async fn main() -> Result<()> {
     info!("🌐 Dashboard available at http://localhost:{}", config.server.port);
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
 
     // Cleanup on shutdown
     info!("Shutting down...");
     if let Some(h) = ble_status {
         h.shutdown().await;
     }
+    ble_manager.shutdown().await;
     event_bus.publish(core::Event::SystemShutdown);
 
     Ok(())
+}
+
+/// Resolves on SIGINT or SIGTERM so `main` can run its cleanup.
+async fn shutdown_signal() {
+    use tokio::signal::unix::{signal, SignalKind};
+    let mut term = signal(SignalKind::terminate()).expect("install SIGTERM handler");
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {}
+        _ = term.recv() => {}
+    }
+    info!("Shutdown signal received");
 }
 
 // Serve index.html at root

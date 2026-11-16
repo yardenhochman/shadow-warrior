@@ -31,6 +31,8 @@ pub struct BleManager {
     connected: Arc<RwLock<bool>>,
     /// True while the arena is in FIGHT; the bag only streams while this is set.
     fight_wanted: Arc<AtomicBool>,
+    /// Set by [`BleManager::shutdown`]; stops the auto-connect loop from reconnecting.
+    shutting_down: Arc<AtomicBool>,
 }
 
 impl BleManager {
@@ -42,6 +44,7 @@ impl BleManager {
             keepalive: Arc::new(RwLock::new(None)),
             connected: Arc::new(RwLock::new(false)),
             fight_wanted: Arc::new(AtomicBool::new(false)),
+            shutting_down: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -83,6 +86,9 @@ impl BleManager {
     /// Auto-connect loop with retry logic
     async fn auto_connect_loop(&self) {
         loop {
+            if self.shutting_down.load(Ordering::SeqCst) {
+                return;
+            }
             if *self.connected.read().await {
                 if self.link_is_up().await {
                     // Idle bag sends nothing; keep health `last_seen` fresh.
@@ -399,6 +405,24 @@ impl BleManager {
         tokio::time::timeout(Duration::from_secs(3), probe).await.unwrap_or(false)
     }
 
+    /// Release the bag on process exit.
+    ///
+    /// bluetoothd keeps a connection alive after its owner dies, and a connected
+    /// bag stops advertising, so nothing could find it until a manual
+    /// `bluetoothctl disconnect`. Bounded so a wedged stack cannot block exit.
+    pub async fn shutdown(&self) {
+        self.shutting_down.store(true, Ordering::SeqCst);
+        let peripheral = self.peripheral.read().await.clone();
+        if let Some(p) = peripheral {
+            match tokio::time::timeout(Duration::from_secs(3), p.disconnect()).await {
+                Ok(Ok(())) => info!("Disconnected from punching bag"),
+                Ok(Err(e)) => warn!("Failed to disconnect from punching bag: {e}"),
+                Err(_) => warn!("Timed out disconnecting from punching bag"),
+            }
+        }
+        self.mark_disconnected("shutdown").await;
+    }
+
     /// Clear connection state so the auto-connect loop reconnects, and
     /// announce the drop once.
     async fn mark_disconnected(&self, reason: &str) {
@@ -452,6 +476,7 @@ impl BleManager {
             keepalive: self.keepalive.clone(),
             connected: self.connected.clone(),
             fight_wanted: self.fight_wanted.clone(),
+            shutting_down: self.shutting_down.clone(),
         }
     }
 }
