@@ -266,6 +266,7 @@ impl BleManager {
         let manager = self.clone_for_task();
         let peripheral_clone = peripheral.clone();
         let accel_char_clone = accel_char.clone();
+        let mut punch_gate = PunchGate::new(Duration::from_millis(self.config.read().await.punch_refractory_ms));
 
         tokio::spawn(async move {
             let mut notification_stream = match peripheral_clone.notifications().await {
@@ -284,7 +285,7 @@ impl BleManager {
                 match notification_stream.next().await {
                     Some(data) => {
                         if data.uuid == accel_char_clone.uuid {
-                            Self::handle_acceleration_data(&event_bus, &data.value);
+                            Self::handle_acceleration_data(&event_bus, &data.value, &mut punch_gate);
                         }
                     }
                     None => {
@@ -299,32 +300,18 @@ impl BleManager {
         Ok(())
     }
 
-    /// Handle incoming acceleration data
-    fn handle_acceleration_data(event_bus: &SharedEventBus, data: &[u8]) {
-        if data.len() == 12 {
-            // 3x float32 (x, y, z)
-            let x = f32::from_le_bytes([data[0], data[1], data[2], data[3]]);
-            let y = f32::from_le_bytes([data[4], data[5], data[6], data[7]]);
-            let z = f32::from_le_bytes([data[8], data[9], data[10], data[11]]);
-
-            let magnitude = (x * x + y * y + z * z).sqrt();
-
-            debug!("Acceleration: x={:.2}, y={:.2}, z={:.2}, mag={:.2}", x, y, z, magnitude);
-
-            // Emit punch event if magnitude is significant
-            if magnitude > 1.0 {
-                let power = (magnitude * 10.0).min(100.0); // Scale to 0-100
-                event_bus.publish(Event::punch_detected(power, x, y, z));
-            }
-        } else if data.len() == 4 {
-            // Single float32 (magnitude only)
-            let magnitude = f32::from_le_bytes([data[0], data[1], data[2], data[3]]);
-            debug!("Acceleration magnitude: {:.2}", magnitude);
-
-            if magnitude > 1.0 {
-                let power = (magnitude * 10.0).min(100.0);
-                event_bus.publish(Event::punch_detected(power, 0.0, 0.0, magnitude));
-            }
+    /// Handle incoming acceleration data. The firmware sends gravity-free
+    /// acceleration (m/s^2) only while above its threshold, about every 100 ms,
+    /// so one hit arrives as a burst of samples; `gate` folds a burst into one punch.
+    fn handle_acceleration_data(event_bus: &SharedEventBus, data: &[u8], gate: &mut PunchGate) {
+        let Some((x, y, z, magnitude)) = parse_acceleration(data) else {
+            debug!("Ignoring acceleration payload of {} bytes", data.len());
+            return;
+        };
+        debug!("Acceleration: x={:.2}, y={:.2}, z={:.2}, mag={:.2}", x, y, z, magnitude);
+        if magnitude > 1.0 && gate.accept(std::time::Instant::now()) {
+            let power = (magnitude * 10.0).min(100.0); // Scale to 0-100
+            event_bus.publish(Event::punch_detected(power, x, y, z));
         }
     }
 
@@ -523,5 +510,86 @@ mod adapter_tests {
         assert!(e.contains("hci7") && e.contains("0: hci0") && e.contains("1: hci1"), "{e}");
         assert!(select_adapter(&names(), Some("5")).is_err());
         assert!(select_adapter(&[], None).is_err());
+    }
+}
+
+/// Parse an acceleration notification: 12 bytes = x,y,z f32, 4 bytes = magnitude f32.
+fn parse_acceleration(data: &[u8]) -> Option<(f32, f32, f32, f32)> {
+    let f = |i: usize| f32::from_le_bytes([data[i], data[i + 1], data[i + 2], data[i + 3]]);
+    match data.len() {
+        12 => {
+            let (x, y, z) = (f(0), f(4), f(8));
+            Some((x, y, z, (x * x + y * y + z * z).sqrt()))
+        }
+        4 => Some((0.0, 0.0, f(0), f(0))),
+        _ => None,
+    }
+}
+
+/// Counts one punch per burst: a sample is a new punch only if the last punch
+/// was at least `refractory` ago.
+struct PunchGate {
+    refractory: Duration,
+    last_punch: Option<std::time::Instant>,
+}
+
+impl PunchGate {
+    fn new(refractory: Duration) -> Self {
+        Self { refractory, last_punch: None }
+    }
+
+    fn accept(&mut self, now: std::time::Instant) -> bool {
+        if self.last_punch.is_some_and(|t| now.duration_since(t) < self.refractory) {
+            return false;
+        }
+        self.last_punch = Some(now);
+        true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::EventBus;
+
+    #[test]
+    fn parses_both_payload_shapes() {
+        let mag = 3.5f32.to_le_bytes();
+        assert_eq!(parse_acceleration(&mag), Some((0.0, 0.0, 3.5, 3.5)));
+        let xyz: Vec<u8> = [3.0f32, 4.0, 0.0].iter().flat_map(|v| v.to_le_bytes()).collect();
+        assert_eq!(parse_acceleration(&xyz), Some((3.0, 4.0, 0.0, 5.0)));
+        assert_eq!(parse_acceleration(&[0u8; 7]), None);
+    }
+
+    #[test]
+    fn gate_folds_a_burst_into_one_punch() {
+        let t0 = std::time::Instant::now();
+        let ms = |n| t0 + Duration::from_millis(n);
+        let mut gate = PunchGate::new(Duration::from_millis(350));
+        // One hit: samples every 100 ms while the bag swings.
+        let hits: Vec<bool> = [0, 100, 200, 300].iter().map(|&n| gate.accept(ms(n))).collect();
+        assert_eq!(hits, vec![true, false, false, false]);
+        // A second hit after the window counts.
+        assert!(gate.accept(ms(400)));
+    }
+
+    #[tokio::test]
+    async fn burst_of_samples_publishes_one_punch() {
+        let bus: SharedEventBus = Arc::new(EventBus::new(100));
+        let mut rx = bus.subscribe();
+        let mut gate = PunchGate::new(Duration::from_secs(10));
+        for _ in 0..4 {
+            BleManager::handle_acceleration_data(&bus, &6.0f32.to_le_bytes(), &mut gate);
+        }
+        // Below 1.0 never counts.
+        BleManager::handle_acceleration_data(&bus, &0.5f32.to_le_bytes(), &mut PunchGate::new(Duration::ZERO));
+        let mut punches = 0;
+        while let Ok(ev) = rx.try_recv() {
+            if let Event::PunchDetected { power, .. } = ev {
+                assert_eq!(power, 60.0);
+                punches += 1;
+            }
+        }
+        assert_eq!(punches, 1);
     }
 }

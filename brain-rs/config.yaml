@@ -29,7 +29,8 @@ ble:
 
   # Punching bag parameters
   alpha: 0.8
-  threshold: 2.0
+  threshold: 2.0        # m/s^2 of motion (firmware removes gravity); bag sends only above this
+  punch_refractory_ms: 350  # samples within this window after a punch are the same hit
 
 # Read-only BLE GATT status service so a phone (nRF Connect / LightBlue) can read
 # brain state without WiFi. Linux/BlueZ only; needs bluetoothd. Never blocks the

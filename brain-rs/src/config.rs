@@ -64,6 +64,14 @@ pub struct BleConfig {
     // Punching bag parameters
     pub alpha: f32,
     pub threshold: f32,
+    /// After a punch, further above-threshold samples within this window are the
+    /// same hit (the bag keeps swinging) and are not counted again.
+    #[serde(default = "default_punch_refractory_ms")]
+    pub punch_refractory_ms: u64,
+}
+
+fn default_punch_refractory_ms() -> u64 {
+    350
 }
 
 /// Read-only BLE GATT status service (BlueZ peripheral role, Linux only).
@@ -395,6 +403,7 @@ impl Default for Config {
                 adapter: None,
                 alpha: 0.8,
                 threshold: 2.0,
+                punch_refractory_ms: default_punch_refractory_ms(),
             },
             audio: AudioConfig {
                 sample_rate: 44100,
