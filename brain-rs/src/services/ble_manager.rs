@@ -28,6 +28,10 @@ pub struct BleManager {
     /// Keeps the btleplug Manager/Adapter (and its event loop) alive while connected;
     /// dropping them leaves the peripheral's connection state stale.
     keepalive: Arc<RwLock<Option<(Manager, Adapter)>>>,
+    /// Listener for acceleration notifications. Exactly one may run: BlueZ keeps
+    /// the same device object across reconnects, so a leftover listener would
+    /// receive every notification again and double-count punches.
+    notify_task: Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
     connected: Arc<RwLock<bool>>,
     /// True while the arena is in FIGHT; the bag only streams while this is set.
     fight_wanted: Arc<AtomicBool>,
@@ -42,6 +46,7 @@ impl BleManager {
             event_bus,
             peripheral: Arc::new(RwLock::new(None)),
             keepalive: Arc::new(RwLock::new(None)),
+            notify_task: Arc::new(std::sync::Mutex::new(None)),
             connected: Arc::new(RwLock::new(false)),
             fight_wanted: Arc::new(AtomicBool::new(false)),
             shutting_down: Arc::new(AtomicBool::new(false)),
@@ -274,7 +279,7 @@ impl BleManager {
         let accel_char_clone = accel_char.clone();
         let mut punch_gate = PunchGate::new(Duration::from_millis(self.config.read().await.punch_refractory_ms));
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             let mut notification_stream = match peripheral_clone.notifications().await {
                 Ok(stream) => stream,
                 Err(e) => {
@@ -302,8 +307,17 @@ impl BleManager {
                 }
             }
         });
+        self.replace_notify_task(Some(handle));
 
         Ok(())
+    }
+
+    /// Install (or clear) the notification listener, aborting any previous one.
+    fn replace_notify_task(&self, new: Option<tokio::task::JoinHandle<()>>) {
+        let old = std::mem::replace(&mut *self.notify_task.lock().unwrap(), new);
+        if let Some(old) = old {
+            old.abort();
+        }
     }
 
     /// Handle incoming acceleration data. The firmware sends gravity-free
@@ -434,6 +448,9 @@ impl BleManager {
                 reason: reason.to_string(),
             });
         }
+        // Last on purpose: if the listener itself called us, aborting only takes
+        // effect at its next await point, after we have returned.
+        self.replace_notify_task(None);
     }
 
     /// Push the desired fight mode to the bag if connected; log failures.
@@ -474,6 +491,7 @@ impl BleManager {
             event_bus: self.event_bus.clone(),
             peripheral: self.peripheral.clone(),
             keepalive: self.keepalive.clone(),
+            notify_task: self.notify_task.clone(),
             connected: self.connected.clone(),
             fight_wanted: self.fight_wanted.clone(),
             shutting_down: self.shutting_down.clone(),
