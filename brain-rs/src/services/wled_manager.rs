@@ -27,7 +27,8 @@ pub struct WledManager {
     event_bus: SharedEventBus,
     http_client: Client,
     controllers: Arc<RwLock<Vec<WledController>>>,
-    udp_sockets: Arc<RwLock<Vec<UdpSocket>>>,
+    /// One connected socket per reachable controller, with that controller's LED count.
+    udp_sockets: Arc<RwLock<Vec<(UdpSocket, usize)>>>,
     realtime_task_handle: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
     current_state: Arc<RwLock<ArenaState>>,
     effect_cache: RwLock<Vec<String>>,
@@ -211,7 +212,7 @@ impl WledManager {
                     match socket.connect(&addr) {
                         Ok(()) => {
                             info!("UDP socket connected to {}", addr);
-                            sockets.push(socket);
+                            sockets.push((socket, controller.num_leds));
                         }
                         Err(e) => warn!("UDP connect to {} failed (offline?): {}", addr, e),
                     }
@@ -395,9 +396,6 @@ impl WledManager {
         let link = self.link.clone();
         let fps = self.config.udp_fps;
         
-        let controllers = self.controllers.read().await;
-        let num_leds = controllers.first().map(|c| c.num_leds).unwrap_or(150);
-
         let handle = tokio::spawn(async move {
             let mut ticker = interval(Duration::from_millis(1000 / fps as u64));
             // UDP send errors are reported at most once per second per controller.
@@ -407,29 +405,30 @@ impl WledManager {
             loop {
                 ticker.tick().await;
 
-                // Generate frame based on state
-                let frame = match state {
-                    ArenaState::Warming => Self::generate_warming_frame(num_leds),
-                    ArenaState::Fight => Self::generate_fight_frame(num_leds),
-                    _ => vec![0u8; num_leds * 3], // Black for others
-                };
-
-                // Send to all controllers
+                // Send to all controllers, each frame sized to that controller's strip
                 let sockets_guard = sockets.read().await;
-                for socket in sockets_guard.iter() {
-                    if let Err(e) = socket.send(&frame) {
-                        if e.kind() != std::io::ErrorKind::WouldBlock {
-                            debug!("UDP send error: {}", e);
-                            if let Ok(peer) = socket.peer_addr() {
-                                let due = last_report
-                                    .get(&peer.ip())
-                                    .is_none_or(|t| t.elapsed() >= Duration::from_secs(1));
-                                if due {
-                                    last_report.insert(peer.ip(), std::time::Instant::now());
-                                    link.fail(&peer.ip().to_string(), format!("udp: {e}"));
-                                }
+                for (socket, num_leds) in sockets_guard.iter() {
+                    let rgb = match state {
+                        ArenaState::Warming => Self::generate_warming_frame(*num_leds),
+                        ArenaState::Fight => Self::generate_fight_frame(*num_leds),
+                        _ => vec![0u8; num_leds * 3], // Black for others
+                    };
+                    for frame in encode_realtime_frames(&rgb, REALTIME_TIMEOUT_SEC) {
+                        let Err(e) = socket.send(&frame) else { continue };
+                        if e.kind() == std::io::ErrorKind::WouldBlock {
+                            continue;
+                        }
+                        debug!("UDP send error: {}", e);
+                        if let Ok(peer) = socket.peer_addr() {
+                            let due = last_report
+                                .get(&peer.ip())
+                                .is_none_or(|t| t.elapsed() >= Duration::from_secs(1));
+                            if due {
+                                last_report.insert(peer.ip(), std::time::Instant::now());
+                                link.fail(&peer.ip().to_string(), format!("udp: {e}"));
                             }
                         }
+                        break;
                     }
                 }
             }
@@ -448,10 +447,9 @@ impl WledManager {
         }
     }
 
-    /// Generate warming effect frame (rainbow chase that speeds up with energy)
+    /// Generate warming effect pixels, `r,g,b` per LED (rainbow chase that speeds up with energy)
     fn generate_warming_frame(num_leds: usize) -> Vec<u8> {
-        // WARLS protocol: [protocol_id, timeout, r, g, b, r, g, b, ...]
-        let mut frame = vec![1u8, 1]; // Protocol 1, timeout 1 second
+        let mut frame = Vec::with_capacity(num_leds * 3);
 
         // Simple rainbow effect
         let time = std::time::SystemTime::now()
@@ -468,10 +466,9 @@ impl WledManager {
         frame
     }
 
-    /// Generate fight effect frame (reactive pulses)
+    /// Generate fight effect pixels, `r,g,b` per LED (reactive pulses)
     fn generate_fight_frame(num_leds: usize) -> Vec<u8> {
-        // WARLS protocol
-        let mut frame = vec![1u8, 1];
+        let mut frame = Vec::with_capacity(num_leds * 3);
 
         // Pulsing red effect
         let time = std::time::SystemTime::now()
@@ -555,6 +552,37 @@ impl WledManager {
 }
 
 /// Convert HSV to RGB
+/// Seconds WLED stays in realtime mode after the last frame before it resumes its own effect.
+const REALTIME_TIMEOUT_SEC: u8 = 2;
+/// DRGB carries at most 490 LEDs per packet; DNRGB at most 489 per packet.
+const DRGB_MAX_LEDS: usize = 490;
+const DNRGB_MAX_LEDS: usize = 489;
+
+/// Wrap `r,g,b`-per-LED pixels in WLED UDP realtime packets: one DRGB (protocol 2)
+/// packet up to 490 LEDs, otherwise DNRGB (protocol 4) chunks with a start index.
+/// (Protocol 1, WARLS, wants `index,r,g,b` per LED and garbles a plain RGB layout.)
+fn encode_realtime_frames(rgb: &[u8], timeout_sec: u8) -> Vec<Vec<u8>> {
+    let leds = rgb.len() / 3;
+    if leds <= DRGB_MAX_LEDS {
+        let mut frame = Vec::with_capacity(2 + leds * 3);
+        frame.extend_from_slice(&[2, timeout_sec]);
+        frame.extend_from_slice(&rgb[..leds * 3]);
+        return vec![frame];
+    }
+    rgb[..leds * 3]
+        .chunks(DNRGB_MAX_LEDS * 3)
+        .enumerate()
+        .map(|(i, chunk)| {
+            let start = (i * DNRGB_MAX_LEDS) as u16;
+            let mut frame = Vec::with_capacity(4 + chunk.len());
+            frame.extend_from_slice(&[4, timeout_sec]);
+            frame.extend_from_slice(&start.to_be_bytes());
+            frame.extend_from_slice(chunk);
+            frame
+        })
+        .collect()
+}
+
 fn hsv_to_rgb(h: f32, s: f32, v: f32) -> (u8, u8, u8) {
     let c = v * s;
     let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
@@ -715,5 +743,59 @@ mod tests {
         assert!(!wled.get_status().await[0].connected);
         wled.ensure_sockets().await;
         assert!(wled.get_status().await[0].connected);
+    }
+
+    #[test]
+    fn realtime_frames_use_drgb_up_to_490_leds() {
+        let rgb: Vec<u8> = (0..150 * 3).map(|i| i as u8).collect();
+        let frames = encode_realtime_frames(&rgb, 2);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(&frames[0][..2], &[2, 2], "protocol 2 = DRGB, then timeout");
+        assert_eq!(&frames[0][2..], &rgb[..]);
+        assert_eq!(encode_realtime_frames(&vec![0; 490 * 3], 2).len(), 1);
+    }
+
+    #[test]
+    fn realtime_frames_use_dnrgb_chunks_above_490_leds() {
+        let leds = 1000;
+        let rgb: Vec<u8> = (0..leds * 3).map(|i| (i % 251) as u8).collect();
+        let frames = encode_realtime_frames(&rgb, 2);
+        assert_eq!(frames.len(), 3); // 489 + 489 + 22
+        let mut rebuilt = Vec::new();
+        for (i, f) in frames.iter().enumerate() {
+            assert_eq!(f[0], 4, "protocol 4 = DNRGB");
+            let start = u16::from_be_bytes([f[2], f[3]]) as usize;
+            assert_eq!(start, i * 489);
+            assert!(f.len() - 4 <= 489 * 3);
+            rebuilt.extend_from_slice(&f[4..]);
+        }
+        assert_eq!(rebuilt, rgb);
+    }
+
+    /// Each controller gets a frame sized to its own strip, not the first one's.
+    /// Multi-threaded: the blocking `recv_from` must not starve the sender task.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn realtime_sends_per_controller_led_counts() {
+        let a = std::net::UdpSocket::bind("127.0.0.2:21324").unwrap();
+        let b = std::net::UdpSocket::bind("127.0.0.3:21324").unwrap();
+        for s in [&a, &b] {
+            s.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        }
+        let config = Config::default();
+        let db = Arc::new(DatabaseManager::new("sqlite::memory:").await.unwrap());
+        let bus: SharedEventBus = Arc::new(EventBus::new(100));
+        let wled = WledManager::new(config.wled.clone(), db, bus);
+        *wled.controllers.write().await = vec![
+            WledController { ip: "127.0.0.2".into(), num_leds: 30 },
+            WledController { ip: "127.0.0.3".into(), num_leds: 200 },
+        ];
+        wled.rebuild_sockets().await.unwrap();
+        wled.start_realtime_mode(ArenaState::Fight).await.unwrap();
+        let mut buf = [0u8; 2048];
+        let (n, _) = a.recv_from(&mut buf).unwrap();
+        assert_eq!((buf[0], n), (2, 2 + 30 * 3));
+        let (n, _) = b.recv_from(&mut buf).unwrap();
+        assert_eq!((buf[0], n), (2, 2 + 200 * 3));
+        wled.stop_realtime_mode().await;
     }
 }
