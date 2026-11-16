@@ -25,7 +25,9 @@ ble:
     - "bag"
   # BlueZ adapter for BLE (e.g. a USB dongle separate from the A2DP speaker's adapter).
   # "hci1", an index ("1") or a substring of the adapter info. Unset = first adapter.
-  # adapter: hci1
+  # hciN numbers can swap between boots (onboard UART radio vs USB dongle); prefer a
+  # hardware selector: "usb" (first USB adapter), "usb:2357:0604" (VID:PID) or "builtin".
+  # adapter: usb:2357:0604
 
   # Punching bag parameters
   alpha: 0.8

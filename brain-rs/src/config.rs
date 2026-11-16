@@ -56,8 +56,9 @@ pub struct BleConfig {
     pub scan_timeout_sec: u64,
     pub retry_interval_sec: u64,
     pub device_name_patterns: Vec<String>,
-    /// BlueZ adapter to use: `hci1`, a numeric index (`1`) or a name substring.
-    /// Unset = first adapter.
+    /// BlueZ adapter to use: `hci1`, a numeric index (`1`), a name substring, or a
+    /// hardware selector that survives `hciN` renumbering across boots: `usb`,
+    /// `usb:VVVV:PPPP` (e.g. `usb:2357:0604`) or `builtin`. Unset = first adapter.
     #[serde(default)]
     pub adapter: Option<String>,
 
@@ -81,7 +82,8 @@ pub struct BleStatusConfig {
     pub enabled: bool,
     /// Advertised name is `<name_prefix>-XXXX` (XXXX = last 2 bytes of the adapter address).
     pub name_prefix: String,
-    /// BlueZ adapter for the peripheral role (`hci1`, index or name substring).
+    /// BlueZ adapter for the peripheral role (`hci1`, index, name substring,
+    /// `usb`, `usb:VVVV:PPPP` or `builtin`).
     /// Unset = same selection as `ble.adapter`.
     pub adapter: Option<String>,
     /// How often the brain state is sampled for change detection / notify.

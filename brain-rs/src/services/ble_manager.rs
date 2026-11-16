@@ -499,23 +499,95 @@ impl BleManager {
     }
 }
 
+/// How an adapter is attached, read from sysfs (the BlueZ info string is useless
+/// for this: every adapter reports the same `usb:v1D6Bp0246...` root-hub id).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AdapterHw {
+    /// USB adapter with `(vendor id, product id)`.
+    Usb(u16, u16),
+    /// Anything else: UART/serdev combo chip, SDIO, virtual.
+    Builtin,
+}
+
+impl AdapterHw {
+    fn describe(self) -> String {
+        match self {
+            AdapterHw::Usb(v, p) => format!("usb {v:04x}:{p:04x}"),
+            AdapterHw::Builtin => "builtin".into(),
+        }
+    }
+}
+
+/// Look up `hciN` in `/sys/class/bluetooth`. `None` when sysfs has no such
+/// adapter (non-Linux, or a name we cannot map).
+fn sysfs_adapter_hw(hci: &str) -> Option<AdapterHw> {
+    let path = std::fs::canonicalize(std::path::Path::new("/sys/class/bluetooth").join(hci)).ok()?;
+    let read_hex = |dir: &std::path::Path, f: &str| {
+        u16::from_str_radix(std::fs::read_to_string(dir.join(f)).ok()?.trim(), 16).ok()
+    };
+    for dir in path.ancestors() {
+        if let (Some(v), Some(p)) = (read_hex(dir, "idVendor"), read_hex(dir, "idProduct")) {
+            return Some(AdapterHw::Usb(v, p));
+        }
+    }
+    Some(AdapterHw::Builtin)
+}
+
 /// Pick an adapter from the names reported by BlueZ (`"hci0 (usb:...)"`).
 /// `None` -> first. Digits-only -> index. Otherwise exact id (first token), then
-/// case-insensitive substring. Errors list the available adapters.
+/// a hardware selector, then case-insensitive substring. Errors list the
+/// available adapters.
+///
+/// Hardware selectors survive `hciN` renumbering between boots (an onboard
+/// UART radio and a USB dongle can enumerate in either order):
+/// `usb` (first USB adapter), `usb:VVVV:PPPP` (hex ids, e.g. `usb:2357:0604`),
+/// `builtin` (first non-USB adapter).
 pub(crate) fn select_adapter(names: &[String], wanted: Option<&str>) -> std::result::Result<usize, String> {
+    select_adapter_with(names, wanted, &|hci| sysfs_adapter_hw(hci))
+}
+
+pub(crate) fn select_adapter_with(
+    names: &[String],
+    wanted: Option<&str>,
+    hw: &dyn Fn(&str) -> Option<AdapterHw>,
+) -> std::result::Result<usize, String> {
+    let hw_of = |n: &String| n.split_whitespace().next().and_then(hw);
     let list = || {
         if names.is_empty() { "none".to_string() } else {
-            names.iter().enumerate().map(|(i, n)| format!("{i}: {n}")).collect::<Vec<_>>().join(", ")
+            names
+                .iter()
+                .enumerate()
+                .map(|(i, n)| match hw_of(n) {
+                    Some(h) => format!("{i}: {n} [{}]", h.describe()),
+                    None => format!("{i}: {n}"),
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
         }
     };
     let Some(w) = wanted.map(str::trim).filter(|w| !w.is_empty()) else {
         return if names.is_empty() { Err("No Bluetooth adapter found".into()) } else { Ok(0) };
     };
+    let lw = w.to_lowercase();
     if let Ok(i) = w.parse::<usize>() {
         if i < names.len() { return Ok(i); }
     } else if let Some(i) = names.iter().position(|n| n.split_whitespace().next() == Some(w)) {
         return Ok(i);
-    } else if let Some(i) = names.iter().position(|n| n.to_lowercase().contains(&w.to_lowercase())) {
+    } else if lw == "usb" || lw.starts_with("usb:") || lw == "builtin" {
+        let matches = |h: AdapterHw| match (lw.as_str(), h) {
+            ("usb", AdapterHw::Usb(..)) | ("builtin", AdapterHw::Builtin) => true,
+            (sel, AdapterHw::Usb(v, p)) if sel.starts_with("usb:") => {
+                let id: Vec<&str> = sel[4..].split(':').collect();
+                id.len() == 2
+                    && u16::from_str_radix(id[0], 16) == Ok(v)
+                    && u16::from_str_radix(id[1], 16) == Ok(p)
+            }
+            _ => false,
+        };
+        if let Some(i) = names.iter().position(|n| hw_of(n).is_some_and(matches)) {
+            return Ok(i);
+        }
+    } else if let Some(i) = names.iter().position(|n| n.to_lowercase().contains(&lw)) {
         return Ok(i);
     }
     Err(format!("Configured Bluetooth adapter '{w}' not found; available: {}", list()))
@@ -528,7 +600,7 @@ unsafe impl Sync for BleManager {}
 
 #[cfg(test)]
 mod adapter_tests {
-    use super::select_adapter;
+    use super::{select_adapter, select_adapter_with, AdapterHw};
 
     fn names() -> Vec<String> {
         vec!["hci0 (usb:v1D6Bp0246d0540)".into(), "hci1 (usb:v0A12p0001d8891)".into()]
@@ -545,6 +617,42 @@ mod adapter_tests {
         assert_eq!(select_adapter(&names(), Some("hci1")), Ok(1));
         assert_eq!(select_adapter(&names(), Some("1")), Ok(1));
         assert_eq!(select_adapter(&names(), Some("0A12")), Ok(1));
+    }
+
+    fn hw(hci: &str) -> Option<AdapterHw> {
+        match hci {
+            "hci0" => Some(AdapterHw::Builtin),
+            "hci1" => Some(AdapterHw::Usb(0x2357, 0x0604)),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn by_hardware_survives_renumbering() {
+        let n = names();
+        assert_eq!(select_adapter_with(&n, Some("usb"), &hw), Ok(1));
+        assert_eq!(select_adapter_with(&n, Some("usb:2357:0604"), &hw), Ok(1));
+        assert_eq!(select_adapter_with(&n, Some("USB:2357:0604"), &hw), Ok(1));
+        assert_eq!(select_adapter_with(&n, Some("builtin"), &hw), Ok(0));
+        // dongle enumerated first this boot: same config, right adapter
+        let swapped = vec!["hci0 (x)".to_string(), "hci1 (x)".to_string()];
+        let swapped_hw = |h: &str| match h {
+            "hci0" => Some(AdapterHw::Usb(0x2357, 0x0604)),
+            "hci1" => Some(AdapterHw::Builtin),
+            _ => None,
+        };
+        assert_eq!(select_adapter_with(&swapped, Some("usb:2357:0604"), &swapped_hw), Ok(0));
+        assert_eq!(select_adapter_with(&swapped, Some("builtin"), &swapped_hw), Ok(1));
+    }
+
+    #[test]
+    fn hardware_selector_misses_are_errors_with_hw_listed() {
+        let n = names();
+        let e = select_adapter_with(&n, Some("usb:dead:beef"), &hw).unwrap_err();
+        assert!(e.contains("usb:dead:beef") && e.contains("[builtin]") && e.contains("[usb 2357:0604]"), "{e}");
+        assert!(select_adapter_with(&n, Some("usb:2357"), &hw).is_err());
+        // no sysfs info (non-Linux): hardware selectors cannot match
+        assert!(select_adapter_with(&n, Some("usb"), &|_| None).is_err());
     }
 
     #[test]
