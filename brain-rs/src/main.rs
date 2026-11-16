@@ -114,7 +114,12 @@ async fn main() -> Result<()> {
     ));
     health_registry.spawn(&event_bus);
     ble_manager.start().await?;
-    audio_manager.start().await?;
+    // A missing/unsupported microphone must not take the whole brain down
+    // (BLE, LEDs, plugs still work); report it through the health registry.
+    if let Err(e) = audio_manager.start().await {
+        tracing::error!("Audio manager failed to start, continuing without audio input: {e:#}");
+        event_bus.publish(core::Event::AudioError { error: format!("start: {e:#}") });
+    }
     audio_manager.clone().start_shout_clip_trigger();
     let presence_manual = if config.presence.enabled {
         let svc = Arc::new(services::presence::PresenceService::new(
