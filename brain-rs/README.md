@@ -140,6 +140,9 @@ dashboard clients; BLE (punching bag, speakers) and the microphone do not use it
 - Device health, including `stale`, is exposed under `hardware` in
   `GET /api/state`.
 
+**Installing a station:** see [docs/STATION_INSTALL.md](docs/STATION_INSTALL.md) for the full checklist
+(OS, network, Bluetooth dongle, deploy as a systemd service, verification).
+
 ## Development
 
 ### System dependencies
