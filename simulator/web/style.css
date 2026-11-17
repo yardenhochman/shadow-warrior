@@ -33,6 +33,7 @@ h2 { font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: v
 .punches { display: flex; gap: 8px; }
 
 .btn { appearance: none; border: 1px solid var(--line); background: var(--panel2); color: var(--text); font: 700 13px system-ui; padding: 10px 14px; border-radius: 10px; cursor: pointer; touch-action: manipulation; user-select: none; -webkit-user-select: none; }
+a.btn { text-decoration: none; display: inline-block; }
 .btn:hover { border-color: #3a3a58; }
 .btn:active, .btn.down { transform: translateY(1px); background: #22223a; }
 .btn.small { padding: 6px 10px; font-size: 12px; border-radius: 8px; }
