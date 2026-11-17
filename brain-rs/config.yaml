@@ -122,9 +122,12 @@ wled:
   # colors (up to 3 RGB triples, e.g. [[255,0,0],[0,0,255]]).
   effects:
     idle:
-      effect: "breathe"
-      palette: "ocean"
-      speed: 128
+      # Chosen on the strip 2026-11-17: ember red fading fully to black and back, ~11 s cycle.
+      # Fade cycle = 65.5 s / (1 + speed/8); colour 2 (black) is the fade target.
+      effect: "Fade"
+      speed: 40
+      brightness: 180
+      colors: [[255, 25, 0], [0, 0, 0]]
     warming:
       effect: "rainbow"
       palette: "rainbow"
@@ -132,8 +135,8 @@ wled:
     fight:
       effect: "realtime"  # UDP realtime
     cooldown:
-      effect: "fire"
-      palette: "lava"
+      effect: "Fire 2012"   # exact device name; bare "fire" used to resolve to Saw
+      palette: "Lava"
       speed: 150
 
 # Tasmota smart plugs (HTTP). Each plug lists the arena states during which it

@@ -8,16 +8,26 @@ use tracing::warn;
 use crate::config::WledEffect;
 
 /// Static fallback for common effects when the device list is unavailable.
+///
+/// WLED effect/palette ids are firmware specific. These are read from a controller running
+/// WLED 0.15.4 (`GET /json/eff`, `/json/pal`); an older table (rainbow 8, fire 16, ocean 20...)
+/// was wrong for that firmware and `fire` silently became `Saw`. Prefer exact device names in
+/// config (`"Fire 2012"`); the device list is always tried first.
 fn static_effect_id(name: &str) -> Option<u8> {
     Some(match name {
         "solid" => 0,
         "blink" => 1,
         "breathe" => 2,
         "wipe" => 3,
-        "scan" => 5,
-        "rainbow" => 8,
-        "twinkle" => 15,
-        "fire" | "fireworks" => 16,
+        "colorloop" => 8,
+        "rainbow" => 9,
+        "scan" => 10,
+        "fade" => 12,
+        "twinkle" => 17,
+        "chase" => 28,
+        "fireworks" => 42,
+        "fire" | "fire 2012" => 66,
+        "meteor" => 76,
         _ => return None,
     })
 }
@@ -25,12 +35,12 @@ fn static_effect_id(name: &str) -> Option<u8> {
 fn static_palette_id(name: &str) -> Option<u8> {
     Some(match name {
         "default" => 0,
-        "random" => 5,
-        "rainbow" => 9,
-        "party" => 12,
-        "ocean" => 20,
-        "lava" => 22,
-        "forest" => 25,
+        "party" => 6,
+        "lava" => 8,
+        "ocean" => 9,
+        "forest" => 10,
+        "rainbow" => 11,
+        "fire" => 35,
         _ => return None,
     })
 }
@@ -116,9 +126,13 @@ mod tests {
         let list = names(&["Solid", "Blink", "Colorloop"]);
         assert_eq!(resolve_effect_id("42", &list), 42);
         assert_eq!(resolve_effect_id("colorloop", &list), 2);
-        assert_eq!(resolve_effect_id("Fire", &[]), 16);
+        // fallback ids are those of WLED 0.15.4 (see static_effect_id)
+        assert_eq!(resolve_effect_id("Fire", &[]), 66);
+        assert_eq!(resolve_effect_id("fade", &[]), 12);
+        assert_eq!(resolve_effect_id("Rainbow", &[]), 9);
         assert_eq!(resolve_effect_id("nonsense", &list), 0);
-        assert_eq!(resolve_palette_id("Lava", &[]), 22);
+        assert_eq!(resolve_palette_id("Lava", &[]), 8);
+        assert_eq!(resolve_palette_id("ocean", &[]), 9);
     }
 
     #[test]
