@@ -64,6 +64,26 @@
           <div class="liveStat"><span class="dot" id="bagDot"></span><span id="bagStatus">Bag: -</span></div>
         </div>
       </div>
+
+      <div class="panel" id="tunablesPanel">
+        <div class="panelHead"><h2>Tunables</h2>
+          <div class="row tight"><button class="btn small" id="exportBtn">Export YAML</button><button class="btn small ghost" id="resetBtn">Reset</button></div>
+        </div>
+        <div id="yamlBox" class="yamlBox" hidden>
+          <textarea id="yamlOut" readonly rows="8" aria-label="YAML export"></textarea>
+          <button class="btn small" id="copyYaml">Copy</button>
+        </div>
+        <details class="fid" open>
+          <summary>brain-rs fidelity</summary>
+          <label class="toggle"><input type="checkbox" id="fixInactivity"><span class="sw"></span><span>Fix: reset inactivity timer when FIGHT starts</span></label>
+          <label class="toggle"><input type="checkbox" id="fixRearm"><span class="sw"></span><span>Fix: re-arm WARMING when presence persists (IDLE)</span></label>
+          <label class="toggle"><input type="checkbox" id="koEnds"><span class="sw"></span><span>Proposal: knocking out the shadow ends the fight</span></label>
+          <label class="toggle"><input type="checkbox" id="musicPlayback" checked><span class="sw"></span><span>Music in FIGHT sets playback_active</span></label>
+          <p class="note">Unticked fixes reproduce brain-rs as written (see README).</p>
+        </details>
+        <div id="tunables"></div>
+      </div>
+
     </section>
 
     <aside class="side">
@@ -119,25 +139,6 @@
         <div class="meter"><label>Sustained <em id="runVal"></em></label><div class="bar"><i id="runBar"></i><s id="runThr"></s></div></div>
         <div class="shoutFlash" id="shoutFlash">SHOUT DETECTED</div>
         <div class="row"><button class="btn small" id="resetFloor">Reset noise floor</button></div>
-      </div>
-
-      <div class="panel" id="tunablesPanel">
-        <div class="panelHead"><h2>Tunables</h2>
-          <div class="row tight"><button class="btn small" id="exportBtn">Export YAML</button><button class="btn small ghost" id="resetBtn">Reset</button></div>
-        </div>
-        <div id="yamlBox" class="yamlBox" hidden>
-          <textarea id="yamlOut" readonly rows="8" aria-label="YAML export"></textarea>
-          <button class="btn small" id="copyYaml">Copy</button>
-        </div>
-        <details class="fid" open>
-          <summary>brain-rs fidelity</summary>
-          <label class="toggle"><input type="checkbox" id="fixInactivity"><span class="sw"></span><span>Fix: reset inactivity timer when FIGHT starts</span></label>
-          <label class="toggle"><input type="checkbox" id="fixRearm"><span class="sw"></span><span>Fix: re-arm WARMING when presence persists (IDLE)</span></label>
-          <label class="toggle"><input type="checkbox" id="koEnds"><span class="sw"></span><span>Proposal: knocking out the shadow ends the fight</span></label>
-          <label class="toggle"><input type="checkbox" id="musicPlayback" checked><span class="sw"></span><span>Music in FIGHT sets playback_active</span></label>
-          <p class="note">Unticked fixes reproduce brain-rs as written (see README).</p>
-        </details>
-        <div id="tunables"></div>
       </div>
 
       <div class="panel">
