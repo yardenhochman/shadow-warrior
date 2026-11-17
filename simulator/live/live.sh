@@ -16,7 +16,7 @@ cmd="${1:-start}"; [ $# -gt 0 ] && shift
 case "$cmd" in
   start)
     if running; then echo "already running (PID $(cat "$pidf")), log $logf"; exit 0; fi
-    nohup uv run "$here/bridge.py" "$@" >"$logf" 2>&1 </dev/null &
+    setsid nohup uv run "$here/bridge.py" "$@" >"$logf" 2>&1 </dev/null &
     echo $! >"$pidf"
     for _ in $(seq 60); do grep -q "simulator: http" "$logf" 2>/dev/null && break; running || break; sleep 0.5; done
     running || { echo "bridge failed to start:"; tail -20 "$logf"; exit 1; }
