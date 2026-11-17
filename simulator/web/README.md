@@ -119,10 +119,12 @@ brain mode. Defaults: `shadow-warrior.local`, port 8090; the last address is rem
 | Real microphone | "Enable mic" | |
 
 Hits within 1 s chain into a combo (+10% damage per hit, up to x2). Knocking the
-shadow out makes it rise again with 25% more HP; set "knocking out the shadow ends the
-fight" to end the fight on a KO instead.
+shadow out plays the victory finale, then a tougher shadow rises for the next round (see
+"Victory and rounds" below); set "knocking out the shadow ends the fight" to end the fight
+after the finale instead.
 
-Panels: arena state, timers and energy; the shout detector meter (band level, noise
+Panels: the LED columns with the effect preset, a **Now playing** readout and the
+**Effects** section (below); arena state, timers and energy; the shout detector meter (band level, noise
 floor, floor + margin, VAD, the four feature checks, score against threshold, sustained
 time); tunables with **Export YAML**; and an event log. `time_scale` fast-forwards
 the game clock so long fights and cooldowns go by quicker. The mic always runs in real time.
@@ -138,7 +140,7 @@ the game clock so long fights and cooldowns go by quicker. The mic always runs i
 | `js/presence.js` | `src/services/presence.rs` | Faithful: `MicSource`, `PunchSource`, `PresenceFusion` (leaky accumulator, enter threshold, leave timeout, force) |
 | `js/wled.js` | `src/services/wled_manager.rs`, `config.yaml wled.effects` | "brain-rs" mode: approximations of WLED Breathe/Ocean, Rainbow, Fire 2012/Lava, plus the ported `generate_fight_frame` red pulse. "Sim proposal" mode is new |
 | `js/config.js` | `config.yaml`, `src/config.rs` defaults | Faithful defaults; export uses config.yaml key names and sections |
-| `js/scene.js`, `js/sfx.js`, `js/hitfx.js`, `js/feature_source.js`, `js/main.js` | - | Simulator only |
+| `js/scene.js`, `js/sfx.js`, `js/hitfx.js`, `js/presets.js`, `js/feature_source.js`, `js/main.js` | - | Simulator only |
 
 Music: as in `main.rs`, `FightStarted` starts music and sets `playback_active` (which
 raises the shout and presence margins), and `SessionEnded` stops it. The sim plays a
@@ -176,6 +178,50 @@ synthesised drum loop in its place.
   Tunables `hit_fx_variety` (0 = the old white flash) and `hit_fx_intensity`.
 - **Shouts in FIGHT**: visual only (brain-rs ignores them): a teal sound-wave ring on
   the columns and on screen. Teal is kept out of the punch colours.
+- **Effect presets** (`js/presets.js`, the dropdown above the LED columns): a preset gives every
+  stage its look. Stages: idle/attract, WARMING bar (4 stages), fight start, FIGHT ambient
+  (grows with rage), jab, hook and heavy hits, the FIGHT shout ripple and the victory. Presets:
+  - *brain-rs effects*: what brain-rs asks WLED for (Breathe/Ocean, Rainbow, the red realtime
+    pulse); no fight-start, hit, shout or victory effects, as on the device.
+  - *Sim proposal effects*: the original proposal (violet idle, 4-stage bar, fire, the six heavy
+    signatures) plus its victory.
+  - *Inferno*: lava-lamp idle, a heat gauge that gets embers, flames over the line and a white-hot
+    shimmer, lava that rises with rage; hits ERUPTION, MELTDOWN, FIRESTORM.
+  - *Ice / ghost*: ghost wisps and frost twinkle, a jagged frost line that crawls up with crystal
+    spikes, ice that shatters at the fight start; hits AVALANCHE, GLACIER, SPECTRE.
+  - *Storm*: drizzle with distant sheet lightning, a bar of churning cloud with rain falling into it
+    and bolts at the line, a downpour with flashes that grows with rage; hits LIGHTNING,
+    THUNDERCLAP, HAIL.
+  - *Neon dojo*: thin neon outlines on black, a tick-marked meter with chasers, more and faster
+    chasers with rage; hits KATANA, OVERDRIVE, NEON BURST.
+  - *Retro arcade*: chunky blocks (about 4 strip LEDs each) with gaps, a power-up meter whose colour
+    steps green to red per stage with a level-up blink, equalizer bars; hits K.O. FLASH, PIXEL
+    BLAST, FIREBALL.
+
+  Under **Effects: mix stages, preview, fine-tune** each stage can take its preset from another one
+  (e.g. WARMING from Inferno, hits from Storm), has **preview** buttons (each WARMING stage, every
+  jab/hook/heavy kind, opening, ambient, shout ripple, victory) that fire the effect on the LEDs at
+  once whatever the arena is doing, and a **Fine-tune** block: Speed, Size, Intensity and Colour
+  shift per stage, with **More…** for details. Choices persist in localStorage
+  (`sw-sim-effects-v1`, only overrides and changed values). **Now playing** under the columns names
+  every effect on the LEDs (stage, preset, effect, power/hue/escalation, time left) and the frame
+  level; **Last 8 effects** lists what fired. Every frame stays under the 0.72 cap, and punch
+  colours never use teal/aqua (150-200 deg), also after a colour shift: that hue is for shouts.
+- **Screen overlays** (Effects section, default *Minimal*): the LED columns are the main show, so
+  the arena draws no rings, bolts, colour washes or blackouts over the bag and the columns. A shout
+  in FIGHT shows as a teal pulse on the sound strip along the bottom edge (which also shows the mic
+  level); heavy names sit on the floor under the bag, banners on the floor below the columns.
+  *Full* brings back the rings and washes of the punch signatures.
+- **Victory and rounds**: a knock-out plays a 6.5 s finale on one clock (`VICTORY` in `hitfx.js`).
+  LEDs: the shadow's crimson floods the columns and shatters into falling shards, the winner's
+  colours erupt from the floor and build to a climax at 2.4 s, then a calm golden afterglow fades
+  out. Arena: the shadow crumbles into embers, SHADOW DEFEATED above the columns and the round's
+  stats (time, punches, max combo, hardest hit) on the floor (one line above the title on phones).
+  Sound: a synthesised shatter, a climbing arpeggio into a big major chord with timpani, cymbal
+  and cheer, then chimes (peak about -4 dBFS). The fight clock pauses during the finale. Then a
+  new shadow rises for round 2, 3, ... with `round_hp_growth` more health each round (default 0.3:
+  900, 1170, 1521 HP) and, from round 2, heals `round_regen_per_sec` x (round - 1) HP/s whenever no
+  punch landed for 1 s (default 4). The HP bar shows the round.
 - **Fight start**: the full bar opens the arena: the columns suck in, then explode into
   the fire 0.35 s later, with a screen ring and a synthesised riser, sub boom, gong, war
   drums and crowd swell on the same beat.
@@ -253,3 +299,9 @@ punch counted in FIGHT and, with `WLED_HOST` set, WLED in realtime mode. `test/b
 drives a running brain through the page in brain mode (presence and SHOUT to FIGHT, LED columns
 equal to the brain's UDP frames, a page punch counted by the brain, state buttons).
 `test/connect.mjs` checks the static build offline and the Connect to device navigation.
+`e2e.mjs` also covers preset switching, a per-stage override (kept across a reload), preview
+buttons, the now-playing readout and KO -> victory -> round 2. `test/effects.mjs` fires every
+preset x stage, measures the frame mean level (fails over 0.72), checks that no punch hue is teal
+and that the victory sound peaks below 0 dBFS, and writes contact sheets (LEDs per preset and
+stage, the victory on the LEDs and in the arena, overlays minimal vs full, the effects panel at
+desktop and phone width) and `levels.md` to `SHOTS`.

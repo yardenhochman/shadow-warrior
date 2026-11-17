@@ -7,9 +7,10 @@ import { PresenceService } from './presence.js';
 import { ShoutDetector } from './shout_detector.js';
 import { FeatureSource } from './feature_source.js';
 import { FRAME_SECS } from './audio_frontend.js';
-import { LedRig, COLUMNS, EFFECT_LABELS } from './wled.js';
+import { LedRig, COLUMNS } from './wled.js';
 import { Scene } from './scene.js';
-import { HitPicker } from './hitfx.js';
+import { HitPicker, tierOf, VICTORY } from './hitfx.js';
+import { PRESETS, PRESET_IDS, STAGES, STAGE_BY_ID, FX_PARAMS, hitTable } from './presets.js';
 import { Sfx } from './sfx.js';
 import { Playlist } from './music.js';
 import { LiveLink, LIVE_REQUESTED, BRAIN_REQUESTED, unstripFrame } from './live.js';
@@ -25,7 +26,7 @@ let brain = null;
 // ------------------------------------------------------------------ model
 const cfg = loadTunables();
 const PREFS_KEY = 'sw-sim-prefs-v1';
-const prefs = Object.assign({ fixInactivity: true, fixRearm: true, koEnds: false, musicPlayback: true, ledMode: 'proposal', sound: true, liveMirror: true, liveSerp: false },
+const prefs = Object.assign({ fixInactivity: true, fixRearm: true, koEnds: false, musicPlayback: true, ledMode: 'proposal', overlays: 'minimal', sound: true, liveMirror: true, liveSerp: false },
   JSON.parse(localStorage.getItem(PREFS_KEY) || '{}'));
 const savePrefs = () => localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
 
@@ -56,10 +57,12 @@ document.getElementById('musicFiles').addEventListener('change', (e) => {
 });
 document.getElementById('musicNext').addEventListener('click', () => playlist.skip());
 const rig = new LedRig(cfg.leds_per_column); rig.mode = prefs.ledMode;
-const scene = new Scene($('scene'), rig);
+const scene = new Scene($('scene'), rig); scene.overlays = prefs.overlays === 'full' ? 'full' : 'minimal';
 const hitPicker = new HitPicker();
 
-const game = { hp: cfg.shadow_hp, maxHp: cfg.shadow_hp, kos: 0, combo: 0, lastHitAt: -9, respawnAt: null, summary: '', shouts: 0, lastShout: null };
+const newRoundStats = () => ({ t0: simNow, punches: 0, maxCombo: 0, maxPower: 0 });
+// round: 1.. (a KO plays the victory, then a tougher shadow rises); rs: this round's stats
+const game = { hp: cfg.shadow_hp, maxHp: cfg.shadow_hp, kos: 0, combo: 0, lastHitAt: -9, respawnAt: null, summary: '', shouts: 0, lastShout: null, round: 1, rs: newRoundStats(), healing: false };
 let lastFeat = null;
 let sensorOn = false;
 let errors = [];
@@ -118,6 +121,7 @@ function onStateEnter(to) {
   if (to === S.Fight) {
     game.punches = 0; game.maxPower = 0; game.endReason = null;
     game.maxHp = cfg.shadow_hp; game.hp = game.maxHp; game.kos = 0; game.combo = 0; game.respawnAt = null;
+    game.round = 1; game.rs = newRoundStats(); scene.vic = null; scene.rise = null;
     scene.resetDamage();
     scene.showBanner('FIGHT!', 'punch the shadow');
     // Full bar -> FIGHT: one arena-opening moment (LED burst, screen ring, sound), synced on the impact.
@@ -132,7 +136,7 @@ function onStateEnter(to) {
   } else if (to === S.Warming) {
     scene.showBanner('WAKE IT UP', 'shout!', 1.6);
   }
-  if (to !== S.Fight) game.respawnAt = null;
+  if (to !== S.Fight) { game.respawnAt = null; if (to !== S.Cooldown) scene.vic = null; }
   if (to !== S.Fight && to !== S.Cooldown) sfx.stopMusic();
 }
 
@@ -230,12 +234,15 @@ function landPunch(power, info, state) {
   const t = performance.now() / 1000;
   const combo = counted && t - game.lastHitAt < 1.0 ? game.combo + 1 : 1;
   // One signature per punch (hitfx.js), shared by the LEDs, the arena and the sound.
-  const sig = hitPicker.pick(power, { combo, rage: rig.rage, dir: info.dir, variety: cfg.hit_fx_variety >= 1 });
+  // The kinds come from the preset drawing this tier (per-stage mixing); its Colour shift moves the hue.
+  const tier = tierOf(power);
+  const sig = hitPicker.pick(power, { combo, rage: rig.rage, dir: info.dir, variety: cfg.hit_fx_variety >= 1, table: hitTable(rig.presetFor(tier)), hueShift: rig.P(tier).hue });
   scene.hit(power, info, sig); rig.punch(power, sig); sfx.punch(power, sig);
   if (!counted) { log(`PunchDetected power=${power.toFixed(0)} (not counted: ${state})`, 'ignored'); return; }
   game.punches = (game.punches || 0) + 1; game.maxPower = Math.max(game.maxPower || 0, power);
   game.combo = combo;
   game.lastHitAt = t;
+  const rs = game.rs; rs.punches++; rs.maxCombo = Math.max(rs.maxCombo, combo); rs.maxPower = Math.max(rs.maxPower, power);
   const mult = Math.min(1 + (game.combo - 1) * 0.1, cfg.combo_max ?? 2);
   let dmg = 0;
   if (game.respawnAt == null) {
@@ -247,12 +254,22 @@ function landPunch(power, info, state) {
   log(`PunchDetected power=${power.toFixed(0)} dmg=${dmg.toFixed(1)}${game.combo > 1 ? ` combo ${game.combo}` : ''}${sig.kind !== 'classic' ? ` [${sig.tier} ${sig.kind}]` : ''}`, 'punch');
   if (game.hp <= 0 && game.respawnAt == null) {
     game.kos++;
-    scene.ko(); sfx.ko();
-    log(`Shadow knocked out (#${game.kos})`, 'ko');
-    if (prefs.koEnds && !BRAIN) { arena.endFightEarly('KnockOut'); return; }
-    scene.showBanner('SHADOW BROKEN', 'it rises again, stronger...');
-    game.respawnAt = t + 1.8;
+    const st = { round: game.round, time: simNow - rs.t0, punches: rs.punches, maxCombo: rs.maxCombo, hardest: rs.maxPower };
+    game.lastVictory = st;
+    // Victory: LED finale, arena finale and fanfare on one clock (VICTORY in hitfx.js); the fight clock pauses.
+    rig.victory(); scene.victory(st); sfx.victory();
+    log(`Shadow defeated, round ${st.round}: ${st.time.toFixed(1)} s, ${st.punches} punches, max combo ${st.maxCombo}, hardest hit ${st.hardest.toFixed(0)}`, 'ko');
+    game.respawnAt = t + VICTORY.dur;
   }
+}
+
+/** After the victory finale: a new shadow with more health (round_hp_growth) and healing (round_regen_per_sec). */
+function nextRound() {
+  game.round++; game.maxHp = Math.round(game.maxHp * (1 + cfg.round_hp_growth)); game.hp = game.maxHp;
+  game.rs = newRoundStats(); game.combo = 0; scene.resetDamage();
+  const regen = cfg.round_regen_per_sec * (game.round - 1);
+  scene.newRound(game.round, `${game.maxHp} HP${regen > 0 ? `, heals ${regen} HP/s when you pause` : ''}`);
+  log(`Round ${game.round}: the shadow rises with ${game.maxHp} HP${regen > 0 ? `, heals ${regen} HP/s after 1 s without punches` : ''}`, 'ko');
 }
 
 const powerFromHold = (ms) => 30 + 70 * Math.min(1, ms / 600);
@@ -298,8 +315,166 @@ const renderSound = () => { soundBtn.textContent = sfx.enabled ? 'Sound on' : 'S
 soundBtn.onclick = () => { sfx.enabled = !sfx.enabled; prefs.sound = sfx.enabled; savePrefs(); renderSound(); if (!sfx.enabled) sfx.stopMusic(); else { sfx.ensure(); if (sm.currentState === S.Fight) sfx.startMusic(); } };
 renderSound();
 const ledMode = $('ledMode');
-ledMode.value = prefs.ledMode;
-ledMode.onchange = () => { rig.mode = ledMode.value; prefs.ledMode = ledMode.value; savePrefs(); log(`LED effects: ${ledMode.value}`, 'ignored'); };
+for (const id of PRESET_IDS) if (!ledMode.querySelector(`option[value="${id}"]`)) ledMode.add(new Option(PRESETS[id].name, id));
+ledMode.value = rig.mode;
+ledMode.onchange = () => { rig.mode = ledMode.value; prefs.ledMode = rig.mode; savePrefs(); log(`LED effects: ${PRESETS[rig.mode].name}`, 'ignored'); buildFxStages(); };
+
+// ------------------------------------------------------------------ effect presets: mixing, preview, fine-tuning
+// Saved like the tunables: only per-stage overrides and parameters changed from the defaults.
+const FX_KEY = 'sw-sim-effects-v1';
+const clampP = (P, v) => Math.min(P.max, Math.max(P.min, v));
+try {
+  const o = JSON.parse(localStorage.getItem(FX_KEY) || '{}');
+  for (const [st, id] of Object.entries(o.overrides || {})) if (STAGE_BY_ID[st] && PRESETS[id]) rig.overrides[st] = id;
+  for (const [st, ps] of Object.entries(o.params || {})) {
+    if (!STAGE_BY_ID[st]) continue;
+    const d = {}; for (const P of FX_PARAMS) if (typeof ps?.[P.key] === 'number') d[P.key] = clampP(P, ps[P.key]);
+    rig.params[st] = d;
+  }
+} catch { /* ignore */ }
+function saveFx() {
+  const params = {};
+  for (const [st, ps] of Object.entries(rig.params)) {
+    const d = {}; for (const P of FX_PARAMS) if (ps[P.key] !== undefined && ps[P.key] !== P.def) d[P.key] = ps[P.key];
+    if (Object.keys(d).length) params[st] = d;
+  }
+  try { localStorage.setItem(FX_KEY, JSON.stringify({ overrides: rig.overrides, params })); } catch { /* ignore */ }
+}
+function setOverride(stage, id) {
+  if (id && PRESETS[id]) rig.overrides[stage] = id; else delete rig.overrides[stage];
+  saveFx(); buildFxStages();
+  log(`Effects: ${STAGE_BY_ID[stage].name} from ${PRESETS[rig.presetFor(stage)].name}${id ? '' : ' (base preset)'}`, 'ignored');
+}
+function setFxParam(stage, key, v) {
+  const P = FX_PARAMS.find((x) => x.key === key);
+  (rig.params[stage] ||= {})[key] = clampP(P, v); saveFx();
+}
+
+const PREVIEW_ENERGY = [0.12, 0.37, 0.62, 0.9];
+const PREVIEW_POWER = { jab: 25, hook: 55, heavy: 90 };
+const PREVIEW_G = { fightRemaining: 99 };
+/** Fire a stage's effect now, whatever the arena is doing (the LEDs show that stage for a moment). */
+function previewStage(stage, arg) {
+  sfx.ensure();
+  const t = performance.now() / 1000;
+  switch (stage) {
+    case 'idle': rig.previewFor(4, S.Idle); break;
+    case 'warming': rig.wStage = arg - 1; rig.previewFor(3.5, S.Warming, { energyPct: PREVIEW_ENERGY[arg] }); rig.shoutWaves.push({ t0: t, k: 1 }); break;
+    case 'open': rig.previewFor(2.4, S.Fight, PREVIEW_G); rig.fightStart(); scene.fightOpen(); sfx.arenaOpen(); break;
+    case 'fight': rig.previewFor(4, S.Fight, PREVIEW_G); rig.rage = Math.max(rig.rage, 0.8); break;
+    case 'shout': rig.previewFor(1.8, S.Fight, PREVIEW_G); rig.shout(1, S.Fight); scene.shoutWave(1); sfx.shout(1); break;
+    case 'victory':
+      rig.previewFor(VICTORY.dur + 0.3, S.Fight, PREVIEW_G); rig.victory(); sfx.victory();
+      scene.victory({ round: game.round || 1, time: 42, punches: 57, maxCombo: 9, hardest: 98 });
+      break;
+    default: { // jab / hook / heavy: one signature of the chosen kind
+      const sig = hitPicker.make(stage, arg, { table: hitTable(rig.presetFor(stage)), hueShift: rig.P(stage).hue, dir: Math.random() < 0.5 ? 1 : -1 });
+      const power = PREVIEW_POWER[stage], g = scene.bagGeom(), info = { dir: sig.dir, hx: scene.cx, hy: (g.top + g.bot) / 2 };
+      rig.previewFor(1.9, S.Fight, PREVIEW_G);
+      const v = rig.variety; rig.variety = true; rig.punch(power, sig); rig.variety = v;
+      scene.hit(power, info, sig); sfx.punch(power, sig);
+    }
+  }
+  log(`Preview: ${STAGE_BY_ID[stage].name}${arg != null ? ` ${arg}` : ''} (${PRESETS[rig.presetFor(stage)].name})`, 'ignored');
+}
+
+const fxOpen = new Set(); // fine-tune sections kept open across rebuilds
+function buildFxStages() {
+  const root = $('fxStages'); root.textContent = '';
+  for (const st of STAGES) {
+    const pid = rig.presetFor(st.id), def = PRESETS[pid][st.id];
+    const box = document.createElement('div'); box.className = 'fxStage'; box.dataset.stage = st.id;
+    const row = document.createElement('div'); row.className = 'fxRow';
+    const nm = document.createElement('label'); nm.className = 'fxName'; nm.textContent = st.name; nm.htmlFor = `fxsel_${st.id}`;
+    const sel = document.createElement('select'); sel.id = `fxsel_${st.id}`; sel.setAttribute('aria-label', `${st.name}: preset`);
+    sel.add(new Option(`Base (${PRESETS[rig.preset].name})`, ''));
+    for (const id of PRESET_IDS) sel.add(new Option(PRESETS[id].name, id));
+    sel.value = rig.overrides[st.id] || '';
+    sel.onchange = () => setOverride(st.id, sel.value);
+    row.append(nm, sel);
+    const eff = document.createElement('div'); eff.className = 'fxEff';
+    eff.textContent = def.kinds ? Object.values(def.kinds).map((k) => k.name).join(' / ') : def.name;
+    box.append(row, eff);
+    // preview buttons
+    const prev = document.createElement('div'); prev.className = 'fxPrev';
+    const btn = (label, arg, title) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'btn small'; b.textContent = label; b.dataset.preview = `${st.id}${arg != null ? `:${arg}` : ''}`; b.title = title || `Preview ${st.name}`; b.onclick = () => previewStage(st.id, arg); prev.append(b); };
+    if (def.none) { const n = document.createElement('span'); n.className = 'fxNone'; n.textContent = 'nothing to preview'; prev.append(n); }
+    else if (st.id === 'warming') ['25%', '50%', '75%', '100%'].forEach((l, i) => btn(`Stage ${i + 1}`, i, `Preview the bar at stage ${i + 1} (${l} full)`));
+    else if (def.kinds) for (const [k, kd] of Object.entries(def.kinds)) btn(kd.label || kd.name, k, `Preview ${st.name}: ${kd.name}`);
+    else btn('Preview', null);
+    box.append(prev);
+    // fine-tuning
+    const det = document.createElement('details'); det.className = 'fxTune'; det.open = fxOpen.has(st.id);
+    det.ontoggle = () => { if (det.open) fxOpen.add(st.id); else fxOpen.delete(st.id); };
+    const sum = document.createElement('summary'); sum.textContent = 'Fine-tune'; det.append(sum);
+    const cur = rig.P(st.id);
+    for (const P of FX_PARAMS) det.append(paramRow(st.id, P, cur[P.key]));
+    if (Object.keys(rig.params[st.id] || {}).some((k) => rig.params[st.id][k] !== FX_PARAMS.find((x) => x.key === k).def)) sum.classList.add('changed');
+    box.append(det);
+    root.append(box);
+  }
+}
+function paramRow(stage, P, value) {
+  const id = `fx_${stage}_${P.key}`;
+  const row = document.createElement('div'); row.className = 'tun';
+  const lab = document.createElement('label'); lab.htmlFor = id; lab.className = 'tunName';
+  const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = P.name;
+  const kc = document.createElement('code'); kc.className = 'key'; kc.textContent = `${stage}.${P.key}`; lab.append(nm, kc);
+  const num = document.createElement('input'); num.type = 'number'; num.step = P.step; num.min = P.min; num.max = P.max; num.setAttribute('aria-label', `${STAGE_BY_ID[stage].name}: ${P.name}`);
+  const unit = document.createElement('span'); unit.className = 'unit'; unit.textContent = P.unit;
+  const val = document.createElement('div'); val.className = 'val'; val.append(num, unit);
+  const rng = document.createElement('input'); rng.type = 'range'; rng.id = id; rng.min = P.min; rng.max = P.max; rng.step = P.step;
+  const help = document.createElement('div'); help.className = 'help'; help.textContent = P.help;
+  const more = document.createElement('button'); more.type = 'button'; more.className = 'moreBtn'; more.textContent = 'More…';
+  const moreBox = document.createElement('div'); moreBox.className = 'more'; moreBox.hidden = true; moreBox.id = `more_${id}`; moreBox.textContent = P.more;
+  more.setAttribute('aria-expanded', 'false'); more.setAttribute('aria-controls', moreBox.id);
+  more.onclick = () => { moreBox.hidden = !moreBox.hidden; more.setAttribute('aria-expanded', String(!moreBox.hidden)); more.textContent = moreBox.hidden ? 'More…' : 'Less'; };
+  const set = (v, src) => {
+    v = Number(v); if (!Number.isFinite(v)) return;
+    setFxParam(stage, P.key, v); v = rig.P(stage)[P.key];
+    if (src !== rng) rng.value = v;
+    if (src !== num) num.value = String(v);
+    lab.classList.toggle('changed', v !== P.def);
+  };
+  rng.oninput = () => set(rng.value, rng);
+  num.onchange = () => set(num.value, num);
+  rng.value = value; num.value = String(value); lab.classList.toggle('changed', value !== P.def);
+  row.append(lab, val, rng, help, more, moreBox);
+  return row;
+}
+buildFxStages();
+const overlayMode = $('overlayMode');
+overlayMode.value = scene.overlays;
+overlayMode.onchange = () => { scene.overlays = prefs.overlays = overlayMode.value; savePrefs(); log(`Screen overlays: ${overlayMode.value}`, 'ignored'); };
+$('fxReset').onclick = () => { rig.overrides = {}; rig.params = {}; saveFx(); buildFxStages(); log('Effects: per-stage choices and fine-tuning reset', 'ignored'); };
+
+// Now playing: the ambient of the shown state and every live effect, plus the last 8 fired.
+const npEl = $('fxNow'), histEl = $('fxHistory');
+const STAGE_TAG = Object.fromEntries(STAGES.map((s) => [s.id, s.id.toUpperCase()]));
+function npRow(tag, preset, effect, detail, extra, cls) {
+  const r = document.createElement('div'); r.className = `npRow${cls ? ` ${cls}` : ''}`;
+  const b = document.createElement('b'); b.textContent = tag;
+  const e = document.createElement('span'); e.className = 'npEff'; e.textContent = `${PRESETS[preset]?.name ?? preset} · ${effect}`;
+  r.append(b, e);
+  if (detail) { const d = document.createElement('span'); d.className = 'npDet'; d.textContent = detail; r.append(d); }
+  if (extra) { const x = document.createElement('em'); x.textContent = extra; r.append(x); }
+  return r;
+}
+function updateNowPlaying(st) {
+  const np = rig.nowPlaying(st), rows = [];
+  rows.push(npRow(STAGE_TAG[np.ambient.stage] || np.ambient.stage.toUpperCase(), np.ambient.preset, np.ambient.effect, np.ambient.detail, np.preview ? 'preview' : '', 'amb'));
+  for (const f of np.fx) rows.push(npRow(STAGE_TAG[f.stage], f.preset, f.effect, f.detail, `${f.left.toFixed(1)} s left`, 'fx'));
+  const lv = document.createElement('div'); lv.className = 'npLevel'; lv.textContent = `frame level ${np.level.toFixed(2)} (cap 0.72)`;
+  rows.push(lv);
+  npEl.replaceChildren(...rows);
+  const now = performance.now() / 1000;
+  histEl.replaceChildren(...rig.history.map((h) => {
+    const li = document.createElement('li');
+    const tm = document.createElement('time'); tm.textContent = `${(now - h.at).toFixed(1)} s`;
+    li.append(tm, document.createTextNode(` ${STAGE_TAG[h.stage] || h.stage} · ${PRESETS[h.preset]?.name ?? h.preset} · ${h.effect}${h.detail ? ` (${h.detail})` : ''}`));
+    return li;
+  }));
+}
 
 // ------------------------------------------------------------------ live hardware
 // Served by simulator/live/bridge.py with ?live=1: frames go to the real WLED strip and
@@ -360,7 +535,7 @@ if (BRAIN) {
   // The brain owns the game, the mic, the music and the tunables: hide the JS engine's panels.
   document.body.classList.add('brainMode');
   $('liveTag').textContent = 'BRAIN'; $('liveTag').title = 'Real brain-rs via the bridge';
-  for (const id of ['detectorPanel', 'tunablesPanel', 'musicBar', 'ledMode', 'mirrorToggle']) $(id).hidden = true;
+  for (const id of ['detectorPanel', 'tunablesPanel', 'musicBar', 'ledMode', 'mirrorToggle', 'fxPanel', 'fxNowWrap']) $(id).hidden = true;
   $('brainStates').hidden = false; $('presRow').hidden = true;
   $('micBtn').disabled = true; $('micBtn').title = 'Brain mode: the brain uses its own microphone';
   document.querySelector('.brand small').textContent = 'live brain';
@@ -543,7 +718,8 @@ function updatePanels(info) {
   $('maxPower').textContent = arena.currentSessionMaxPower.toFixed(0);
   $('coolLeft').textContent = st === S.Cooldown ? `${info.cooldownRemainingSec.toFixed(0)} s` : '-';
   $('kos').textContent = game.kos;
-  $('effectLabel').textContent = `${st}: ${EFFECT_LABELS[rig.mode][st]}`;
+  { const np = rig.nowPlaying(st); $('effectLabel').textContent = `${np.preview ? `${np.ambient.stage.toUpperCase()} (preview)` : st}: ${np.ambient.effect}`; }
+  updateNowPlaying(st);
 
   // shout detector
   const f = lastFeat, d = detector.last;
@@ -593,6 +769,8 @@ function frame(tms) {
   const dt = Math.min((tms - lastT) / 1000, 0.1); lastT = tms;
   try {
     simNow += dt * cfg.time_scale;
+    // The fight clock (and the inactivity timer) pause while the victory finale plays.
+    if (!BRAIN && game.respawnAt != null && sm.currentState === S.Fight && arena.fightStartedAt != null) { arena.fightStartedAt += dt * cfg.time_scale; arena.lastActivityAt = simNow; }
     if (!BRAIN) {
       feats.pump();
       presence.tick(simNow, sensorOn);
@@ -600,23 +778,28 @@ function frame(tms) {
     }
     const info = BRAIN ? brain.info() : arena.getStateInfo();
     const st = info.currentState;
-    // respawn after KO
+    // after the victory finale: the next round (or, with "knocking out ends the fight", the cooldown)
     const t = performance.now() / 1000;
     if (game.respawnAt != null && t >= game.respawnAt) {
-      game.respawnAt = null; game.maxHp = Math.round(game.maxHp * 1.25); game.hp = game.maxHp; scene.resetDamage();
-      log(`Shadow returns with ${game.maxHp} HP`, 'ko');
+      game.respawnAt = null;
+      if (prefs.koEnds && !BRAIN && sm.currentState === S.Fight) arena.endFightEarly('KnockOut');
+      else nextRound();
     }
+    // from round 2 the shadow heals while nobody punches it
+    game.healing = st === S.Fight && game.respawnAt == null && game.round > 1 && t - game.lastHitAt > 1 && game.hp < game.maxHp && cfg.round_regen_per_sec > 0;
+    if (game.healing) game.hp = Math.min(game.maxHp, game.hp + cfg.round_regen_per_sec * (game.round - 1) * dt * cfg.time_scale);
     if (t - game.lastHitAt > 1.0) game.combo = 0;
     if (pdown) scene.charge = { x: pdown.x, y: pdown.y, p: Math.min(1, (performance.now() - pdown.t) / 600) };
     else if (spaceDown) { const g = scene.bagGeom(); scene.charge = { x: scene.cx, y: (g.top + g.bot) / 2, p: Math.min(1, (performance.now() - spaceDown) / 600) }; }
     const level = lastFeat ? Math.min(1, Math.max(0, lastFeat.db_above_floor / 30)) : 0;
+    scene.micLevel = level;
     const coolTotal = BRAIN ? brain.tunables?.cooldown_duration_sec ?? 60 : cfg.cooldown_duration_sec;
     const cooldownProgress = st === S.Cooldown && info.cooldownRemainingSec != null ? 1 - info.cooldownRemainingSec / Math.max(1, coolTotal) : 0;
     if (!BRAIN) rig.render(st, { energyPct: info.energyPercentage, fightRemaining: info.fightRemainingSec, cooldownProgress, cooldownLeft: info.cooldownRemainingSec, level });
     // No frames for 1.5 s and WLED not holding a realtime frame: the strip shows nothing we can see.
     else if (tms - brainFrame.at > 1500 && brainFrame.at > -1e9 && !live?.status?.brain?.realtime) { rig.cols.forEach((c) => c.fill(0)); brainFrame.at = -1e9; brainFrame.source = null; }
     scene.draw({
-      state: st, energyPct: info.energyPercentage, hp: game.hp, hpPct: game.hp / game.maxHp, kos: game.kos,
+      state: st, energyPct: info.energyPercentage, hp: game.hp, hpPct: game.hp / game.maxHp, kos: game.kos, round: game.round, healing: game.healing,
       combo: game.combo, comboMult: 1 + Math.min(game.combo - 1, 10) * 0.1, present: (BRAIN ? brain.present : presence.fusion.present) || sensorOn,
       fightRemaining: info.fightRemainingSec, cooldownProgress, cooldownLeft: info.cooldownRemainingSec, summary: game.summary, respawning: game.respawnAt != null,
       inactiveFor: info.timeSinceLastActivitySec ?? 0, inactivityTimeout: BRAIN ? brain.tunables?.fight_inactivity_timeout_sec ?? 30 : cfg.fight_inactivity_timeout_sec,
@@ -641,5 +824,5 @@ window.sim = {
   playlist,
   get state() { return BRAIN ? brain.info().currentState : sm.currentState; }, get info() { return BRAIN ? brain.info() : arena.getStateInfo(); }, get game() { return game; },
   get cfg() { return cfg; }, get errors() { return errors; }, get lastFeat() { return lastFeat; }, get detector() { return detector; },
-  rig, scene, hitPicker, punch: (p) => punch(p), setSensor, get live() { return live; }, get brain() { return brain; }, brainFrame, shoutDown, shoutUp, shoutFor: (ms) => feats.pulse(ms), skip: (sec) => { simNow += sec; presence.tick(simNow, sensorOn); arena.tick(simNow); }, arena, presence, sm,
+  rig, scene, hitPicker, punch: (p) => punch(p), previewStage, setOverride, setFxParam, nextRound, setSensor, get live() { return live; }, get brain() { return brain; }, brainFrame, shoutDown, shoutUp, shoutFor: (ms) => feats.pulse(ms), skip: (sec) => { simNow += sec; presence.tick(simNow, sensorOn); arena.tick(simNow); }, arena, presence, sm,
 };

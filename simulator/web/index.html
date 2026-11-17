@@ -48,13 +48,31 @@
       <div class="panel strips">
         <div class="panelHead">
           <h2>LED columns</h2>
-          <select id="ledMode" aria-label="LED effect source">
+          <select id="ledMode" aria-label="LED effect preset" title="Effect preset: the look of every stage (override single stages under Effects)">
             <option value="brain-rs">brain-rs effects (config.yaml)</option>
             <option value="proposal">Sim proposal effects</option>
           </select>
         </div>
         <div class="effectLabel" id="effectLabel"></div>
         <canvas id="strips" aria-label="Per-LED view of the four columns"></canvas>
+        <div class="fxNowWrap" id="fxNowWrap">
+          <div class="nowPlaying" id="fxNow" aria-label="Effects on the LEDs now"></div>
+          <details class="fxHistory"><summary>Last 8 effects</summary><ol id="fxHistory"></ol></details>
+        </div>
+        <details class="fxPanel" id="fxPanel">
+          <summary>Effects: mix stages, preview, fine-tune</summary>
+          <div class="fxTop">
+            <label class="fxOverlay">Screen overlays
+              <select id="overlayMode" aria-label="Screen overlays">
+                <option value="minimal">Minimal: LEDs first</option>
+                <option value="full">Full: rings, flashes, bolts</option>
+              </select>
+            </label>
+            <button class="btn small ghost" id="fxReset" type="button">Reset effects</button>
+          </div>
+          <p class="note">Each stage uses the preset above unless you pick another one here. Preview fires a stage's effect on the LEDs right away.</p>
+          <div id="fxStages"></div>
+        </details>
         <div class="live" id="livePanel" hidden>
           <div class="liveRow">
             <label class="toggle" id="mirrorToggle"><input type="checkbox" id="liveMirror" checked><span class="sw"></span><span>Mirror to real strip</span></label>

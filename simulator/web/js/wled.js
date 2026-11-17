@@ -2,8 +2,11 @@
 // mode 'brain-rs': what brain-rs/src/services/wled_manager.rs + config.yaml `wled.effects`
 //   ask for per state (WLED built-ins approximated in JS, FIGHT realtime frame ported).
 // mode 'proposal': SIM PROPOSAL effects (energy-bar warming, punch shockwaves, ...).
+// Other presets (presets.js) and per-stage overrides: every stage (idle, warming, opening, fight,
+// jab/hook/heavy, shout, victory) is drawn by the preset chosen for it.
 // Each column is a Float32Array of RGB in 0..1, index 0 = bottom LED.
 import { ArenaState } from './state_machine.js';
+import { PRESETS, STAGE_BY_ID, fxParamDefaults } from './presets.js';
 
 export const COLUMNS = 4;
 
@@ -59,10 +62,23 @@ const smooth = (x) => { x = clamp01(x); return x * x * (3 - 2 * x); };
 // Deterministic hash noise in 0..1 (stable bolt / shard shapes per seed).
 const hash = (a, b) => { const x = Math.sin(a * 127.1 + b * 311.7) * 43758.5453; return x - Math.floor(x); };
 const HEAVY_DUR = { thunder: 0.95, gold: 1.5, shatter: 1.1, strobe: 0.95, split: 1.0, nova: 1.35, open: 1.7 };
+/** RGB hue rotation around the grey axis (whites stay white). */
+function hueMatrix(deg) {
+  const a = deg * Math.PI / 180, c = Math.cos(a), k = (1 - c) / 3, q = Math.sqrt(1 / 3) * Math.sin(a);
+  return [c + k, k - q, k + q, k + q, c + k, k - q, k - q, k + q, c + k];
+}
+const rot = (m, r, g, b) => [m[0] * r + m[1] * g + m[2] * b, m[3] * r + m[4] * g + m[5] * b, m[6] * r + m[7] * g + m[8] * b];
+const STATE_STAGE = { IDLE: 'idle', WARMING: 'warming', FIGHT: 'fight' };
+const HIT_TIERS = new Set(['jab', 'hook', 'heavy']);
 
 export class LedRig {
   constructor(numLeds) {
-    this.mode = 'proposal'; this.resize(numLeds);
+    this.preset = 'proposal'; this.resize(numLeds);
+    this.overrides = {};     // stage id -> preset id (per-stage mixing)
+    this.params = {};        // stage id -> { speed, size, gain, hue } changed from the defaults
+    this.history = [];       // last effects fired, newest first
+    this.preview = null;     // { state, g, until }: render this state for a while (preview buttons)
+    this.gainK = 1; this.sizeK = 1; this.hueM = null; this.now = 0; this.ambientKey = null;
     this.waves = []; this.flash = 0; this.shoutFlash = 0; this.rage = 0; this.lastT = null;
     this.fx = [];            // active punch / shout / fight-start effects
     this.variety = true;     // tunable hit_fx_variety: false = the original white flash for every heavy
@@ -70,6 +86,22 @@ export class LedRig {
     this.wStage = 0; this.stageKick = 0; this.wSparks = []; this.wArcs = []; this.wPops = []; this.shoutWaves = [];
     this.nextArc = 0; this.nextPop = 0; this.lastLevel = 0;
   }
+
+  // 'mode' is the base preset (kept under its old name for the console and old prefs).
+  get mode() { return this.preset; }
+  set mode(v) { this.preset = PRESETS[v] ? v : 'proposal'; }
+  /** Preset id drawing a stage (its override, else the base preset). */
+  presetFor(stage) { const o = this.overrides[stage]; return o && PRESETS[o] ? o : this.preset; }
+  stageDef(stage) { return PRESETS[this.presetFor(stage)][stage]; }
+  P(stage) { return { ...fxParamDefaults(), ...(this.params[stage] || {}) }; }
+  /** The effect definition for an fx instance (kind for hits). */
+  fxDef(f) { const d = PRESETS[f.preset]?.[f.stage]; return d?.kinds ? d.kinds[f.kind] : d; }
+  logFx(stage, preset, effect, detail) {
+    this.history.unshift({ at: performance.now() / 1000, stage, preset, effect, detail });
+    if (this.history.length > 8) this.history.length = 8;
+  }
+  /** Render `state` (with g overrides) for `sec` seconds whatever the arena does (preview buttons). */
+  previewFor(sec, state, g = null) { this.preview = { state, g, until: performance.now() / 1000 + sec }; }
 
   resize(n) {
     this.n = n;
@@ -87,11 +119,16 @@ export class LedRig {
     const p = power / 100, t = performance.now() / 1000;
     // Fight intensity: hard punches build it fast, light ones barely; it fades in a few seconds.
     this.rage = Math.min(1, this.rage + 0.08 + 0.4 * p * p);
+    const tier = sig?.tier || (power >= 75 ? 'heavy' : power >= 45 ? 'hook' : 'jab');
+    const pid = this.presetFor(tier);
+    if (PRESETS[pid][tier].none) return; // brain-rs: the realtime frame ignores punches
     const classic = !sig || sig.kind === 'classic' || !this.variety;
+    const fp = classic ? pid : sig.preset || pid; // the preset the signature was picked from
+    if (!classic && fp !== 'proposal') { this.addFx({ ...sig, preset: fp }, t, p); return; }
     const tint = classic ? null : hsv(sig.hue, 0.75, 1);
     // light taps = small ripple; with a signature the wave is tinted and the signature carries the punch
     this.waves.push({ t0: t, p: p * p * 1.3 * (classic ? 1 : sig.tier === 'heavy' ? 0.55 : 0.8), tint });
-    if (classic) { if (p > 0.75) this.flash = Math.max(this.flash, p); } else this.addFx(sig, t, p);
+    if (classic) { if (p > 0.75) this.flash = Math.max(this.flash, p); this.logFx(tier, pid, 'classic white flash', `power ${power | 0}`); } else this.addFx({ ...sig, preset: 'proposal' }, t, p);
     if (this.waves.length > 24) this.waves.shift();
   }
 
@@ -99,18 +136,30 @@ export class LedRig {
   shout(intensity, state) {
     this.shoutFlash = Math.max(this.shoutFlash, 0.4 + intensity * 0.6);
     const t = performance.now() / 1000;
-    if (state === ArenaState.Fight) this.addFx({ tier: 'shout', kind: 'shout', hue: 172, k: intensity }, t, intensity);
+    if (state === ArenaState.Fight) { if (!this.stageDef('shout').none) this.addFx({ tier: 'shout', kind: 'shout', hue: 172, k: intensity, preset: this.presetFor('shout') }, t, intensity); }
     else this.shoutWaves.push({ t0: t, k: intensity });
     if (this.shoutWaves.length > 12) this.shoutWaves.shift();
   }
 
   /** Full energy bar -> FIGHT: the columns suck in, then explode into the fire (synced with sfx.arenaOpen). */
-  fightStart() { this.fx = []; this.addFx({ tier: 'open', kind: 'open', hue: 30 }, performance.now() / 1000, 1); }
+  fightStart() { this.fx = []; if (!this.stageDef('open').none) this.addFx({ tier: 'open', kind: 'open', hue: 30, preset: this.presetFor('open') }, performance.now() / 1000, 1); }
+
+  /** Shadow knocked out: the victory finale (presets.js finale), synced with sfx.victory and scene.victory. */
+  victory() {
+    this.fx = this.fx.filter((f) => f.tier === 'victory');
+    if (this.stageDef('victory').none) return;
+    this.addFx({ tier: 'victory', kind: 'victory', hue: 44, preset: this.presetFor('victory') }, performance.now() / 1000, 1);
+  }
+  get victoryActive() { const t = performance.now() / 1000; return this.fx.some((f) => f.tier === 'victory' && (t - f.t0) * f.sp < f.dur); }
 
   addFx(sig, t, p) {
-    const R = Math.random;
-    const fx = { ...sig, t0: t, p, x0: 0.38 + 0.16 * R(), seed: R() * 1000 };
-    if (sig.tier === 'heavy') {
+    const R = Math.random, stage = sig.tier, P = this.P(stage);
+    const fx = { ...sig, stage, preset: sig.preset || 'proposal', t0: t, p, x0: 0.38 + 0.16 * R(), seed: R() * 1000, sp: P.speed };
+    if (fx.preset !== 'proposal') {
+      const d = this.fxDef(fx); if (!d?.fx) return;
+      fx.dur = (typeof d.dur === 'function' ? d.dur(fx) : d.dur || 1) * (stage === 'heavy' ? 1 + 0.3 * (fx.esc || 0) : 1);
+      if (stage === 'shout') { fx.dur *= 0.8 + 0.4 * p; fx.x0 = 0.25 + 0.5 * R(); }
+    } else if (sig.tier === 'heavy') {
       const e = sig.esc || 0;
       fx.dur = HEAVY_DUR[sig.kind] * (1 + 0.3 * e);
       if (sig.kind === 'thunder') {
@@ -137,8 +186,42 @@ export class LedRig {
     else if (sig.tier === 'jab') fx.dur = 0.32;
     else if (sig.tier === 'shout') { fx.dur = 0.9 + 0.5 * p; fx.x0 = 0.25 + 0.5 * R(); }
     else if (sig.tier === 'open') fx.dur = HEAVY_DUR.open;
+    else if (sig.tier === 'victory') fx.dur = PRESETS.proposal.victory.dur;
     this.fx.push(fx);
-    if (this.fx.length > 16) this.fx.shift();
+    if (this.fx.length > 16) this.fx.splice(this.fx.findIndex((f) => f.tier !== 'victory'), 1);
+    const d = this.fxDef(fx), name = HIT_TIERS.has(stage) ? (d?.name || fx.kind) : d?.name;
+    this.logFx(stage, fx.preset, name, this.fxDetail(fx));
+  }
+
+  fxDetail(f) {
+    const P = this.P(f.stage), bits = [];
+    if (HIT_TIERS.has(f.stage)) bits.push(`power ${Math.round(f.p * 100)}`, `hue ${Math.round(f.hue)}`);
+    if (f.stage === 'heavy') bits.push(`escalation ${(f.esc || 0).toFixed(2)}`);
+    if (f.stage === 'shout') bits.push(`strength ${(f.k ?? 1).toFixed(2)}`);
+    bits.push(`${(f.dur / f.sp).toFixed(2)} s`);
+    for (const [k, nm] of [['speed', 'speed'], ['size', 'size'], ['gain', 'intensity']]) if (P[k] !== 1) bits.push(`${nm} ${P[k]}x`);
+    if (P.hue) bits.push(`shift ${P.hue}deg`);
+    return bits.join(', ');
+  }
+
+  /** What is on the LEDs right now: the ambient of the shown state and every live effect. */
+  nowPlaying(state) {
+    const t = performance.now() / 1000, st = this.preview && t < this.preview.until ? this.preview.state : state;
+    const stage = STATE_STAGE[st], out = { level: this.lastLevel, preview: !!(this.preview && t < this.preview.until), ambient: null, fx: [] };
+    if (stage) {
+      const pid = this.presetFor(stage), d = PRESETS[pid][stage], P = this.P(stage), bits = [];
+      if (stage === 'fight') bits.push(`rage ${this.rage.toFixed(2)}`);
+      if (stage === 'warming') bits.push(`bar stage ${this.wStage + 1}/4`);
+      for (const [k, nm] of [['speed', 'speed'], ['size', 'size'], ['gain', 'intensity']]) if (P[k] !== 1) bits.push(`${nm} ${P[k]}x`);
+      if (P.hue) bits.push(`shift ${P.hue}deg`);
+      out.ambient = { stage, preset: pid, effect: d.name, detail: bits.join(', ') };
+    } else out.ambient = { stage: st.toLowerCase(), preset: this.preset === 'brain-rs' ? 'brain-rs' : 'proposal', effect: EFFECT_LABELS[this.preset === 'brain-rs' ? 'brain-rs' : 'proposal'][st], detail: '' };
+    for (const f of this.fx) {
+      const left = f.dur / f.sp - (t - f.t0); if (left <= 0) continue;
+      const d = this.fxDef(f);
+      out.fx.push({ stage: f.stage, preset: f.preset, effect: d?.name || f.kind, detail: this.fxDetail(f), left });
+    }
+    return out;
   }
 
   /**
@@ -148,16 +231,26 @@ export class LedRig {
   render(state, g) {
     const t = performance.now() / 1000;
     const dt = this.lastT == null ? 1 / 60 : Math.min(t - this.lastT, 0.1);
-    this.lastT = t;
+    this.lastT = t; this.now = t;
     const frameScale = dt * 60;
-    if (this.mode === 'brain-rs') this.renderBrainRs(state, t, frameScale);
-    else this.renderProposal(state, t, g, frameScale, dt);
+    if (this.preview && t >= this.preview.until) this.preview = null;
+    if (this.preview) { state = this.preview.state; if (this.preview.g) g = { ...g, ...this.preview.g }; }
+    const stage = STATE_STAGE[state];
+    if (stage) {
+      const key = `${state}:${this.presetFor(stage)}`;
+      if (key !== this.ambientKey) { this.ambientKey = key; this.logFx(stage, this.presetFor(stage), this.stageDef(stage).name, 'ambient'); }
+      if (state === ArenaState.Fight) this.renderFx(t);
+      this.renderAmbient(stage, t, g, frameScale, dt);
+      if (state === ArenaState.Fight) this.composite(t, g, PRESETS[this.presetFor('fight')].fight.brain);
+    } else if (this.preset === 'brain-rs') { this.ambientKey = null; this.renderBrainRs(state, t, frameScale); }
+    else { this.ambientKey = null; this.renderProposal(state, t, g, frameScale, dt); }
+    this.limit();
     this.flash *= Math.pow(0.04, dt);
     this.rage *= Math.pow(0.72, dt); // ~3 s half-life: stop punching and it sinks back to a candle
     this.shoutFlash *= Math.pow(0.05, dt);
     this.stageKick *= Math.pow(0.02, dt);
     this.waves = this.waves.filter((w) => t - w.t0 < 2.5);
-    this.fx = this.fx.filter((f) => t - f.t0 < f.dur);
+    this.fx = this.fx.filter((f) => (t - f.t0) * f.sp < f.dur);
     this.shoutWaves = this.shoutWaves.filter((w) => t - w.t0 < 1.2);
   }
 
@@ -174,15 +267,70 @@ export class LedRig {
     for (const a of this.cols) for (let j = 0; j < a.length; j++) a[j] *= k;
   }
 
+  /** One ambient stage (idle / warming / fight) from its preset, then Intensity and Colour shift. */
+  renderAmbient(stage, t, g, frameScale, dt) {
+    const pid = this.presetFor(stage), d = PRESETS[pid][stage], P = this.P(stage);
+    this.gainK = 1; this.sizeK = P.size; this.hueM = null;
+    if (d.brain) this.renderBrainRs(d.brain, t * P.speed, frameScale * P.speed);
+    else if (PRESETS[pid].legacy) {
+      if (stage === 'idle') this.propIdle(t * P.speed);
+      else if (stage === 'warming') this.renderWarming(t, g, dt);
+      else this.propFight(t * P.speed, frameScale * P.speed);
+    } else d.fn(this, t * P.speed, g, P, dt * P.speed);
+    this.sizeK = 1;
+    const m = P.hue ? hueMatrix(P.hue) : null, k = P.gain;
+    if (!m && k === 1) return;
+    for (const a of this.cols) for (let j = 0; j < a.length; j += 3) {
+      let r = a[j], gg = a[j + 1], b = a[j + 2];
+      if (m) [r, gg, b] = rot(m, r, gg, b);
+      a[j] = Math.max(0, r * k); a[j + 1] = Math.max(0, gg * k); a[j + 2] = Math.max(0, b * k);
+    }
+  }
+  /** Ambient painting straight into the frame (presets.js ambients): soft dot / band added on top. */
+  glow(c, xc, w, rgb, k) {
+    if (k <= 0.002) return;
+    const n = this.n, a = this.cols[c], lo = Math.max(0, Math.floor((xc - 2.2 * w) * n)), hi = Math.min(n - 1, Math.ceil((xc + 2.2 * w) * n));
+    for (let i = lo; i <= hi; i++) { const d = ((i + 0.5) / n - xc) / w, e = k * Math.exp(-d * d); a[i * 3] += rgb[0] * e; a[i * 3 + 1] += rgb[1] * e; a[i * 3 + 2] += rgb[2] * e; }
+  }
+  glowBand(c, x0, x1, rgb, k, soft = 0.02) {
+    const n = this.n, a = this.cols[c], lo = Math.max(0, Math.floor((x0 - soft) * n)), hi = Math.min(n - 1, Math.ceil((x1 + soft) * n));
+    for (let i = lo; i <= hi; i++) {
+      const x = (i + 0.5) / n, e = k * Math.min(smooth((x - x0 + soft) / (2 * soft)), smooth((x1 + soft - x) / (2 * soft)));
+      a[i * 3] += rgb[0] * e; a[i * 3 + 1] += rgb[1] * e; a[i * 3 + 2] += rgb[2] * e;
+    }
+  }
+
+  /** FIGHT: punch shockwaves, the classic flash, effect dimming and effect light over the ambient; 10 s warning. */
+  composite(t, g, brain) {
+    const n = this.n, left = g.fightRemaining ?? 99, wv = [0, 0, 0];
+    const warn = !brain && left < 10 ? (0.5 + 0.5 * Math.sin(t * 12)) : 0;
+    for (let c = 0; c < COLUMNS; c++) {
+      const a = this.cols[c], add = this.addBuf[c], dim = this.dimBuf[c];
+      for (let i = 0; i < n; i++) {
+        const x = i / n;
+        let r = a[i * 3], gg = a[i * 3 + 1], b = a[i * 3 + 2];
+        const w = this.waveAt(c, i, t, wv.fill(0));
+        r += w[0]; gg += w[1]; b += w[2];
+        const f = this.flash * 0.8; r += f; gg += f; b += f;
+        const dm = dim[i]; r *= dm; gg *= dm; b *= dm;
+        r += add[i * 3]; gg += add[i * 3 + 1]; b += add[i * 3 + 2];
+        if (warn && x > 0.85) { r = Math.max(r, warn); gg *= 0.3; b *= 0.3; }
+        this.set(c, i, Math.min(r, 1), Math.min(gg, 1), Math.min(b, 1));
+      }
+    }
+  }
+
   // ---------------------------------------------------------------- effect buffers
   clearFx() { for (let c = 0; c < COLUMNS; c++) { this.addBuf[c].fill(0); this.dimBuf[c].fill(1); } }
   add(c, i, rgb, k) {
     if (k <= 0.002) return;
     const a = this.addBuf[c]; k *= this.gainK;
-    a[i * 3] += rgb[0] * k; a[i * 3 + 1] += rgb[1] * k; a[i * 3 + 2] += rgb[2] * k;
+    if (this.hueM) rgb = rot(this.hueM, rgb[0], rgb[1], rgb[2]);
+    a[i * 3] += Math.max(0, rgb[0]) * k; a[i * 3 + 1] += Math.max(0, rgb[1]) * k; a[i * 3 + 2] += Math.max(0, rgb[2]) * k;
   }
-  /** soft dot centred at xc (0..1 of the column), w ~ half-width in column heights (>= 1 strip LED at 45) */
+  /** soft dot centred at xc (0..1 of the column), w ~ half-width in column heights (>= 1 strip LED at 45); w scales with Size */
   blob(c, xc, w, rgb, k) {
+    w *= this.sizeK;
     const n = this.n, lo = Math.max(0, Math.floor((xc - 2.2 * w) * n)), hi = Math.min(n - 1, Math.ceil((xc + 2.2 * w) * n));
     for (let i = lo; i <= hi; i++) { const d = ((i + 0.5) / n - xc) / w; this.add(c, i, rgb, k * Math.exp(-d * d)); }
   }
@@ -199,10 +347,14 @@ export class LedRig {
   renderFx(t) {
     this.clearFx();
     for (const f of this.fx) {
-      const a = t - f.t0; if (a < 0 || a > f.dur) continue;
-      this.gainK = f.tier === 'open' || f.tier === 'shout' ? 1 : this.intensity;
-      const fn = this['fx_' + f.kind]; if (fn) fn.call(this, f, a);
+      const a = (t - f.t0) * f.sp; if (a < 0 || a > f.dur) continue;
+      const P = this.P(f.stage), hit = HIT_TIERS.has(f.stage);
+      this.gainK = (hit ? this.intensity : 1) * P.gain; this.sizeK = P.size;
+      this.hueM = !hit && P.hue ? hueMatrix(f.stage === 'shout' ? Math.max(-25, Math.min(25, P.hue)) : P.hue) : null;
+      if (f.preset === 'proposal' && f.stage !== 'victory') { const fn = this['fx_' + f.kind]; if (fn) fn.call(this, f, a); }
+      else this.fxDef(f)?.fx?.(this, f, a, P);
     }
+    this.gainK = 1; this.sizeK = 1; this.hueM = null;
   }
 
   // -- heavies (power >= 75) ---------------------------------------------------------
@@ -550,11 +702,19 @@ export class LedRig {
   }
 
   renderProposal(state, t, g, frameScale, dt = 1 / 60) {
-    const n = this.n;
     switch (state) {
       case ArenaState.Suspended:
         this.fillAll(() => [0, 0, 0]); break;
-      case ArenaState.Idle: {
+      case ArenaState.Idle: this.propIdle(t); break;
+      case ArenaState.Warming: this.renderWarming(t, g, dt); break;
+      case ArenaState.Fight: this.renderFx(t); this.propFight(t, frameScale); this.composite(t, g, false); break;
+      case ArenaState.Cooldown: this.propCooldown(t, g, frameScale); break;
+      default: this.fillAll(() => [0, 0, 0]);
+    }
+  }
+
+  propIdle(t) {
+    const n = this.n;
         // Slow violet breathing with a wave rolling across the arc to attract people.
         this.fillAll((c, i) => {
           const x = i / n;
@@ -563,18 +723,12 @@ export class LedRig {
           const v = breath * (0.55 + 0.45 * roll);
           return hsv(250 - 25 * x + 10 * Math.sin(t * 0.2), 0.75, v);
         });
-        break;
-      }
-      case ArenaState.Warming: this.renderWarming(t, g, dt); this.limit(); break;
-      case ArenaState.Fight: {
-        const left = g.fightRemaining ?? 99;
-        const warn = left < 10 ? (0.5 + 0.5 * Math.sin(t * 12)) : 0;
-        // No punches: a low candle flicker at the base. More/harder punches: the fire grows
-        // taller and brighter until it fills the columns.
-        this.renderFx(t);
-        const rg = this.rage, gain = 0.1 + 0.9 * Math.pow(rg, 0.7), wv = [0, 0, 0];
+  }
+
+  /** Proposal FIGHT ambient. No punches: a low candle flicker at the base. More/harder punches: the fire grows taller and brighter until it fills the columns. */
+  propFight(t, frameScale) {
+        const n = this.n, rg = this.rage, gain = 0.1 + 0.9 * Math.pow(rg, 0.7);
         for (let c = 0; c < COLUMNS; c++) {
-          const add = this.addBuf[c], dim = this.dimBuf[c];
           this.fires[c].step(lerp(160, 55, rg), lerp(25, 170, rg), frameScale);
           for (let i = 0; i < n; i++) {
             const x = i / n;
@@ -584,19 +738,13 @@ export class LedRig {
             const candle = (0.035 + 0.025 * flick) * Math.max(0, 1 - x * 4); // bottom quarter only
             const pulse = (0.02 + 0.13 * rg) * (0.6 + 0.4 * Math.sin(t * 8.4)) * (1 - x * 0.6); // throb grows with rage
             r = Math.max(r, candle, pulse); gg = Math.max(gg, candle * 0.35);
-            const w = this.waveAt(c, i, t, wv.fill(0));
-            r += w[0]; gg += w[1]; b += w[2];
-            const f = this.flash * 0.8; r += f; gg += f; b += f;
-            const dm = dim[i]; r *= dm; gg *= dm; b *= dm;
-            r += add[i * 3]; gg += add[i * 3 + 1]; b += add[i * 3 + 2];
-            if (warn && x > 0.85) { r = Math.max(r, warn); gg *= 0.3; b *= 0.3; }
-            this.set(c, i, Math.min(r, 1), Math.min(gg, 1), Math.min(b, 1));
+            this.set(c, i, r, gg, b);
           }
         }
-        this.limit();
-        break;
-      }
-      case ArenaState.Cooldown: {
+  }
+
+  propCooldown(t, g, frameScale) {
+        const n = this.n;
         // Embers cool down over the cooldown period and settle to calm blue.
         const p = clamp01(g.cooldownProgress ?? 0);
         for (let c = 0; c < COLUMNS; c++) {
@@ -607,10 +755,6 @@ export class LedRig {
             this.set(c, i, r, gg + calm * 0.3, b + calm);
           }
         }
-        break;
-      }
-      default: this.fillAll(() => [0, 0, 0]);
-    }
   }
 
   /** Average colour per column (for floor glow). */

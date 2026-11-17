@@ -2,7 +2,7 @@
 // opponent and the four LED columns in an arc behind it, plus a top-down inset.
 import { ArenaState } from './state_machine.js';
 import { COLUMNS } from './wled.js';
-import { hsv, SHOUT_HUE } from './hitfx.js';
+import { hsv, SHOUT_HUE, VICTORY } from './hitfx.js';
 
 const COL_ANGLES = [-62, -21, 21, 62].map((d) => d * Math.PI / 180); // around the bag, from "behind"
 const ARC_R = 2.2;      // m, bag -> columns
@@ -21,6 +21,12 @@ export class Scene {
     this.banner = null; // {text, sub, t0, dur}
     // Punch-signature moments: impact rings, lightning bolts, colour tint, blackout, hit-stop.
     this.rings = []; this.bolts = []; this.tints = []; this.dark = 0; this.slow = 0; this.pending = []; this.intensity = 1;
+    // Screen overlays: 'minimal' (default) keeps the bag and the LED columns clear: no rings, bolts,
+    // colour washes, blackouts or signature bursts; shouts show on the sound strip at the bottom edge.
+    // 'full' brings back the rings and washes of the punch signatures.
+    this.overlays = 'minimal';
+    this.shoutPulses = []; this.micLevel = 0;
+    this.vic = null; this.rise = null; // victory finale / new shadow rising
     this.reduceMotion = typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null;
     this.resize();
   }
@@ -63,15 +69,19 @@ export class Scene {
   /** Screen shake, skipped when the viewer asked the system to reduce motion. */
   shakeBy(v) { if (!this.reduceMotion?.matches) this.shake = Math.max(this.shake, v); }
   later(sec, fn) { this.pending.push({ at: performance.now() / 1000 + sec, fn }); }
+  get full() { return this.overlays === 'full'; }
   ring(x, y, rgb, { r0 = 10, r1 = 160, life = 0.45, width = 6, delay = 0 } = {}) {
+    if (!this.full) return;
     const add = () => this.rings.push({ x, y, rgb, r0, r1, life, width, age: 0 });
     if (delay > 0) this.later(delay, add); else add();
   }
   tint(rgb, a, life = 0.25, delay = 0) {
+    if (!this.full) return;
     const add = () => this.tints.push({ rgb, a: a * Math.min(1.3, this.intensity), life, age: 0 });
     if (delay > 0) this.later(delay, add); else add();
   }
   burst(x, y, n, rgb, { speed = 420, up = 0, dir = 0, life = 0.6, size = 3, kind = 'spark' } = {}) {
+    if (!this.full) return;
     for (let i = 0; i < n; i++) {
       const a = Math.random() * Math.PI * 2, v = speed * (0.3 + 0.7 * Math.random());
       this.particles.push({ x, y, vx: Math.cos(a) * v + dir, vy: Math.sin(a) * v - up, life: life * (0.6 + 0.6 * Math.random()), age: 0,
@@ -106,9 +116,10 @@ export class Scene {
       this.burst(x, y, 8, rgb, { speed: 260, life: 0.3, size: 2 });
       return;
     }
+    const look = sig.look || sig.kind;
     if (sig.tier === 'hook') {
-      if (sig.kind === 'sweep') this.burst(x, y, 22, rgb, { speed: 380, dir: -sig.dir * 380, life: 0.45, size: 2.6 });
-      else if (sig.kind === 'ring') this.ring(x, y, rgb, { r0: 8, r1: 130 * sc + 40, life: 0.4, width: 4 });
+      if (look === 'sweep') this.burst(x, y, 22, rgb, { speed: 380, dir: -sig.dir * 380, life: 0.45, size: 2.6 });
+      else if (look === 'ring') this.ring(x, y, rgb, { r0: 8, r1: 130 * sc + 40, life: 0.4, width: 4 });
       else { this.ring(x, y, rgb, { r0: 6, r1: 70 * sc + 30, life: 0.25, width: 4 }); this.ring(x, y, hsv(sig.hue + 40, 0.8, 1), { r0: 6, r1: 100 * sc + 30, life: 0.3, width: 4, delay: 0.14 }); }
       this.burst(x, y, 10, rgb, { speed: 300, life: 0.4, size: 2.2 });
       this.tint(rgb, 0.08, 0.15);
@@ -117,16 +128,17 @@ export class Scene {
     // heavy
     this.slow = Math.max(this.slow, 0.1); // hit-stop: the arena freezes for a beat
     const big = (1 + 0.35 * e) * sc;
-    { // the signature's name, beside the bag on the side the punch drives it to (the damage number sits on the other)
-      const g = this.bagGeom();
-      this.floater(`${sig.label}!`, this.cx + info.dir * (g.rw * 2.2 + 70 * sc), (g.top + g.bot) / 2, `rgb(${hsv(sig.hue, 0.55, 1).map((v) => v * 255 | 0)})`, true, 0.8 + 0.3 * e);
+    if (sig.label) { // the signature's name: full = beside the bag; minimal = on the floor under the bag, clear of the columns
+      const g = this.bagGeom(), col = `rgb(${hsv(sig.hue, 0.55, 1).map((v) => v * 255 | 0)})`;
+      if (this.full) this.floater(`${sig.label}!`, this.cx + info.dir * (g.rw * 2.2 + 70 * sc), (g.top + g.bot) / 2, col, true, 0.8 + 0.3 * e);
+      else this.floater(`${sig.label}!`, this.cx, Math.min(this.H - 40, g.bot + 46 * sc + 18), col, true, 0.7 + 0.25 * e);
     }
-    switch (sig.kind) {
+    switch (look) {
       case 'thunder': {
         for (const [k, at] of [[0, 0], [1, 0.08], [2, 0.19], [3, 0.31], [4, 0.46]].slice(0, 3 + Math.round(2 * e))) {
           this.later(at, () => {
             const c = k === 0 ? (Math.random() < 0.5 ? 1 : 2) : Math.floor(Math.random() * 4);
-            this.bolts.push({ from: [x, y], to: this.colPoint(c, COL_H * (0.5 + 0.45 * Math.random())), age: 0, life: 0.14, rgb: hsv(225 + 40 * Math.random(), 0.45, 1) });
+            if (this.full) this.bolts.push({ from: [x, y], to: this.colPoint(c, COL_H * (0.5 + 0.45 * Math.random())), age: 0, life: 0.14, rgb: hsv(225 + 40 * Math.random(), 0.45, 1) });
             this.tint(hsv(235, 0.6, 1), 0.22, 0.1);
           });
         }
@@ -163,7 +175,7 @@ export class Scene {
         break;
       case 'nova': {
         const B = 0.2 + 0.06 * e;
-        this.dark = Math.max(this.dark, 0.75); this.darkUntil = performance.now() / 1000 + B;
+        if (this.full) { this.dark = Math.max(this.dark, 0.75); this.darkUntil = performance.now() / 1000 + B; }
         this.later(B, () => {
           this.dark = 0;
           this.tint(hsv(30, 0.5, 1), 0.45, 0.3);
@@ -178,8 +190,11 @@ export class Scene {
     }
   }
 
-  /** A shout during FIGHT: teal sound-wave ripples from the shadow (visual only). */
+  /** A shout during FIGHT: a teal pulse on the sound strip; full overlays add ripples from the shadow (visual only). */
   shoutWave(k = 1) {
+    this.shoutPulses.push({ t0: performance.now() / 1000, k });
+    if (this.shoutPulses.length > 8) this.shoutPulses.shift();
+    if (!this.full) return;
     const g = this.bagGeom(), x = this.cx, y = g.top + (g.bot - g.top) * 0.3, sc = Math.min(this.W, 900) / 900;
     for (let j = 0; j < 3; j++) this.ring(x, y, hsv(SHOUT_HUE + 12 * j, 0.55 - 0.12 * j, 1), { r0: 20, r1: (180 + 260 * k) * sc, life: 0.7 + 0.3 * k, width: 3 - 0.6 * j, delay: j * 0.11 });
     this.tint(hsv(SHOUT_HUE, 0.6, 1), 0.06 * k, 0.25);
@@ -188,7 +203,7 @@ export class Scene {
   /** Full energy bar -> FIGHT: the screen sucks in, then a big ring at the impact (sfx ARENA_HIT = 0.35 s). */
   fightOpen() {
     const g = this.bagGeom(), x = this.cx, y = (g.top + g.bot) / 2, sc = Math.min(this.W, 900) / 900;
-    this.dark = 0.45; this.darkUntil = performance.now() / 1000 + 0.35;
+    if (this.full) { this.dark = 0.45; this.darkUntil = performance.now() / 1000 + 0.35; }
     this.later(0.35, () => {
       this.dark = 0;
       this.tint(hsv(32, 0.55, 1), 0.5, 0.45);
@@ -201,8 +216,37 @@ export class Scene {
 
   floater(text, x, y, color, big = false, scale = 1) { this.floaters.push({ text, x, y, color, big, scale, age: 0, life: big ? 1.4 : 0.9 }); }
   showBanner(text, sub, dur = 2.2) { this.banner = { text, sub, t0: performance.now() / 1000, dur }; }
-  ko() { this.koFlash = 1; this.shakeBy(26); this.cracks = []; }
+  ko() { if (this.full) this.koFlash = 1; this.shakeBy(26); this.cracks = []; }
   resetDamage() { this.cracks = []; }
+
+  /**
+   * Shadow defeated: it disintegrates into embers (on the LED shatter beat, 0.25 s), a big title
+   * above the columns and the round stats on the floor below them; synced with sfx.victory.
+   * @param {object} st { round, time, punches, maxCombo, hardest }
+   */
+  victory(st) {
+    const now = performance.now() / 1000;
+    this.vic = { t0: now, st }; this.rise = null; this.cracks = []; this.banner = null;
+    this.shakeBy(20);
+    this.later(0.25, () => {
+      const g = this.bagGeom(), h = g.bot - g.top, rw = g.rw;
+      for (let i = 0; i < 170; i++) { // ash and embers peel off the silhouette and drift up
+        const head = i < 40, y = head ? g.top - h * 0.2 + (Math.random() - 0.5) * rw * 2.2 : g.top - h * 0.05 + Math.random() * h * 0.85;
+        const span = head ? rw : rw * (2.6 - 1.3 * (y - g.top) / h);
+        this.particles.push({ x: this.cx + (Math.random() - 0.5) * 2 * span, y, vx: (Math.random() - 0.5) * 70, vy: -(25 + Math.random() * 110), life: 1.1 + Math.random() * 1.6, age: 0,
+          kind: 'ash', size: 1.5 + Math.random() * 3, col: Math.random() < 0.35 ? [1, 0.45 + 0.4 * Math.random(), 0.15] : [0.35, 0.03, 0.06] });
+      }
+      this.shadowAlpha = 0.05;
+    });
+    this.later(VICTORY.climax, () => this.shakeBy(14));
+  }
+  /** A new, tougher shadow rises from the floor. */
+  newRound(round, sub) {
+    this.vic = null; this.rise = { t0: performance.now() / 1000 }; this.shadowAlpha = 0;
+    this.showBanner(`ROUND ${round}`, sub, 2.4);
+  }
+  /** y of the top of the inner columns (titles go above it, so they never cover the LEDs). */
+  colTopY() { return Math.min(this.colPoint(1, COL_H)[1], this.colPoint(0, COL_H)[1]); }
 
   step(dt) {
     const now = performance.now() / 1000;
@@ -230,9 +274,11 @@ export class Scene {
     this.koFlash *= Math.pow(0.08, dt);
     for (const q of this.particles) {
       q.age += dt; q.x += q.vx * dt; q.y += q.vy * dt;
-      if (q.kind === 'spark' || q.kind === 'shard') { q.vy += 900 * dt; q.vx *= Math.pow(0.2, dt); q.rot = (q.rot || 0) + (q.vr || 0) * dt; } else { q.vx *= Math.pow(0.05, dt); q.vy -= 60 * dt; }
+      if (q.kind === 'ash') { q.vy -= 25 * dt; q.vx *= Math.pow(0.4, dt); q.x += Math.sin(q.age * 3 + q.size) * 12 * dt; } else if (q.kind === 'spark' || q.kind === 'shard') { q.vy += 900 * dt; q.vx *= Math.pow(0.2, dt); q.rot = (q.rot || 0) + (q.vr || 0) * dt; } else { q.vx *= Math.pow(0.05, dt); q.vy -= 60 * dt; }
     }
     this.particles = this.particles.filter((q) => q.age < q.life);
+    this.shoutPulses = this.shoutPulses.filter((p) => now - p.t0 < 1.2);
+    if (this.vic && now - this.vic.t0 > VICTORY.dur + 0.3) this.vic = null;
     for (const fl of this.floaters) fl.age += dt;
     this.floaters = this.floaters.filter((fl) => fl.age < fl.life);
   }
@@ -246,9 +292,9 @@ export class Scene {
     const t = performance.now() / 1000;
     const S = ArenaState;
     // shadow materialisation target per state
-    const target = v.state === S.Fight ? (v.respawning ? 0.15 : 1) : v.state === S.Warming ? 0.15 + 0.75 * (v.energyPct || 0)
+    const target = v.state === S.Fight ? (this.vic ? 0 : v.respawning ? 0.15 : 1) : v.state === S.Warming ? 0.15 + 0.75 * (v.energyPct || 0)
       : v.state === S.Cooldown ? Math.max(0, 0.35 - (v.cooldownProgress || 0)) : v.state === S.Idle ? 0.08 : 0;
-    this.shadowAlpha += (target - this.shadowAlpha) * Math.min(1, dt * 3);
+    if (!this.vic || t - this.vic.t0 > 0.25) this.shadowAlpha += (target - this.shadowAlpha) * Math.min(1, dt * (this.vic ? 12 : this.rise ? 1.6 : 3));
     const eyeT = v.state === S.Fight ? 1 : v.state === S.Warming ? (v.energyPct || 0) : 0;
     this.eyeOpen += (eyeT - this.eyeOpen) * Math.min(1, dt * 4);
     this.hpShown += ((v.hpPct ?? 1) - this.hpShown) * Math.min(1, dt * 6);
@@ -291,6 +337,9 @@ export class Scene {
       if (q.kind === 'spark') {
         ctx.fillStyle = q.col ? `rgba(${q.col[0] * 255 | 0},${q.col[1] * 255 | 0},${q.col[2] * 255 | 0},${a})` : `rgba(255,${160 + 90 * a | 0},${60 * a | 0},${a})`;
         ctx.fillRect(q.x, q.y, q.size, q.size);
+      } else if (q.kind === 'ash') {
+        ctx.fillStyle = `rgba(${q.col[0] * 255 | 0},${q.col[1] * 255 | 0},${q.col[2] * 255 | 0},${a})`;
+        ctx.fillRect(q.x, q.y, q.size, q.size * 0.7);
       } else if (q.kind === 'shard') {
         ctx.save(); ctx.translate(q.x, q.y); ctx.rotate(q.rot);
         ctx.fillStyle = `rgba(${q.col[0] * 255 | 0},${q.col[1] * 255 | 0},${q.col[2] * 255 | 0},${a})`;
@@ -354,7 +403,69 @@ export class Scene {
     if (v.state === S.Suspended) { ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillRect(0, 0, W, H); }
 
     this.drawHud(v, t);
+    if (this.vic) this.drawVictory(t);
+    this.drawSoundStrip(t);
     this.drawMinimap(v);
+  }
+
+  /** Sound strip on the bottom edge: the live mic level (dim) and a teal pulse per shout; never over the bag or columns. */
+  drawSoundStrip(t) {
+    const { ctx, W, H } = this, y = H - 7, h = 6, cx = W / 2;
+    ctx.fillStyle = 'rgba(255,255,255,0.05)'; ctx.fillRect(0, y, W, h);
+    const lv = Math.max(0, Math.min(1, this.micLevel)), [r, g, b] = hsv(SHOUT_HUE, 0.5, 1).map((x) => x * 255 | 0);
+    if (lv > 0.02) { ctx.fillStyle = `rgba(${r},${g},${b},${0.18 + 0.25 * lv})`; ctx.fillRect(cx - lv * W / 2, y, lv * W, h); }
+    ctx.globalCompositeOperation = 'lighter';
+    for (const p of this.shoutPulses) {
+      const a = t - p.t0, reach = Math.min(1, a * 2.2) * (0.35 + 0.65 * p.k) * W / 2, al = Math.max(0, 1 - a / 1.2);
+      const grd = ctx.createLinearGradient(cx - reach, 0, cx + reach, 0);
+      grd.addColorStop(0, `rgba(${r},${g},${b},0)`); grd.addColorStop(0.5, `rgba(${r},${g},${b},${al})`); grd.addColorStop(1, `rgba(${r},${g},${b},0)`);
+      ctx.fillStyle = grd; ctx.fillRect(cx - reach, y - 2, reach * 2, h + 2);
+      ctx.fillStyle = `rgba(230,255,250,${al})`; for (const s of [-1, 1]) ctx.fillRect(cx + s * reach - 3, y - 2, 6, h + 2);
+    }
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  /** Victory finale on screen: title above the columns, round stats on the floor below them. */
+  drawVictory(t) {
+    const { ctx, W, H } = this, a = t - this.vic.t0, st = this.vic.st, D = VICTORY.dur;
+    if (a < 0.3) return;
+    const fade = Math.min(1, (a - 0.3) * 4, (D + 0.3 - a) * 2.5); if (fade <= 0) return;
+    const top = this.colTopY(), fs = Math.max(20, Math.min(W * 0.075, 64, (top - 16) * 0.62));
+    const pop = 1 + 0.25 * Math.max(0, 1 - (a - 0.3) * 5) + 0.12 * Math.exp(-Math.abs(a - VICTORY.climax) * 6);
+    ctx.save(); ctx.globalAlpha = fade; ctx.textAlign = 'center';
+    ctx.translate(W / 2, Math.max(fs + 4, top - 18)); ctx.scale(pop, pop);
+    ctx.font = `900 ${fs | 0}px system-ui, sans-serif`;
+    const grd = ctx.createLinearGradient(0, -fs, 0, 0); grd.addColorStop(0, '#fff6c8'); grd.addColorStop(1, '#ffb52a');
+    ctx.lineWidth = Math.max(4, fs * 0.1); ctx.strokeStyle = 'rgba(40,10,0,0.9)'; ctx.fillStyle = grd;
+    ctx.strokeText('SHADOW DEFEATED', 0, 0); ctx.fillText('SHADOW DEFEATED', 0, 0);
+    ctx.restore();
+    if (a < 0.9) return;
+    // stats: one row on wide screens, 2 x 2 on phones, on the floor below the column bases
+    const cells = [['ROUND', `${st.round} cleared`], ['TIME', `${Math.floor(st.time / 60)}:${String(Math.floor(st.time % 60)).padStart(2, '0')}`], ['PUNCHES', `${st.punches}`], ['MAX COMBO', `${st.maxCombo}`], ['HARDEST HIT', `${Math.round(st.hardest)}`]];
+    // keep clear of the minimap (bottom left) and the state tag (bottom right): beside them on wide screens, above them on phones
+    const R = Math.min(52, W * 0.12), side = 2 * R + 26, avail = W - 2 * side, wide = avail >= 5 * 96;
+    const al = fade * Math.min(1, (a - 0.9) * 3);
+    if (!wide) { // phones: one compact line in the sky above the title (the floor is taken by the columns)
+      ctx.save(); ctx.globalAlpha = al; ctx.textAlign = 'center';
+      ctx.font = `700 ${Math.max(10, Math.min(13, W / 32)) | 0}px system-ui, sans-serif`; ctx.fillStyle = '#ffe6b0';
+      ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,0.8)';
+      const txt = cells.map(([k, v]) => (k === 'ROUND' ? `ROUND ${v}` : `${k} ${v}`));
+      const lines = [txt.slice(0, 2).join(' · '), txt.slice(2).join(' · ')], lh = 16;
+      const y = Math.max(14 + lh, top - 18 - fs * pop - 8);
+      lines.forEach((l, i) => { const yy = y - (lines.length - 1 - i) * lh; ctx.strokeText(l, W / 2, yy); ctx.fillText(l, W / 2, yy); });
+      ctx.restore(); return;
+    }
+    const cols = cells.length, rows = 1, cw = Math.min(130, avail / cols), ch = 40;
+    const y0 = H - 18 - rows * ch, x0 = W / 2 - cw * cols / 2;
+    ctx.save(); ctx.globalAlpha = al;
+    ctx.fillStyle = 'rgba(8,6,4,0.72)'; ctx.beginPath(); ctx.roundRect(x0 - 8, y0 - 6, cw * cols + 16, rows * ch + 6, 10); ctx.fill();
+    ctx.textAlign = 'center';
+    cells.forEach(([k, v], i) => {
+      const cx = x0 + cw * (i % cols + 0.5), cy = y0 + ch * Math.floor(i / cols);
+      ctx.font = '700 10px system-ui, sans-serif'; ctx.fillStyle = 'rgba(255,220,150,0.8)'; ctx.fillText(k, cx, cy + 12);
+      ctx.font = '800 17px system-ui, sans-serif'; ctx.fillStyle = '#fff'; ctx.fillText(v, cx, cy + 31);
+    });
+    ctx.restore();
   }
 
   drawStars(t) {
@@ -424,6 +535,9 @@ export class Scene {
     if (a > 0.01) {
       const sway = Math.sin(t * 1.7) * 4;
       const headY = top - h * 0.2;
+      // a new round's shadow rises up from below the floor over 1.4 s
+      const ra = this.rise ? t - this.rise.t0 : 9; if (ra > 1.6) this.rise = null;
+      ctx.save(); if (ra < 1.4) ctx.translate(0, h * 0.7 * (1 - (1 - Math.pow(1 - ra / 1.4, 3))));
       ctx.globalAlpha = a;
       for (let i = 0; i < 6; i++) { // smoke aura
         const ph = t * 0.8 + i * 1.3;
@@ -472,6 +586,7 @@ export class Scene {
         ctx.globalCompositeOperation = 'source-over';
       }
       ctx.globalAlpha = 1;
+      ctx.restore();
     }
 
     // Bag (cylinder) on top of the shadow torso
@@ -519,7 +634,7 @@ export class Scene {
     const { ctx, W, H } = this;
     const S = ArenaState;
     ctx.textAlign = 'center';
-    if (v.state === S.Fight) {
+    if (v.state === S.Fight && !this.vic) {
       // HP bar
       const bw = Math.min(W * 0.7, 520), bx = (W - bw) / 2, by = 14;
       ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(bx - 2, by - 2, bw + 4, 18);
@@ -528,7 +643,7 @@ export class Scene {
       grd.addColorStop(0, '#ff2a1a'); grd.addColorStop(1, '#ff9a2a');
       ctx.fillStyle = grd; ctx.fillRect(bx, by, bw * hp, 14);
       ctx.fillStyle = '#fff'; ctx.font = '700 11px system-ui, sans-serif';
-      ctx.fillText(`SHADOW${v.kos ? ` x${v.kos + 1}` : ''}  ${Math.ceil(v.hp)} HP`, W / 2, by + 11);
+      ctx.fillText(`${(v.round || 1) > 1 ? `ROUND ${v.round}  ` : ''}SHADOW  ${Math.ceil(v.hp)} HP${v.healing ? '  (healing)' : ''}`, W / 2, by + 11);
       // timer
       const rem = Math.max(0, v.fightRemaining ?? 0);
       ctx.font = `800 ${Math.round(Math.min(W, 800) * 0.06)}px system-ui, sans-serif`;
@@ -542,7 +657,7 @@ export class Scene {
         ctx.font = `700 ${Math.round(Math.min(16, W / 28))}px system-ui, sans-serif`; ctx.fillStyle = '#ffb070';
         ctx.fillText(`Hit it! Fight ends in ${Math.max(0, v.inactivityTimeout - v.inactiveFor).toFixed(0)} s of no punches`, W / 2, H - 22);
       }
-    } else {
+    } else if (v.state !== S.Fight && !this.vic) {
       let line = '', sub = '';
       if (v.state === S.Suspended) { line = 'ARENA SUSPENDED'; sub = v.present ? 'presence detected...' : 'nobody here (toggle presence)'; }
       else if (v.state === S.Idle) { line = 'STEP INTO THE ARENA'; sub = v.present ? 'presence already on: brain-rs waits for a new presence event' : 'toggle "Someone in arena" or make noise'; }
@@ -568,7 +683,9 @@ export class Scene {
       else {
         const a = Math.min(1, age * 5, (this.banner.dur - age) * 3);
         const sc = 1 + 0.15 * Math.max(0, 1 - age * 4);
-        ctx.save(); ctx.globalAlpha = a; ctx.translate(W / 2, H * 0.45); ctx.scale(sc, sc);
+        // minimal overlays: banners sit on the floor below the column bases, not across the columns
+        const by = this.full ? H * 0.45 : H - 78;
+        ctx.save(); ctx.globalAlpha = a; ctx.translate(W / 2, by); ctx.scale(sc, sc);
         ctx.font = `900 ${Math.round(Math.min(W, 900) * 0.08)}px system-ui, sans-serif`;
         ctx.lineWidth = 6; ctx.strokeStyle = 'rgba(0,0,0,0.85)'; ctx.fillStyle = '#ffdf6a';
         ctx.strokeText(this.banner.text, 0, 0); ctx.fillText(this.banner.text, 0, 0);

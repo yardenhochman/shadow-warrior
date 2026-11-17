@@ -64,6 +64,33 @@ for (const [w, h, tag] of [[1280, 800, 'desktop'], [390, 844, 'mobile']]) {
   results.push(`[${tag}] fight punches ${fightStats.punches} max ${fightStats.max.toFixed(0)} hp ${fightStats.hp.toFixed(0)}`);
   if (fightStats.punches < 7) problems.push(`[${tag}] expected >=7 counted punches, got ${fightStats.punches}`);
 
+  // Effect presets: base preset, per-stage override, preview buttons, now-playing readout.
+  await page.click('#fxPanel > summary');
+  await page.selectOption('#ledMode', 'storm');
+  await page.selectOption('#fxsel_warming', 'inferno');
+  const mix = await page.evaluate(() => ['warming', 'heavy', 'fight'].map((s) => window.sim.rig.presetFor(s)).join());
+  if (mix !== 'inferno,storm,storm') problems.push(`[${tag}] per-stage mix: ${mix}`);
+  await page.click('button[data-preview="heavy:lightning"]'); await sleep(120);
+  if (!(await page.textContent('#fxNow')).includes('Storm · LIGHTNING')) problems.push(`[${tag}] now playing misses the LIGHTNING preview: ${await page.textContent('#fxNow')}`);
+  await page.click('button[data-preview="warming:2"]'); await sleep(200);
+  if (!(await page.textContent('#fxNow')).includes('Inferno · Heat gauge')) problems.push(`[${tag}] now playing misses the Inferno warming preview`);
+  await page.click('button[data-preview="victory"]'); await sleep(200);
+  const hist = await page.textContent('#fxHistory');
+  if (!/VICTORY · Storm/.test(hist) || !/HEAVY · Storm · LIGHTNING/.test(hist)) problems.push(`[${tag}] history: ${hist}`);
+  results.push(`[${tag}] presets: storm base, warming from inferno, previews and history ok`);
+  await sleep(500);
+
+  // KO -> victory finale -> round 2 with more HP; the frame stays under the cap.
+  await page.evaluate(() => { window.sim.rig.fx = []; window.sim.rig.preview = null; window.sim.game.hp = 1; window.sim.punch(92); });
+  const vic = await page.evaluate(async () => { let mx = 0; const t0 = performance.now(); while (performance.now() - t0 < 3000) { await new Promise((r) => requestAnimationFrame(r)); mx = Math.max(mx, window.sim.rig.lastLevel); } return { mx, np: document.getElementById('fxNow').textContent, vic: !!window.sim.scene.vic }; });
+  if (!vic.vic || !vic.np.includes('VICTORY')) problems.push(`[${tag}] no victory after KO: ${vic.np}`);
+  if (vic.mx > 0.7201) problems.push(`[${tag}] victory frame level ${vic.mx}`);
+  await page.screenshot({ path: `${OUT}/${tag}-4-victory.png` });
+  await page.waitForFunction(() => window.sim.game.round === 2, null, { timeout: 9000 });
+  const r2 = await page.evaluate(() => ({ st: window.sim.state, maxHp: window.sim.game.maxHp, hp: window.sim.game.hp }));
+  if (r2.st !== 'FIGHT' || r2.maxHp !== Math.round(900 * 1.3)) problems.push(`[${tag}] round 2: ${JSON.stringify(r2)}`);
+  results.push(`[${tag}] KO -> victory (peak level ${vic.mx.toFixed(2)}) -> round 2 with ${r2.maxHp} HP`);
+
   await page.evaluate(() => window.sim.skip(25)); await page.keyboard.press('l'); await sleep(1100);
   await page.evaluate(() => window.sim.skip(25)); await page.keyboard.press('l'); await sleep(1100);
   await page.evaluate(() => { for (let i = 0; i < 6; i++) { window.sim.skip(25); window.sim.arena.lastActivityAt = window.sim.arena.now(); } });
@@ -77,6 +104,10 @@ for (const [w, h, tag] of [[1280, 800, 'desktop'], [390, 844, 'mobile']]) {
   await page.click('#exportBtn');
   const yaml = await page.inputValue('#yamlOut');
   if (!yaml.includes('arena:\n  fight_duration_sec: 120')) problems.push(`[${tag}] yaml export unexpected: ${yaml}`);
+  // Effect choices persist (diffs only) across a reload.
+  await page.reload(); await page.waitForFunction(() => window.sim && window.sim.state);
+  const kept = await page.evaluate(() => [window.sim.rig.preset, window.sim.rig.presetFor('warming'), localStorage.getItem('sw-sim-effects-v1')]);
+  if (kept[0] !== 'storm' || kept[1] !== 'inferno') problems.push(`[${tag}] effects not restored: ${kept}`);
   for (const e of await page.evaluate(() => window.sim.errors)) problems.push(`[${tag}] loop error: ${e}`);
   await ctx.close();
 }

@@ -1,5 +1,6 @@
-// Synthesised sound (no assets): punch thumps, shout chime, fight start, KO and
+// Synthesised sound (no assets): punch thumps, shout chime, fight start, KO, victory and
 // fight music: the playlist (music.js) when loaded, else a synth drum loop.
+import { VICTORY } from './hitfx.js';
 export class Sfx {
   constructor() { this.ctx = null; this.enabled = true; this.music = null; this.noise = null; this.playlist = null; }
 
@@ -22,7 +23,8 @@ export class Sfx {
   punch(power, sig) {
     if (!this.enabled || !this.ctx) return;
     const c = this.ctx, t = c.currentTime, p = power / 100;
-    const nova = sig?.kind === 'nova', t1 = nova ? t + 0.2 + 0.06 * (sig.esc || 0) : t; // nova: the hit lands after the blackout beat
+    const look = sig?.look || sig?.kind;
+    const nova = look === 'nova', t1 = nova ? t + 0.2 + 0.06 * (sig.esc || 0) : t; // nova: the hit lands after the blackout beat
     const o = c.createOscillator(), g = c.createGain();
     o.frequency.setValueAtTime(140 + 60 * p, t1); o.frequency.exponentialRampToValueAtTime(40, t1 + 0.18);
     this.env(g, t1, 0.004, 0.5 + 0.5 * p, 0.2 + 0.15 * p);
@@ -35,7 +37,7 @@ export class Sfx {
     const sub = c.createOscillator(), sg = c.createGain();
     sub.frequency.setValueAtTime(75, t1); sub.frequency.exponentialRampToValueAtTime(30, t1 + 0.55);
     this.env(sg, t1, 0.006, 0.55, 0.6); sub.connect(sg).connect(this.master); sub.start(t1); sub.stop(t1 + 0.8);
-    switch (sig.kind) {
+    switch (look) {
       case 'thunder': for (const d of [0, 0.08, 0.19, 0.31]) { this.noiseHit(t + d, 'highpass', 2500, 0.22, 0.05); this.noiseHit(t + d + 0.01, 'bandpass', 600, 0.15, 0.14); } break;
       case 'gold': [1320, 1760, 2637].forEach((f, i) => this.tone(t + 0.04 + i * 0.05, 'sine', f, 0.07, 0.7)); break;
       case 'shatter': this.noiseHit(t + 0.03, 'highpass', 4000, 0.3, 0.35); [2093, 3136, 2637].forEach((f, i) => this.tone(t + 0.05 + i * 0.04, 'triangle', f * (0.97 + 0.06 * Math.random()), 0.05, 0.3)); break;
@@ -88,6 +90,12 @@ export class Sfx {
     if (this.lastOpen && now - this.lastOpen < 1500) return;
     this.lastOpen = now;
     buildArenaOpen(this.ctx, this.master, this.ctx.currentTime + 0.01, this.noise);
+  }
+
+  /** Shadow defeated: the victory fanfare (~6 s), its climax on VICTORY.climax with the LED finale. */
+  victory() {
+    if (!this.enabled || !this.ctx) return;
+    buildVictory(this.ctx, this.master, this.ctx.currentTime + 0.01, this.noise);
   }
 
   ko() {
@@ -194,4 +202,65 @@ export function buildArenaOpen(c, dest, t0, noise) {
     noiseSrc(A, 2.5).connect(f).connect(g).connect(bus);
   }
   return A + 2.5;
+}
+
+/**
+ * The victory sound (~6.3 s), built on any (Offline)AudioContext into `dest`: the shadow shatters
+ * (glass crash + sub drop), a brass-like arpeggio climbs with a riser into the climax at
+ * VICTORY.climax (big major chord, timpani double hit, cymbal swell, crowd cheer), then the chord
+ * rings out under a few golden chimes. Through a compressor and a limiter: peak stays below 0 dBFS.
+ */
+export function buildVictory(c, dest, t0, noise) {
+  if (!noise) {
+    noise = c.createBuffer(1, c.sampleRate, c.sampleRate);
+    const d = noise.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  }
+  const C = t0 + VICTORY.climax;
+  const comp = c.createDynamicsCompressor();
+  comp.threshold.value = -16; comp.knee.value = 8; comp.ratio.value = 5; comp.attack.value = 0.004; comp.release.value = 0.3;
+  const lim = c.createDynamicsCompressor();
+  lim.threshold.value = -6; lim.knee.value = 0; lim.ratio.value = 20; lim.attack.value = 0.001; lim.release.value = 0.12;
+  const out = c.createGain(); out.gain.value = 0.8;
+  const bus = c.createGain(); bus.gain.value = 0.6; bus.connect(comp).connect(lim).connect(out).connect(dest);
+  const env = (g, t, a, peak, dec) => { g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(peak, t + a); g.gain.exponentialRampToValueAtTime(0.0001, t + a + dec); };
+  const noiseSrc = (t, dur) => { const n = c.createBufferSource(); n.buffer = noise; n.loop = true; n.start(t); n.stop(t + dur); return n; };
+  const filt = (type, f, q = 0.7) => { const b = c.createBiquadFilter(); b.type = type; b.frequency.value = f; b.Q.value = q; return b; };
+  // 1. shatter: bright glass crash and inharmonic tinkles, a sub drop under it
+  { const g = c.createGain(); env(g, t0, 0.002, 0.55, 0.5); noiseSrc(t0, 0.7).connect(filt('highpass', 3500)).connect(g).connect(bus); }
+  [2350, 3170, 4020, 2780, 3710, 5100].forEach((f, i) => { const o = c.createOscillator(), g = c.createGain(); o.type = 'triangle'; o.frequency.value = f; const t = t0 + 0.03 + i * 0.045; env(g, t, 0.002, 0.06, 0.35); o.connect(g).connect(bus); o.start(t); o.stop(t + 0.45); });
+  { const o = c.createOscillator(), g = c.createGain(); o.frequency.setValueAtTime(90, t0); o.frequency.exponentialRampToValueAtTime(28, t0 + 1.0); env(g, t0, 0.005, 0.8, 1.1); o.connect(g).connect(bus); o.start(t0); o.stop(t0 + 1.3); }
+  // 2. build: arpeggio climbing faster (C major), noise riser into the climax
+  const arp = [261.6, 329.6, 392, 523.3, 659.3, 784, 1046.5, 1318.5];
+  let t = t0 + 0.9;
+  for (let i = 0; t < C - 0.05; i++) {
+    const f = arp[i % arp.length], o = c.createOscillator(), g = c.createGain(), lp = filt('lowpass', 1800 + 300 * i);
+    o.type = 'sawtooth'; o.frequency.value = f; env(g, t, 0.006, 0.07 + 0.006 * i, 0.16); o.connect(lp).connect(g).connect(bus); o.start(t); o.stop(t + 0.25);
+    t += Math.max(0.07, 0.2 - 0.013 * i);
+  }
+  { const f = filt('bandpass', 300, 2); f.frequency.setValueAtTime(300, t0 + 0.9); f.frequency.exponentialRampToValueAtTime(5000, C);
+    const g = c.createGain(); g.gain.setValueAtTime(0.0001, t0 + 0.9); g.gain.exponentialRampToValueAtTime(0.32, C - 0.01); g.gain.linearRampToValueAtTime(0.0001, C + 0.03);
+    noiseSrc(t0 + 0.9, C - t0 - 0.85).connect(f).connect(g).connect(bus); }
+  // 3. climax: big major chord (saw + square through an opening low-pass), timpani, cymbal, cheer
+  [130.8, 196, 261.6, 329.6, 392, 523.3, 659.3].forEach((f, i) => {
+    for (const [type, det, pk] of [['sawtooth', -4, 0.07], ['square', 5, 0.035]]) {
+      const o = c.createOscillator(), g = c.createGain(), lp = filt('lowpass', 600);
+      lp.frequency.setValueAtTime(600, C); lp.frequency.exponentialRampToValueAtTime(4200, C + 0.25); lp.frequency.exponentialRampToValueAtTime(900, C + 3.6);
+      o.type = type; o.frequency.value = f; o.detune.value = det;
+      g.gain.setValueAtTime(0.0001, C); g.gain.exponentialRampToValueAtTime(pk * (i < 2 ? 1.3 : 1), C + 0.03); g.gain.setValueAtTime(pk * (i < 2 ? 1.3 : 1), C + 0.5); g.gain.exponentialRampToValueAtTime(0.0001, C + 3.8);
+      o.connect(lp).connect(g).connect(bus); o.start(C); o.stop(C + 3.9);
+    }
+  });
+  for (const [d, pk] of [[0, 0.9], [0.22, 0.75]]) {
+    const tt = C + d, o = c.createOscillator(), g = c.createGain(); o.frequency.setValueAtTime(110, tt); o.frequency.exponentialRampToValueAtTime(52, tt + 0.3);
+    env(g, tt, 0.003, pk, 0.6); o.connect(g).connect(bus); o.start(tt); o.stop(tt + 0.8);
+  }
+  { const g = c.createGain(); g.gain.setValueAtTime(0.0001, C - 0.6); g.gain.exponentialRampToValueAtTime(0.16, C + 0.05); g.gain.exponentialRampToValueAtTime(0.0001, C + 2.6); noiseSrc(C - 0.6, 3.3).connect(filt('highpass', 6000)).connect(g).connect(bus); }
+  for (const [fc, pk] of [[600, 0.18], [1500, 0.1]]) {
+    const g = c.createGain(); g.gain.setValueAtTime(0.0001, C); g.gain.exponentialRampToValueAtTime(pk, C + 0.5); g.gain.exponentialRampToValueAtTime(0.0001, C + 3.2);
+    const lfo = c.createOscillator(), lg = c.createGain(); lfo.frequency.value = 6.5; lg.gain.value = pk * 0.3; lfo.connect(lg).connect(g.gain); lfo.start(C); lfo.stop(C + 3.3);
+    noiseSrc(C, 3.3).connect(filt('bandpass', fc, 0.9)).connect(g).connect(bus);
+  }
+  // 4. afterglow: soft golden chimes over the ringing chord
+  [[1568, 0.6], [2093, 1.0], [1760, 1.5], [2637, 2.1], [2093, 2.7]].forEach(([f, d]) => { const o = c.createOscillator(), g = c.createGain(); o.frequency.value = f; env(g, C + d, 0.004, 0.05, 1.2); o.connect(g).connect(bus); o.start(C + d); o.stop(C + d + 1.3); });
+  return C + 3.9;
 }

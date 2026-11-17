@@ -28,8 +28,13 @@ export const SIGNATURES = {
 };
 // Rotating accent hues for jabs and hooks (magenta, gold, orange, violet, lime, red).
 // Teal/aqua (150..200) is kept free for shouts, so a shout never looks like a punch.
-const ACCENTS = [305, 48, 18, 268, 100, 355];
+export const ACCENTS = [305, 48, 18, 268, 100, 355];
 export const SHOUT_HUE = 172;
+// Victory finale timing, shared by the LEDs (presets.js), the arena (scene.js) and the sound (sfx.js).
+export const VICTORY = { dur: 6.5, climax: 2.4 };
+const PROPOSAL_TABLE = { preset: 'proposal', kinds: SIGNATURES, accents: ACCENTS };
+const wrapHue = (h) => ((h % 360) + 360) % 360;
+const safe = (h) => { h = wrapHue(h); return h >= 150 && h <= 200 ? (h < 175 ? 145 : 205) : h; };
 
 export const tierOf = (power) => (power >= HEAVY_AT ? 'heavy' : power >= HOOK_AT ? 'hook' : 'jab');
 
@@ -38,27 +43,37 @@ export class HitPicker {
 
   /**
    * @param {number} power 1..100
-   * @param {object} o { combo, rage (0..1), dir (+1 hit from the left), variety (false = classic) }
+   * @param {object} o { combo, rage (0..1), dir (+1 hit from the left), variety (false = classic),
+   *   table (hitTable() of the preset for this tier; default: the sim proposal), hueShift (deg) }
    */
-  pick(power, { combo = 1, rage = 0, dir = 1, variety = true } = {}) {
+  pick(power, { combo = 1, rage = 0, dir = 1, variety = true, table = PROPOSAL_TABLE, hueShift = 0 } = {}) {
     const tier = tierOf(power);
     const esc = Math.min(1, Math.max(0, 0.6 * Math.min(1, (combo - 1) / 5) + 0.4 * rage));
     if (!variety) return { tier, kind: 'classic', hue: 35, esc, dir, label: null };
-    const kinds = Object.keys(SIGNATURES[tier]).filter((k) => k !== this.last[tier]);
+    const all = table.kinds[tier], key = `${table.preset}:${tier}`;
+    const kinds = Object.keys(all).length > 1 ? Object.keys(all).filter((k) => k !== this.last[key]) : Object.keys(all);
     // Escalation: deep into a combo / high rage the biggest heavies come up more often.
-    const w = kinds.map((k) => (SIGNATURES[tier][k].big ? 1 + 2 * esc : 1));
+    const w = kinds.map((k) => (all[k].big ? 1 + 2 * esc : 1));
     let r = this.rand() * w.reduce((a, b) => a + b, 0), kind = kinds[kinds.length - 1];
     for (let i = 0; i < kinds.length; i++) { r -= w[i]; if (r < 0) { kind = kinds[i]; break; } }
-    this.last[tier] = kind;
-    let hue = SIGNATURES[tier][kind].hue ?? 0;
+    this.last[key] = kind;
+    return this.make(tier, kind, { esc, dir, table, hueShift });
+  }
+
+  /** A signature of a given kind (also used by the effect preview buttons). */
+  make(tier, kind, { esc = 0, dir = 1, table = PROPOSAL_TABLE, hueShift = 0 } = {}) {
+    const def = table.kinds[tier][kind] || {};
+    let hue = def.hue ?? 0;
     if (tier !== 'heavy') {
-      // Jab/hook colours rotate through the accents, never the same twice in a row.
-      this.accent = (this.accent + 1 + Math.floor(this.rand() * (ACCENTS.length - 1))) % ACCENTS.length;
-      hue = ACCENTS[this.accent];
+      // Jab/hook colours rotate through the preset's accents, never the same twice in a row.
+      const acc = table.accents;
+      this.accent = (this.accent + 1 + Math.floor(this.rand() * (acc.length - 1))) % acc.length;
+      hue = acc[this.accent];
     }
     let col = null;
     if (tier === 'jab') { col = (this.jabCol + 1 + Math.floor(this.rand() * 3)) % 4; this.jabCol = col; }
-    return { tier, kind, hue: ((hue % 360) + 360) % 360, esc, dir, col, label: SIGNATURES[tier][kind].label || null };
+    // Teal/aqua (150..200) stays reserved for shouts, also after a colour shift.
+    return { tier, kind, look: def.look || kind, preset: table.preset, hue: safe(hue + hueShift), esc, dir, col, label: def.label || null };
   }
 }
 
