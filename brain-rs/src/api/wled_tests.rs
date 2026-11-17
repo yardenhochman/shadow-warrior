@@ -143,7 +143,8 @@ async fn set_effect_uses_static_fallback_when_lists_unavailable() {
     assert!(r.success);
     let seen = seen.lock().await;
     let post = seen.iter().find(|q| q.starts_with("POST /json/state")).unwrap();
-    assert!(post.contains("\"fx\":16") && post.contains("\"pal\":22"));
+    // fallback ids of WLED 0.15.4: "Fire 2012" = 66, "Lava" = 8 (the old table said 16 = Saw, 22)
+    assert!(post.contains("\"fx\":66") && post.contains("\"pal\":8"), "{post}");
 }
 
 #[tokio::test]
