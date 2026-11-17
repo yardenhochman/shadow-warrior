@@ -1,6 +1,7 @@
 mod api;
 mod config;
 mod core;
+mod led;
 mod models;
 mod services;
 #[cfg(test)]
