@@ -109,18 +109,24 @@ export const TUNABLES = [
     more: 'Counted from the last evidence (a loud voice frame or a punch). When it runs out the arena is marked empty and goes to suspended from any state, even mid-fight. Raise it so quiet or fighting players are not dropped; lower it to sleep sooner.' },
 
   // simulator-only (not in config.yaml)
-  { section: 'sim', key: 'energy_curve', def: 0.35, min: 0, max: 0.8, step: 0.05, name: 'Energy bar curve', unit: '',
-    help: 'Early shouts fill the bar faster, the last stretch fills slower. 0 = every shout counts the same.',
-    more: 'Each shout\'s energy is multiplied by (1 + curve) on an empty bar, falling evenly to (1 - curve) on a full one. At 0.35 the first shouts count 1.35x and the last ones 0.65x, so the total number of shouts stays about the same, but the bar races ahead at first (people feel they are close) and the last quarter takes real effort. Sim proposal: brain-rs fills the bar linearly, so this is not exported yet.' },
+  { section: 'sim', key: 'energy_gain_start', def: 1.7, min: 0.5, max: 3, step: 0.05, name: 'First shouts boost', unit: 'x',
+    help: 'How much more an early shout fills the bar. Higher = the bar jumps up quickly at the start.',
+    more: 'Each shout\'s energy is multiplied by this on an empty bar, sliding evenly to "Last stretch gain" on a full one. With 1.7 and 0.65 the first strong shout fills 17%, four shouts reach almost 60%, and the last 20% takes three more: people feel close at once and have to push at the end. Set both to 1 for the plain brain-rs bar. Sim proposal, not exported.' },
+  { section: 'sim', key: 'energy_gain_end', def: 0.65, min: 0.2, max: 1.5, step: 0.05, name: 'Last stretch gain', unit: 'x',
+    help: 'How much a shout fills the bar when it is almost full. Lower = the end takes more effort.',
+    more: 'The multiplier on a nearly full bar; see "First shouts boost". Lowering it adds shouts at the very end without slowing the start.' },
   { section: 'sim', key: 'time_scale', def: 1, min: 1, max: 20, step: 1, int: true, name: 'Game speed-up', unit: 'x',
     help: 'Runs the game clock faster so you can test long timers quickly. The microphone stays real time.',
     more: 'Multiplies the simulated clock: timers like fight length, cooldown and energy drain all run this much faster, while the microphone and shout timing do not. Handy for waiting out a 3 minute fight; keep it at 1 when judging how shouting feels.' },
-  { section: 'sim', key: 'shadow_hp', def: 250, min: 20, max: 2000, step: 10, int: true, name: 'Shadow health', unit: 'HP',
+  { section: 'sim', key: 'shadow_hp', def: 900, min: 20, max: 2000, step: 10, int: true, name: 'Shadow health', unit: 'HP',
     help: 'How much damage the shadow takes before it is knocked out.',
-    more: 'A proposal for the game, not part of the brain. Each punch removes power x "Damage per punch power" (more with a combo), so with the defaults a medium punch of 50 does 15 damage, about 17 punches. After a knockout the shadow comes back, or the fight ends if "knocking out the shadow ends the fight" is ticked.' },
+    more: 'A proposal for the game, not part of the brain. Each punch removes power x "Damage per punch power" (more with a combo), so with the defaults a medium punch of 50 does 15 damage: about 60 punches, or 30 to 45 s of steady punching with combos (real bag hits may read stronger until the sensor is calibrated). After a knockout the shadow comes back, or the fight ends if "knocking out the shadow ends the fight" is ticked.' },
+  { section: 'sim', key: 'combo_max', def: 1.5, min: 1, max: 3, step: 0.1, name: 'Maximum combo bonus', unit: 'x',
+    help: 'The most a fast run of punches can multiply damage by.',
+    more: 'Each punch within a second of the previous one adds +10% damage, up to this cap. At 1.5 a run of 6 quick punches reaches the cap; at 1 combos do nothing. A high cap rewards fast flurries and shortens fights a lot.' },
   { section: 'sim', key: 'damage_per_power', def: 0.3, min: 0.05, max: 2, step: 0.05, name: 'Damage per punch power', unit: 'HP/pt',
     help: 'How much health a punch takes off per point of punch power (1 to 100).',
-    more: 'Damage is punch power x this, multiplied by a combo bonus of +10% per punch landed within a second of the previous one (up to +100%). Together with "Shadow health" it sets how many punches a KO takes. Simulator only.' },
+    more: 'Damage is punch power x this, multiplied by a combo bonus of +10% per punch landed within a second of the previous one (capped by "Maximum combo bonus"). Together with "Shadow health" it sets how many punches a KO takes. Simulator only.' },
   { section: 'sim', key: 'synth_shout_db', def: 24, min: 0, max: 45, step: 1, int: true, name: 'Shout button loudness', unit: 'dB',
     help: 'How loud the on-screen SHOUT button pretends to be, compared to the background.',
     more: 'The button feeds fake audio frames through the real detector, so this must clear "Loudness above background needed" (15 dB, or 23 dB during music) for it to count. At 24 dB it passes in both cases; lower it to test how the detector reacts to weaker shouts.' },
@@ -137,17 +143,23 @@ export function defaults() {
   return o;
 }
 
+// Defaults that changed: a saved value equal to its old default is dropped so the new default applies.
+const OLD_DEFAULTS = { shadow_hp: [250] };
 export function loadTunables() {
   const o = defaults();
   try {
     const saved = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
+    for (const [k, olds] of Object.entries(OLD_DEFAULTS)) if (olds.includes(saved[k])) delete saved[k];
     for (const t of TUNABLES) if (typeof saved[t.key] === 'number') o[t.key] = saved[t.key];
   } catch { /* ignore */ }
   return o;
 }
 
 export function saveTunables(cfg) {
-  try { localStorage.setItem(LS_KEY, JSON.stringify(cfg)); } catch { /* ignore */ }
+  // Only values changed from the defaults, so later default changes still reach this browser.
+  const d = defaults(), diff = {};
+  for (const t of TUNABLES) if (cfg[t.key] !== d[t.key]) diff[t.key] = cfg[t.key];
+  try { localStorage.setItem(LS_KEY, JSON.stringify(diff)); } catch { /* ignore */ }
 }
 
 function fmt(t, v) {

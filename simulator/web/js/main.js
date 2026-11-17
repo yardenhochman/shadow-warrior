@@ -229,7 +229,7 @@ function landPunch(power, info, state) {
   const t = performance.now() / 1000;
   game.combo = t - game.lastHitAt < 1.0 ? game.combo + 1 : 1;
   game.lastHitAt = t;
-  const mult = 1 + Math.min(game.combo - 1, 10) * 0.1;
+  const mult = Math.min(1 + (game.combo - 1) * 0.1, cfg.combo_max ?? 2);
   let dmg = 0;
   if (game.respawnAt == null) {
     dmg = power * cfg.damage_per_power * mult;

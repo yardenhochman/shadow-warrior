@@ -12,11 +12,12 @@ export class EnergyBar {
   }
   updateParameters(max, multiplier, decayRate) { this.max = max; this.multiplier = multiplier; this.decayRate = decayRate; }
   addEnergy(intensity) {
-    // Sim proposal (energy_curve k): early shouts count more, late ones less. Gain falls
-    // linearly from (1 + k) on an empty bar to (1 - k) on a full one, so the total number
-    // of shouts stays about the same but the bar races ahead and then makes you work.
-    const k = this.curve ?? 0, x = this.max > 0 ? this.current / this.max : 0;
-    const added = intensity * this.multiplier * (1 + k - 2 * k * x);
+    // Sim proposal: early shouts count more, late ones less. Gain falls linearly from
+    // gainStart on an empty bar to gainEnd on a full one, so the bar races ahead at first
+    // and then makes you work for the last stretch.
+    const x = this.max > 0 ? this.current / this.max : 0;
+    const g0 = this.gainStart ?? 1, g1 = this.gainEnd ?? 1;
+    const added = intensity * this.multiplier * (g0 + (g1 - g0) * x);
     this.current = Math.min(this.current + added, this.max);
     this.eventBus.publish({ type: 'EnergyChanged', energy: this.current, max: this.max, added });
     if (this.current >= this.max) this.eventBus.publish({ type: 'EnergyFull' });
@@ -91,7 +92,8 @@ export class ArenaManager {
 
   handleShout(intensity) {
     if (this.stateMachine.currentState === ArenaState.Warming && this.energyBar) {
-      this.energyBar.curve = this.config.energy_curve ?? 0;
+      this.energyBar.gainStart = this.config.energy_gain_start ?? 1;
+      this.energyBar.gainEnd = this.config.energy_gain_end ?? 1;
       this.energyBar.addEnergy(intensity);
     }
   }
