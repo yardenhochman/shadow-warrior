@@ -1,7 +1,7 @@
 // UI glue: wires the ported brain-rs logic to the scene, LEDs, mic and panels.
 import { TUNABLES, SECTIONS, loadTunables, saveTunables, exportYaml, formatValue, defaults } from './config.js';
 import { EventBus } from './events.js';
-import { StateMachine, ArenaState } from './state_machine.js';
+import { StateMachine, ArenaState, canTransitionTo } from './state_machine.js';
 import { ArenaManager } from './arena_manager.js';
 import { PresenceService } from './presence.js';
 import { ShoutDetector } from './shout_detector.js';
@@ -472,6 +472,40 @@ function drawStrips() {
 
 // ------------------------------------------------------------------ panels
 const chips = [...document.querySelectorAll('#stateChips span')];
+// Click a state chip to jump there; clicking FIGHT during a fight restarts it. The state
+// machine only allows certain steps, so walk the shortest allowed path (e.g. FIGHT ->
+// COOLDOWN -> IDLE -> WARMING), running the normal enter/exit logic on every step.
+const ALL_STATES = Object.values(S);
+function statePath(from, to) {
+  if (from === to) {
+    if (to !== S.Fight) return [];
+    return [...statePath(from, S.Idle), ...statePath(S.Idle, S.Fight)]; // restart the fight
+  }
+  const prev = new Map([[from, null]]), q = [from];
+  while (q.length) {
+    const a = q.shift();
+    if (a === to) break;
+    for (const b of ALL_STATES) if (!prev.has(b) && canTransitionTo(a, b)) { prev.set(b, a); q.push(b); }
+  }
+  const path = []; for (let x = to; x && x !== from; x = prev.get(x)) path.unshift(x);
+  return path;
+}
+async function jumpTo(target) {
+  const from = BRAIN ? (brain?.info().currentState || S.Idle) : sm.currentState;
+  const path = statePath(from, target);
+  if (!path.length) return;
+  log(`Jump ${from} -> ${path.join(' -> ')}`, 'state');
+  for (const st of path) {
+    if (BRAIN) await brain?.setState(st);
+    else sm.transition(st);
+  }
+}
+chips.forEach((c) => {
+  c.setAttribute('role', 'button'); c.tabIndex = 0;
+  c.title = c.dataset.s === 'FIGHT' ? 'Jump to FIGHT (click again to restart the fight)' : `Jump to ${c.dataset.s}`;
+  c.onclick = () => jumpTo(c.dataset.s);
+  c.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); jumpTo(c.dataset.s); } };
+});
 const STATE_COLOR = { SUSPENDED: 'var(--s-SUSPENDED)', IDLE: 'var(--s-IDLE)', WARMING: 'var(--s-WARMING)', FIGHT: 'var(--s-FIGHT)', COOLDOWN: 'var(--s-COOLDOWN)' };
 const pct = (x) => `${Math.max(0, Math.min(100, x * 100)).toFixed(1)}%`;
 const DB_MIN = -90, DB_MAX = 0;
