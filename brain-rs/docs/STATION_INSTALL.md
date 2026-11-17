@@ -102,8 +102,25 @@ the log says `a2dp-sink profile connect failed: Protocol not available`.
       (default sink `*`). Play a test: `pw-play tone.wav` and `aplay tone.wav` (the ALSA
       `default` device is routed to PipeWire by `pipewire-alsa`).
 - [ ] The brain's unit already sets `XDG_RUNTIME_DIR` and starts after `user@<uid>.service`
-      (`deploy.py` fills in the uid). Not yet verified: the playlist playing through the
-      speaker from the brain, and surviving a speaker power-cycle (`shadow-warrior-67w`).
+      (`deploy.py` fills in the uid). The brain plays through PipeWire's ALSA default and
+      PipeWire moves the stream onto the speaker by itself when its sink appears.
+- [ ] **Reconnect supervision** (verified 2026-11-17): add the speaker to the station's
+      `config.yaml`, restart the service:
+      ```
+      speaker:
+        address: "10:94:97:40:6F:95"
+        adapter: builtin        # the radio it is paired on (same selectors as ble.adapter)
+        check_interval_sec: 10
+        max_backoff_sec: 60
+      ```
+      Without it the station does NOT recover: after a drop PipeWire silently moves the music to
+      the board's unused analog output, and the speaker can come back at link level without its
+      A2DP profile, so the music plays into nothing until someone reconnects it by hand. With it,
+      every `check_interval_sec` the brain reconnects a dropped speaker and re-requests the A2DP
+      profile (retrying "operation in progress"), backing off up to `max_backoff_sec` while it
+      keeps failing, and reports `hardware.health.speaker` plus `Speaker*` events.
+      Measured: BlueZ-level drop -> audio back after about 9 s; real power-off/on -> lost
+      detected at once, connected again about 15 s after the drop, no manual step.
 - **Warning: with no microphone the brain "listens" to its own music.** Once PipeWire is
   installed the ALSA default also exposes a capture device, so the audio manager starts
   "successfully" without a mic, but PipeWire links that capture stream to the speaker's
@@ -113,6 +130,8 @@ the log says `a2dp-sink profile connect failed: Protocol not available`.
   the beads issue about the monitor capture.
 
 ## 3c. Music
+
+The current playlist, the exact tracks and the rebuild steps are in [MUSIC.md](MUSIC.md).
 
 - [ ] Download on a build machine, audio only and **without re-encoding**: YouTube's native
       AAC stream is `m4a`, which the brain decodes (Opus/webm it cannot):
@@ -180,7 +199,7 @@ On your build machine (podman machine running; `just image` once):
       in about 10-30 s and fight mode is restored. Punches must not double (verified).
 - [ ] WLED: effects change with the arena state (**untested**, `shadow-warrior-2`).
 - [ ] Microphone: shout detection and clip recording (**untested**, `shadow-warrior-abr`, `-c6y`).
-- [ ] Speakers: pairing and a PipeWire sink verified (section 3b); the brain playing its playlist and surviving a speaker reconnect are **untested** (`shadow-warrior-b2r`, `-67w`).
+- [ ] Speakers: pairing and a PipeWire sink verified (section 3b); the playlist plays through the brain and the speaker reconnects after a drop or power-cycle (section 3b); A2DP + BLE contention on one radio is **untested** (`shadow-warrior-b2r`).
 
 ## Pitfalls we hit
 

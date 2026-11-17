@@ -116,6 +116,8 @@ async fn main() -> Result<()> {
     ));
     health_registry.spawn(&event_bus);
     ble_manager.start().await?;
+    // Keeps the paired Bluetooth speaker (and its A2DP profile) connected; off unless speaker.address is set.
+    let _speaker = services::speaker_manager::spawn(config.speaker.clone(), event_bus.clone());
     // A missing/unsupported microphone must not take the whole brain down
     // (BLE, LEDs, plugs still work); report it through the health registry.
     if let Err(e) = audio_manager.start().await {

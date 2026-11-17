@@ -93,6 +93,13 @@ pub enum Event {
     },
     BleConnectionError { error: String },
 
+    // Bluetooth speaker (services/speaker_manager.rs)
+    SpeakerConnected { name: String },
+    SpeakerDisconnected,
+    /// Link check passed; refreshes health `last_seen`.
+    SpeakerAlive,
+    SpeakerError { error: String },
+
     // Music events
     MusicStarted { track_name: String },
     MusicStopped,
@@ -191,6 +198,10 @@ impl Event {
             Event::BleAlive => "BleAlive",
             Event::PunchDetected { .. } => "PunchDetected",
             Event::BleConnectionError { .. } => "BleConnectionError",
+            Event::SpeakerConnected { .. } => "SpeakerConnected",
+            Event::SpeakerDisconnected => "SpeakerDisconnected",
+            Event::SpeakerAlive => "SpeakerAlive",
+            Event::SpeakerError { .. } => "SpeakerError",
             Event::MusicStarted { .. } => "MusicStarted",
             Event::MusicStopped => "MusicStopped",
             Event::MusicError { .. } => "MusicError",

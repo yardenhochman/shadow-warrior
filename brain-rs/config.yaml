@@ -34,6 +34,16 @@ ble:
   threshold: 2.0        # m/s^2 of motion (firmware removes gravity); bag sends only above this
   punch_refractory_ms: 350  # samples within this window after a punch are the same hit
 
+# Bluetooth speaker supervision (Linux/BlueZ). Off unless `address` is set. The speaker must
+# already be paired and trusted (see docs/STATION_INSTALL.md section 3b). The brain reconnects it
+# and its A2DP audio profile when it drops, with exponential backoff, and reports it as
+# `hardware.speaker` in /api/state.
+speaker:
+  # address: "10:94:97:40:6F:95"
+  # adapter: builtin            # same selectors as ble.adapter (hciN, index, usb, usb:VID:PID, builtin)
+  check_interval_sec: 10
+  max_backoff_sec: 60
+
 # Read-only BLE GATT status service so a phone (nRF Connect / LightBlue) can read
 # brain state without WiFi. Linux/BlueZ only; needs bluetoothd. Never blocks the
 # daemon: if BlueZ or the adapter is missing it logs and carries on.

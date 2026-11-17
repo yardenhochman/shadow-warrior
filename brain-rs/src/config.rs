@@ -20,6 +20,30 @@ pub struct Config {
     pub presence: PresenceConfig,
     #[serde(default)]
     pub ble_status: BleStatusConfig,
+    #[serde(default)]
+    pub speaker: SpeakerConfig,
+}
+
+/// Keeps one paired+trusted Bluetooth speaker connected (services/speaker_manager.rs).
+/// Off unless `address` is set. Linux/BlueZ only.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(default)]
+pub struct SpeakerConfig {
+    /// Bluetooth address of the speaker (`10:94:97:40:6F:95`). Unset = disabled.
+    pub address: Option<String>,
+    /// Adapter the speaker is paired on: `hciN`, an index, `usb`, `usb:VVVV:PPPP` or
+    /// `builtin` (same selectors as `ble.adapter`). Unset = first adapter.
+    pub adapter: Option<String>,
+    /// Seconds between link checks.
+    pub check_interval_sec: u64,
+    /// Longest wait between reconnect attempts while the speaker keeps failing.
+    pub max_backoff_sec: u64,
+}
+
+impl Default for SpeakerConfig {
+    fn default() -> Self {
+        Self { address: None, adapter: None, check_interval_sec: 10, max_backoff_sec: 60 }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -477,6 +501,7 @@ impl Default for Config {
             schedule: ScheduleConfig::default(),
             presence: PresenceConfig::default(),
             ble_status: BleStatusConfig::default(),
+            speaker: SpeakerConfig::default(),
         }
     }
 }

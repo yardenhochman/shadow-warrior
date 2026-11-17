@@ -75,6 +75,9 @@ pub struct HardwareHealth {
     pub ble: DeviceHealth,
     pub audio: DeviceHealth,
     pub music: DeviceHealth,
+    /// The paired Bluetooth speaker (only reported once `speaker.address` is configured).
+    #[serde(default)]
+    pub speaker: DeviceHealth,
     /// keyed by controller IP
     pub wled: BTreeMap<String, DeviceHealth>,
     /// keyed by plug name
@@ -83,7 +86,7 @@ pub struct HardwareHealth {
 
 impl HardwareHealth {
     fn devices_mut(&mut self) -> impl Iterator<Item = &mut DeviceHealth> {
-        [&mut self.ble, &mut self.audio, &mut self.music]
+        [&mut self.ble, &mut self.audio, &mut self.music, &mut self.speaker]
             .into_iter()
             .chain(self.wled.values_mut())
             .chain(self.tasmota.values_mut())
@@ -155,6 +158,16 @@ impl StatusRegistry {
             Event::BleDeviceDisconnected { reason } => h.ble.down(now, Some(reason.clone())),
             Event::PunchDetected { .. } | Event::BleAlive => h.ble.seen(now),
             Event::BleConnectionError { error } => h.ble.fail(now, error.clone()),
+            Event::SpeakerConnected { name } => {
+                h.speaker.name = Some(name.clone());
+                h.speaker.up(now);
+            }
+            Event::SpeakerDisconnected => {
+                let reason = h.speaker.last_error.clone();
+                h.speaker.down(now, reason);
+            }
+            Event::SpeakerAlive => h.speaker.seen(now),
+            Event::SpeakerError { error } => h.speaker.fail(now, error.clone()),
             Event::MusicStarted { track_name } => {
                 h.music.powered = Some(true);
                 h.music.detail = Some(track_name.clone());
@@ -387,5 +400,22 @@ mod tests {
         assert!(r.snapshot_at(later).ble.stale, "no events -> stale");
         r.apply(&Event::BleAlive, later - chrono::Duration::seconds(10));
         assert!(!r.snapshot_at(later).ble.stale, "heartbeat refreshes last_seen");
+    }
+
+    #[test]
+    fn speaker_drop_and_recovery_are_tracked() {
+        let r = StatusRegistry::with_stale_after(std::time::Duration::from_secs(300));
+        let t = Utc::now();
+        r.apply(&Event::SpeakerConnected { name: "BOOM 4".into() }, t);
+        assert!(r.snapshot_at(t).speaker.connected);
+        r.apply(&Event::SpeakerError { error: "no a2dp".into() }, t);
+        r.apply(&Event::SpeakerDisconnected, t);
+        let d = r.snapshot_at(t).speaker;
+        assert!(!d.connected && d.disconnect_reason.as_deref() == Some("no a2dp") && d.error_count == 1);
+        r.apply(&Event::SpeakerConnected { name: "BOOM 4".into() }, t);
+        let d = r.snapshot_at(t).speaker;
+        assert!(d.connected && d.disconnect_reason.is_none());
+        r.apply(&Event::SpeakerAlive, t + chrono::Duration::seconds(400));
+        assert!(!r.snapshot_at(t + chrono::Duration::seconds(401)).speaker.stale);
     }
 }
