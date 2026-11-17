@@ -4,10 +4,11 @@
 # ///
 """Normalise a folder of tracks to one loudness (EBU R128, two-pass loudnorm).
 
-    uv run deploy/normalize_music.py ~/shadow-warrior-music [--lufs -14] [--tp -1.0] [--format flac|m4a]
+    uv run deploy/normalize_music.py ~/shadow-warrior-music [--lufs -14] [--tp -1.0] [--format flac|mp3|m4a]
 
 Reads every .m4a/.mp3/.flac/.wav/.ogg/.opus/.webm in SRC and writes 16-bit FLAC (default; no second
-lossy encode, works on any ffmpeg) or AAC .m4a (`--format m4a`, needs macOS's aac_at) to
+lossy encode, works on any ffmpeg), MP3 (`--format mp3`, LAME VBR ~190 kbps, for the
+browser simulator) or AAC .m4a (`--format m4a`, needs macOS's aac_at) to
 SRC/normalized/ (originals untouched). Pass 1 measures, pass 2 applies a plain gain where the true-peak
 limit allows (no dynamic compression; loudnorm limits only when it must), then every output is re-measured and a before/after
 table is printed. The brain plays whatever is in its music dir at the level it finds it, so
@@ -60,6 +61,8 @@ def normalise(src: pathlib.Path, dst: pathlib.Path, i: float, tp: float, bitrate
         )
     if fmt == "flac":
         codec = ["-c:a", "flac", "-sample_fmt", "s16"]
+    elif fmt == "mp3":
+        codec = ["-c:a", "libmp3lame", "-q:a", "2"]
     else:
         codec = ["-ar", "44100", "-c:a", "aac_at", "-b:a", bitrate, "-movflags", "+faststart"]
     r = ffmpeg(["-y", "-i", str(src), "-vn", "-map_metadata", "0", "-af", flt, *codec, str(dst)])
@@ -72,8 +75,8 @@ def main() -> None:
     ap.add_argument("src", type=pathlib.Path)
     ap.add_argument("--lufs", type=float, default=-14.0, help="target integrated loudness (default -14)")
     ap.add_argument("--tp", type=float, default=-1.0, help="true-peak ceiling in dBTP (default -1.0)")
-    ap.add_argument("--format", choices=["flac", "m4a"], default="flac",
-                    help="output: 16-bit FLAC (default) or AAC m4a (macOS aac_at only)")
+    ap.add_argument("--format", choices=["flac", "mp3", "m4a"], default="flac",
+                    help="output: 16-bit FLAC (default), MP3, or AAC m4a (macOS aac_at only)")
     ap.add_argument("--bitrate", default="192k", help="AAC bitrate for --format m4a")
     ap.add_argument("--jobs", type=int, default=4)
     a = ap.parse_args()
