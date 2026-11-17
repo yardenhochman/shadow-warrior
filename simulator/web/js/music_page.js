@@ -1,5 +1,6 @@
 // music.html: pick the section of each fight track that plays in FIGHT (see segments.js).
 import { loadSegments, saveLocal, saveToBridge } from './segments.js';
+import { features, suggest, DECODE_RATE } from './suggest.js';
 
 const BASE = '../../music/';
 const FADE_IN = 0.8, FADE_OUT = 1.5;
@@ -11,6 +12,7 @@ let segs = {};
 let cards = [];
 let cur = null;          // card whose track is loaded in `audio`
 let gameMode = false;    // playing "as in game": fades and stop/loop at the end
+let gameStart = 0;       // where that play began (the pick, or the suggestion)
 let saveTimer = null;
 
 const fmt = (t) => {
@@ -51,12 +53,13 @@ function makeCard(track, i) {
       <button data-a="start">Start here</button>
       <button data-a="end">End here</button>
       <button data-a="game" class="primary">Play as in game</button>
+      <button data-a="accept" class="sugg">Use suggestion</button>
       <button data-a="loop">Loop section</button>
       <button data-a="reset">Whole track</button>
       <span class="time"></span>
     </div>`;
   $('.title', el).textContent = track.title;
-  const c = { track, el, canvas: $('canvas', el), peaks: null, dur: null, pos: 0, loop: false, missing: false, drag: null };
+  const c = { track, el, canvas: $('canvas', el), peaks: null, feats: null, sugg: [], dur: null, pos: 0, loop: false, missing: false, drag: null };
   el.addEventListener('click', (e) => { const a = e.target.dataset?.a; if (a) action(c, a); });
   bindCanvas(c);
   return c;
@@ -69,7 +72,7 @@ const endOf = (c) => segOf(c)?.end ?? c.dur;
 function setSeg(c, start, end) {
   if (!start && end == null) delete segs[c.track.file];
   else segs[c.track.file] = { start: Math.max(0, +start.toFixed(2)), end: end == null ? null : +end.toFixed(2) };
-  update(c); save();
+  update(c); save(); refreshSuggestions();
 }
 
 function load(c) {
@@ -81,7 +84,7 @@ function load(c) {
 
 function playFrom(c, t, asGame = false) {
   load(c);
-  gameMode = asGame;
+  gameMode = asGame; if (asGame) gameStart = t;
   const go = () => { audio.currentTime = t; audio.volume = asGame ? 0 : 1; audio.play().catch(() => {}); };
   if (audio.readyState >= 1) go(); else audio.addEventListener('loadedmetadata', go, { once: true });
 }
@@ -98,7 +101,9 @@ function action(c, a) {
     if (here <= startOf(c) + 3) { setStatus('End must be at least 3 s after the start'); return; }
     setSeg(c, startOf(c), here);
   } else if (a === 'game') {
-    playFrom(c, startOf(c), true);
+    playFrom(c, s ? startOf(c) : c.sugg[0]?.start ?? 0, true);
+  } else if (a === 'accept') {
+    const g = c.sugg[0]; if (g) setSeg(c, g.start, g.end);
   } else if (a === 'loop') {
     c.loop = !c.loop; update(c);
   } else if (a === 'reset') {
@@ -138,7 +143,11 @@ function bindCanvas(c) {
 function update(c) {
   const s = segOf(c), chip = $('.chip', c.el);
   chip.classList.toggle('set', !!s);
-  chip.textContent = c.missing ? 'file missing' : s ? `${fmt(s.start)} – ${s.end != null ? fmt(s.end) : 'end'}` : 'Whole track';
+  const g = c.sugg[0];
+  chip.classList.toggle('guess', !s && !!g);
+  chip.textContent = c.missing ? 'file missing' : s ? `${fmt(s.start)} – ${s.end != null ? fmt(s.end) : 'end'}`
+    : g ? `Suggested ${fmt(g.start)} – ${g.end != null ? fmt(g.end) : 'end'}` : 'Whole track';
+  $('[data-a=accept]', c.el).hidden = !!s || !g;
   $('[data-a=loop]', c.el).classList.toggle('on', c.loop);
   $('[data-a=play]', c.el).textContent = cur === c && !audio.paused ? 'Pause' : 'Play';
   const t = cur === c ? audio.currentTime : c.pos;
@@ -158,6 +167,13 @@ function draw(c) {
   }
   const s = segOf(c), a = startOf(c), b = endOf(c), X = (t) => (t / c.dur) * w;
   if (s) { g.fillStyle = v('--sel'); g.fillRect(X(a), 0, X(b) - X(a), h); }
+  const top = c.sugg[0];
+  if (!s && top) {
+    const ge = top.end ?? c.dur;
+    g.fillStyle = v('--guess-bg'); g.fillRect(X(top.start), 0, X(ge) - X(top.start), h);
+    g.strokeStyle = v('--guess'); g.setLineDash([4, 3]); g.lineWidth = 1.5;
+    g.strokeRect(X(top.start) + 0.75, 0.75, X(ge) - X(top.start) - 1.5, h - 1.5); g.setLineDash([]);
+  }
   if (c.peaks) {
     const n = c.peaks.length;
     for (let i = 0; i < n; i++) {
@@ -171,6 +187,12 @@ function draw(c) {
     g.fillRect(X(a) - 1.5, 0, 3, h);
     if (s.end != null) g.fillRect(X(b) - 1.5, 0, 3, h);
   }
+  // Candidate starts (1 = best): click one to listen from there.
+  c.sugg.forEach((q, i) => {
+    const x = X(q.start); g.fillStyle = v('--guess');
+    g.beginPath(); g.moveTo(x - 5, 0); g.lineTo(x + 5, 0); g.lineTo(x, 7); g.fill();
+    g.font = '10px system-ui'; g.fillText(String(i + 1), x + 6, 9);
+  });
   const t = cur === c ? audio.currentTime : c.pos;
   if (t > 0) { g.fillStyle = v('--head'); g.fillRect(X(t) - 0.5, 0, 1, h); }
 }
@@ -185,7 +207,7 @@ async function pump() {
   try {
     const r = await fetch(c.track.url);
     if (!r.ok) throw new Error(String(r.status));
-    const buf = await new OfflineAudioContext(1, 1, 3000).decodeAudioData(await r.arrayBuffer());
+    const buf = await new OfflineAudioContext(1, 1, DECODE_RATE).decodeAudioData(await r.arrayBuffer());
     const data = buf.getChannelData(0), n = 400, step = Math.floor(data.length / n), peaks = new Float32Array(n);
     let max = 0;
     for (let i = 0; i < n; i++) {
@@ -195,16 +217,24 @@ async function pump() {
     }
     if (max > 0) for (let i = 0; i < n; i++) peaks[i] /= max;
     c.peaks = peaks; c.dur = buf.duration;
+    c.feats = features(data); suggestFor(c);
   } catch { c.missing = true; }
   update(c);
   busy = false; pump();
 }
 
+// Suggestions learn from the other tracks' picks, so they refresh whenever a pick changes.
+function suggestFor(c) {
+  const picks = cards.filter((k) => k !== c && segOf(k)).map((k) => segOf(k));
+  c.sugg = c.feats ? suggest(c.feats, picks) : [];
+}
+function refreshSuggestions() { cards.forEach((c) => { if (c.feats) { suggestFor(c); update(c); } }); }
+
 function tick() {
   if (cur && !audio.paused) {
     const c = cur, s = segOf(c), t = audio.currentTime, end = endOf(c);
     if (gameMode) {
-      const a = startOf(c);
+      const a = gameStart;
       if (t < a + FADE_IN) audio.volume = Math.max(0, Math.min(1, (t - a) / FADE_IN));
       else if (s && end && t > end - FADE_OUT) audio.volume = Math.max(0, (end - t) / FADE_OUT);
       else audio.volume = 1;
@@ -242,7 +272,7 @@ window.addEventListener('resize', () => cards.forEach(draw));
     cards.forEach((c) => io.observe(c.el));
     const n = Object.keys(segs).length;
     setStatus(n ? `${n} sections picked` : 'No sections yet', !!n);
-    window.__musicPage = { cards, segs: () => segs };
+    window.__musicPage = { cards, segs: () => segs, suggest: (c) => c.sugg };
   } catch (e) {
     setStatus('Music not found: serve the repo with the bridge and run music/fetch.sh');
   }

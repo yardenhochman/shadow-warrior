@@ -51,3 +51,9 @@ into the brain's music folder. They play, but `fetch.sh` will not know them.
 
 Missing as of November 2026: one link (`HsLOxbLZMy8`) is gone from YouTube, and
 five MP3s sent on WhatsApp in November 2025 could not be recovered.
+
+Tracks with no section show a **suggested** one (blue dashes, plus triangles 1–3 at other likely
+starts), from `simulator/web/js/suggest.js`: it finds section changes (drums or bass coming in,
+a riff starting) near where your picks usually start, and ends before a long quiet break. It
+learns from the picks already made, so it improves as more tracks are marked; **Use suggestion**
+keeps it.
