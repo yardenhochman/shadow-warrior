@@ -493,8 +493,40 @@ impl WledManager {
         for ip in ips {
             let url = format!("http://{ip}/json/info");
             match self.http_client.get(&url).send().await.and_then(|r| r.error_for_status()) {
-                Ok(_) => self.link.ok(&ip),
+                Ok(resp) => {
+                    self.link.ok(&ip);
+                    // The device knows its real strip length; config/discovery only guess.
+                    if let Some(n) = resp
+                        .json::<serde_json::Value>()
+                        .await
+                        .ok()
+                        .and_then(|v| v["leds"]["count"].as_u64())
+                        .filter(|n| *n > 0)
+                    {
+                        self.update_led_count(&ip, n as usize).await;
+                    }
+                }
                 Err(e) => self.link.fail(&ip, &e),
+            }
+        }
+    }
+
+    /// Adopt the LED count the device reports and resize the realtime frames.
+    async fn update_led_count(&self, ip: &str, count: usize) {
+        let changed = {
+            let mut controllers = self.controllers.write().await;
+            match controllers.iter_mut().find(|c| c.ip == ip) {
+                Some(c) if c.num_leds != count => {
+                    info!("WLED {ip} reports {count} LEDs (was {})", c.num_leds);
+                    c.num_leds = count;
+                    true
+                }
+                _ => false,
+            }
+        };
+        if changed {
+            if let Err(e) = self.rebuild_sockets().await {
+                warn!("WLED socket rebuild after LED count change failed: {e}");
             }
         }
     }
@@ -503,8 +535,9 @@ impl WledManager {
     pub fn spawn_health_poll(self: Arc<Self>) {
         tokio::spawn(async move {
             loop {
-                tokio::time::sleep(HEALTH_POLL_INTERVAL).await;
+                // First poll right away: learns the real LED counts at startup.
                 self.poll_health_once().await;
+                tokio::time::sleep(HEALTH_POLL_INTERVAL).await;
             }
         });
     }
@@ -797,5 +830,25 @@ mod tests {
         let (n, _) = b.recv_from(&mut buf).unwrap();
         assert_eq!((buf[0], n), (2, 2 + 200 * 3));
         wled.stop_realtime_mode().await;
+    }
+
+    /// The device's own LED count replaces the 150 guess (discovery) and the
+    /// frames are resized; a device that does not report one keeps its value.
+    #[tokio::test]
+    async fn health_poll_adopts_reported_led_count() {
+        let config = Config::default();
+        let db = Arc::new(DatabaseManager::new("sqlite::memory:").await.unwrap());
+        let bus: SharedEventBus = Arc::new(EventBus::new(100));
+        let wled = WledManager::new(config.wled.clone(), db, bus);
+        let (addr, routes, _) = mock_http(&[("GET /json/info", 200, r#"{"leds":{"count":180}}"#)]).await;
+        wled.set_controllers_for_test(&[&addr]).await;
+        assert_eq!(wled.controllers.read().await[0].num_leds, 10);
+
+        wled.poll_health_once().await;
+        assert_eq!(wled.controllers.read().await[0].num_leds, 180);
+
+        routes.lock().await.insert("GET /json/info".into(), (200, "{}".into()));
+        wled.poll_health_once().await;
+        assert_eq!(wled.controllers.read().await[0].num_leds, 180, "missing count keeps the known one");
     }
 }
