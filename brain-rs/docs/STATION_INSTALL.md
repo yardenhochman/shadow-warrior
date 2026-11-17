@@ -124,8 +124,14 @@ the log says `a2dp-sink profile connect failed: Protocol not available`.
       extension (`m4a` is in the repo default; mp3, flac and wav also work). The brain loads the
       playlist at startup, so restart the service. Verified: 18 `m4a` tracks load and the
       brain starts playing when a fight begins.
-- [ ] Tracks come out at very different loudness (measured -15.1 to -3.4 LUFS, two peak above
-      0 dBFS); decide on normalisation before an event. Only use music you may play publicly.
+- [ ] Normalise before copying: `uv run deploy/normalize_music.py <dir> [--lufs -14] [--tp -1]`
+      writes `<dir>/normalized/*.m4a` (originals untouched; a plain gain per track, `loudnorm`
+      only where the gain would push the peak over the ceiling) and prints a before/after table.
+      Verified on the 18-track playlist: spread 11.7 LU -> 0.1 LU at -14 LUFS, peaks all below
+      0 dBFS (raw downloads ranged -15.1 to -3.4 LUFS and two clipped). This costs one lossy
+      generation (re-encoded as AAC 192k with `aac_at`, macOS only; edit the encoder elsewhere).
+      The result is quieter overall than the raw tracks, so raise `music.volume` as needed.
+- [ ] Only use music you may play publicly.
 
 ## 4. Deploy the brain
 
