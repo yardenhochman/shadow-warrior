@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fight Music Sections</title>
+  <style>
+    :root {
+      --bg: #0d0f17; --panel: #161a26; --line: #262b3b; --text: #e8eaf2; --muted: #8d93a8;
+      --accent: #ff7a3d; --sel: rgba(255, 122, 61, 0.22); --wave: #4a5170; --wave-sel: #ffb38a; --head: #ffffff;
+      --ok: #6fd28a;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, sans-serif; }
+    header { position: sticky; top: 0; z-index: 2; background: color-mix(in srgb, var(--bg) 92%, transparent);
+      backdrop-filter: blur(6px); border-bottom: 1px solid var(--line); padding: 12px 16px; }
+    header .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; max-width: 980px; margin: 0 auto; }
+    h1 { font-size: 18px; margin: 0; flex: 1 1 auto; }
+    .status { color: var(--muted); font-size: 13px; }
+    .status.ok { color: var(--ok); }
+    main { max-width: 980px; margin: 0 auto; padding: 12px 16px 60px; }
+    .help { color: var(--muted); font-size: 14px; margin: 4px 0 14px; }
+    .help b { color: var(--text); font-weight: 600; }
+    .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px; margin: 0 0 12px; }
+    .card.playing { border-color: var(--accent); }
+    .top { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+    .num { color: var(--muted); font-variant-numeric: tabular-nums; }
+    .title { font-weight: 600; flex: 1 1 auto; }
+    .chip { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); font-variant-numeric: tabular-nums; }
+    .chip.set { color: var(--accent); border-color: var(--accent); }
+    canvas { display: block; width: 100%; height: 72px; margin: 10px 0 8px; border-radius: 6px; background: #0f121b; cursor: pointer; touch-action: none; }
+    .controls { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+    button { background: #222839; color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font: inherit; font-size: 13px; cursor: pointer; }
+    button:hover { border-color: var(--muted); }
+    button.primary { background: var(--accent); border-color: var(--accent); color: #1a0d05; font-weight: 600; }
+    button.on { border-color: var(--accent); color: var(--accent); }
+    .time { margin-left: auto; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+    .missing { color: var(--muted); font-size: 13px; }
+    a { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="row">
+      <h1>Fight music: pick the part that plays</h1>
+      <span id="status" class="status">Loading…</span>
+      <button id="export" title="Download the picks as a JSON file">Download picks</button>
+      <a href="./">Back to the simulator</a>
+    </div>
+  </header>
+  <main>
+    <p class="help">
+      Click the waveform to listen from that point. <b>Start here</b> and <b>End here</b> mark the section at the
+      play position (or drag the orange edges). <b>Play as in game</b> plays it the way FIGHT will: fade in at the
+      start, fade out at the end. Picks save on their own. A track with no section plays from the beginning.
+    </p>
+    <div id="list"></div>
+  </main>
+  <script type="module" src="js/music_page.js"></script>
+</body>
+</html>

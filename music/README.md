@@ -31,6 +31,18 @@ After the download nothing needs the network.
 - **Simulator, GitHub Pages or phone:** tap **Load music** and pick the MP3s.
   The browser keeps them, so later visits play them without loading again.
 
+## Pick the part of each track that plays
+
+Open `simulator/web/music.html` (with the live bridge: `http://<host>:<port>/simulator/web/music.html`).
+Each track shows its waveform: click to listen, mark **Start here** / **End here** or drag the
+orange edges, and **Play as in game** plays the section with the game's fades. The simulator then
+starts each track at its section (fade in), and at the section's end fades out and goes to the
+next track's section. A track without a section plays from the beginning.
+
+Picks are saved in the browser and, through the bridge, in `music/segments.json` (gitignored;
+`{"file.mp3": {"start": s, "end": s|null}}`). **Download picks** saves the same file.
+brain-rs does not read it yet.
+
 ## Adding a track
 
 Add a line to `playlist.tsv` (tab separated), run `fetch.sh`, and copy the new

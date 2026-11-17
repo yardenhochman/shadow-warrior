@@ -570,6 +570,31 @@ def make_app(hub):
         except Exception as e:  # noqa: BLE001
             return web.json_response({"error": str(e)}, status=409)
 
+    seg_file = REPO / "music" / "segments.json"  # gitignored, like the tracks
+
+    async def music_segments(req):
+        # GET: the music sections picked on music.html; POST: replace them (JSON object).
+        if req.method == "POST":
+            try:
+                data = await req.json()
+                if not isinstance(data, dict):
+                    raise ValueError("expected an object")
+                clean = {}
+                for name, seg in data.items():
+                    start = max(0.0, float(seg.get("start", 0)))
+                    end = seg.get("end")
+                    clean[str(Path(name).name)] = {"start": round(start, 2), "end": None if end is None else round(float(end), 2)}
+            except (ValueError, TypeError, AttributeError, json.JSONDecodeError) as e:
+                return web.json_response({"error": str(e)}, status=400)
+            tmp = seg_file.with_suffix(".tmp")
+            tmp.write_text(json.dumps(clean, indent=1, sort_keys=True))
+            tmp.replace(seg_file)
+            return web.json_response({"saved": len(clean)})
+        try:
+            return web.json_response(json.loads(seg_file.read_text()))
+        except (OSError, ValueError):
+            return web.json_response({})
+
     async def no_cache(request, handler):
         resp = await handler(request)
         if not resp.prepared:
@@ -582,6 +607,7 @@ def make_app(hub):
     app.router.add_get("/live/status", status)
     app.router.add_post("/live/punch", test_punch)
     app.router.add_route("*", "/live/threshold", threshold)
+    app.router.add_route("*", "/live/music-segments", music_segments)
     if hub.brain:
         app.router.add_route("*", "/json/{path:.*}", hub.brain.wled_json)
         app.router.add_route("*", "/json", hub.brain.wled_json)

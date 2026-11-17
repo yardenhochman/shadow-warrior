@@ -4,23 +4,33 @@
 // Picked files are kept in IndexedDB, so on GitHub Pages or a phone the playlist
 // is still there after a reload, with no network needed for the audio.
 // Each fight starts the next track (proposal; brain-rs restarts from track 1).
+// A track with a section picked on music.html plays only that part (fade in, fade out,
+// then the next track's section).
+import { loadSegments } from './segments.js';
+
 export class Playlist {
   constructor(sfx) {
     this.sfx = sfx; this.tracks = []; this.idx = 0; this.playing = false; this.node = null; this.fade = null;
     this.source = 'none'; this.onchange = () => {};
     this.audio = new Audio(); this.audio.preload = 'auto';
+    this.segments = {}; loadSegments().then((s) => { this.segments = s; });
     this.audio.addEventListener('ended', () => this.skip());
+    this.audio.addEventListener('timeupdate', () => {
+      const seg = this.segment();
+      if (this.playing && seg && seg.end && !this.fade && this.audio.currentTime >= seg.end - 1.5) this.fadeOut(() => this.skip());
+    });
     this.audio.addEventListener('error', () => { if (this.playing && this.tracks.length > 1) this.skip(); });
   }
   get available() { return this.tracks.length > 0; }
   get current() { return this.tracks[this.idx] || null; }
+  segment() { const t = this.current; return t ? this.segments[t.file] : null; }
 
   async loadDefault(base = '../../music/') {
     try {
       const r = await fetch(base + 'playlist.tsv', { cache: 'no-store' });
       if (!r.ok) return false;
       const rows = (await r.text()).split('\n').filter((l) => l.trim() && !l.startsWith('#')).map((l) => l.split('\t'));
-      const tracks = rows.filter((c) => c.length >= 3).map(([, file, title]) => ({ title: title.trim(), url: base + file.trim() }));
+      const tracks = rows.filter((c) => c.length >= 3).map(([, file, title]) => ({ title: title.trim(), url: base + file.trim(), file: file.trim() }));
       if (!tracks.length) return false;
       const probe = await fetch(tracks[0].url, { method: 'HEAD' });
       if (!probe.ok) return false;
@@ -34,7 +44,7 @@ export class Playlist {
       const rows = await idb('readonly', (st) => st.getAll());
       if (!rows || !rows.length || this.source === 'repo') return false;
       rows.sort((a, b) => a.name.localeCompare(b.name));
-      this.tracks = rows.map((r) => ({ title: titleOf(r.name), url: URL.createObjectURL(r.blob) }));
+      this.tracks = rows.map((r) => ({ title: titleOf(r.name), url: URL.createObjectURL(r.blob), file: r.name }));
       this.idx = 0; this.source = 'saved'; this.onchange(); return true;
     } catch { return false; }
   }
@@ -49,7 +59,7 @@ export class Playlist {
     if (!audio.length) return 0;
     this.stop(true);
     if (this.source === 'files' || this.source === 'saved') this.tracks.forEach((t) => URL.revokeObjectURL(t.url));
-    this.tracks = audio.map((f) => ({ title: titleOf(f.name), url: URL.createObjectURL(f) }));
+    this.tracks = audio.map((f) => ({ title: titleOf(f.name), url: URL.createObjectURL(f), file: f.name }));
     this.idx = 0; this.source = 'files'; this.onchange();
     this.saved = idb('readwrite', (st) => { st.clear(); audio.forEach((f) => st.put({ name: f.name, blob: f })); }).then(() => true, () => false);
     return audio.length;
@@ -62,8 +72,18 @@ export class Playlist {
 
   play() {
     if (!this.available) return false;
-    this.attach(); clearInterval(this.fade);
-    this.audio.src = this.current.url; this.audio.volume = 1;
+    this.attach(); clearInterval(this.fade); this.fade = null;
+    const seg = this.segment();
+    this.audio.src = this.current.url;
+    if (seg && seg.start > 0) {
+      // Start at the picked section with a short fade in.
+      this.audio.volume = 0;
+      this.audio.addEventListener('loadedmetadata', () => { this.audio.currentTime = seg.start; }, { once: true });
+      this.fade = setInterval(() => {
+        this.audio.volume = Math.min(1, this.audio.volume + 0.08);
+        if (this.audio.volume >= 1) { clearInterval(this.fade); this.fade = null; }
+      }, 60);
+    } else this.audio.volume = 1;
     this.audio.play().catch(() => {});
     this.playing = true; this.onchange(); return true;
   }
@@ -77,11 +97,16 @@ export class Playlist {
   stop(now = false) {
     if (!this.playing) return;
     this.playing = false; this.idx = (this.idx + 1) % this.tracks.length; this.onchange();
-    clearInterval(this.fade);
+    clearInterval(this.fade); this.fade = null;
     if (now) { this.audio.pause(); return; }
+    this.fadeOut();
+  }
+
+  fadeOut(then) {
+    clearInterval(this.fade);
     this.fade = setInterval(() => {
-      this.audio.volume = Math.max(0, this.audio.volume - 0.08);
-      if (this.audio.volume <= 0) { clearInterval(this.fade); this.audio.pause(); }
+      this.audio.volume = Math.max(0, this.audio.volume - 0.05);
+      if (this.audio.volume <= 0) { clearInterval(this.fade); this.fade = null; this.audio.pause(); if (then) then(); }
     }, 60);
   }
 }

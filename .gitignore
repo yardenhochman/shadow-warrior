@@ -29,6 +29,8 @@ punching_bag/.claude/
 # Fight music (downloaded by music/fetch.sh, not committed)
 music/*.mp3
 music/raw/
+music/segments.json
+music/segments.tmp
 
 # Screenshots from simulator/web/test/e2e.mjs
 sim-shots/
