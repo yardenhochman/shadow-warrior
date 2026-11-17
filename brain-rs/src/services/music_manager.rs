@@ -13,6 +13,22 @@ use tracing::{error, info, warn};
 use crate::config::MusicConfig;
 use crate::core::{Event, SharedEventBus};
 
+/// Whether the n-th (0-based) output stream error gets logged: the first three,
+/// then only at powers of two, so a dead device can't flood the log.
+fn should_log_stream_error(n: u64) -> bool {
+    n < 3 || (n + 1).is_power_of_two()
+}
+
+/// rodio's default callback eprintln!s every stream error; on a broken ALSA
+/// device that is thousands per second (1.8M lines in a minute on the PC).
+fn log_output_stream_error(err: rodio::cpal::StreamError) {
+    static COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if should_log_stream_error(n) {
+        error!("Music output stream error (#{}): {}", n + 1, err);
+    }
+}
+
 /// Pure playlist cursor: decides which track follows the current one (wraps around).
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct PlaylistCursor {
@@ -172,7 +188,11 @@ impl MusicManager {
 
         // Initialize audio output and immediately leak it (before any await)
         // Initialize audio output using build container's native drivers
-        let device_sink = DeviceSinkBuilder::open_default_sink()
+        let device_sink = DeviceSinkBuilder::from_default_device()
+            .and_then(|b| {
+                b.with_error_callback(log_output_stream_error as fn(rodio::cpal::StreamError))
+                    .open_sink_or_fallback()
+            })
             .context("Failed to create audio output")?;
         let player = Player::connect_new(device_sink.mixer());
         player.set_volume(self.config.volume);
@@ -307,6 +327,13 @@ impl MusicManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stream_errors_are_rate_limited() {
+        let logged = (0..1_000_000u64).filter(|&n| should_log_stream_error(n)).count();
+        assert!(should_log_stream_error(0) && should_log_stream_error(2));
+        assert!(logged <= 3 + 20, "logged {logged} of a million errors");
+    }
 
     #[test]
     fn cursor_advances_and_wraps() {
