@@ -136,3 +136,17 @@ h2 { font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: v
 .musicBar #nowPlaying { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .musicBar #nowPlaying.on { color: var(--text); font-weight: 700; }
 .musicBar label.btn { display: inline-flex; align-items: center; }
+
+/* live hardware mode (simulator/live/bridge.py) */
+.liveTag { font: 800 11px system-ui; letter-spacing: .1em; padding: 5px 9px; border-radius: 999px; background: #3a1318; color: #ff8a95; border: 1px solid #6b1f2a; align-self: center; }
+.liveTag.on { background: #133a26; color: var(--ok); border-color: #1f6b44; box-shadow: 0 0 10px #1f6b44; }
+.live { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; }
+.live[hidden] { display: none; }
+.liveRow { display: flex; align-items: center; gap: 8px 16px; flex-wrap: wrap; }
+.liveStat { display: flex; align-items: baseline; gap: 8px; }
+.liveStat > span:nth-child(2) { flex: 1; min-width: 0; }
+.liveStat .btn { align-self: center; }
+.live .dot { width: 9px; height: 9px; transform: translateY(-1px); border-radius: 50%; background: #5b5b70; flex: none; }
+.live .dot.ok { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+.live .dot.warn { background: var(--gold); }
+.live .dot.bad { background: var(--bad); }

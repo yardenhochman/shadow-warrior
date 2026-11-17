@@ -11,6 +11,7 @@ import { LedRig, COLUMNS, EFFECT_LABELS } from './wled.js';
 import { Scene } from './scene.js';
 import { Sfx } from './sfx.js';
 import { Playlist } from './music.js';
+import { LiveLink, LIVE_REQUESTED } from './live.js';
 
 const $ = (id) => document.getElementById(id);
 const S = ArenaState;
@@ -18,7 +19,7 @@ const S = ArenaState;
 // ------------------------------------------------------------------ model
 const cfg = loadTunables();
 const PREFS_KEY = 'sw-sim-prefs-v1';
-const prefs = Object.assign({ fixInactivity: true, fixRearm: true, koEnds: false, musicPlayback: true, ledMode: 'proposal', sound: true },
+const prefs = Object.assign({ fixInactivity: true, fixRearm: true, koEnds: false, musicPlayback: true, ledMode: 'proposal', sound: true, liveMirror: true, liveSerp: false },
   JSON.parse(localStorage.getItem(PREFS_KEY) || '{}'));
 const savePrefs = () => localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
 
@@ -247,6 +248,39 @@ const ledMode = $('ledMode');
 ledMode.value = prefs.ledMode;
 ledMode.onchange = () => { rig.mode = ledMode.value; prefs.ledMode = ledMode.value; savePrefs(); log(`LED effects: ${ledMode.value}`, 'ignored'); };
 
+// ------------------------------------------------------------------ live hardware
+// Served by simulator/live/bridge.py with ?live=1: frames go to the real WLED strip and
+// real bag punches enter through punch(), the same path as a click on the arena.
+let live = null;
+if (LIVE_REQUESTED) {
+  $('livePanel').hidden = false; $('liveTag').hidden = false;
+  const dot = (id, cls) => { $(id).className = `dot ${cls}`; };
+  const renderLive = (l) => {
+    const st = l.status, w = st?.wled, b = st?.bag;
+    $('liveTag').classList.toggle('on', l.connected && !!w?.streaming);
+    if (!l.connected) { dot('wledDot', 'bad'); $('wledStatus').textContent = 'Strip: bridge not connected (retrying)'; dot('bagDot', 'bad'); $('bagStatus').textContent = 'Bag: -'; return; }
+    $('liveTake').hidden = st?.owner !== false;
+    if (st?.owner === false) { dot('wledDot', 'warn'); $('wledStatus').textContent = 'Strip: another tab is driving it'; }
+    else if (!l.enabled) { dot('wledDot', 'warn'); $('wledStatus').textContent = `Strip: mirroring off (WLED ${w?.host ?? ''} back on its own effect)`; }
+    else if (w?.streaming) { dot('wledDot', 'ok'); $('wledStatus').textContent = `Strip: live, ${w.fps} fps to WLED ${w.host} (${w.leds} LEDs, ${l.count / 4 | 0} per column)`; }
+    else { dot('wledDot', 'warn'); $('wledStatus').textContent = `Strip: waiting for frames (WLED ${w?.host ?? '?'})`; }
+    if (!b) return;
+    const ok = b.state === 'connected';
+    dot('bagDot', ok ? 'ok' : (b.state === 'disabled' || b.state === 'unavailable' || b.state === 'error') ? 'bad' : 'warn');
+    $('bagStatus').textContent = ok ? `Bag: connected, fight mode ${b.fight ? 'on' : 'off'}, ${b.punches} punches` : `Bag: ${b.state}${b.detail ? ` (${b.detail})` : ''}`;
+  };
+  live = new LiveLink({
+    log,
+    onStatus: renderLive,
+    onPunch: (m) => { if (live.status?.owner === false) return; log(`Bag punch: ${m.accel} m/s^2 -> power ${m.power.toFixed(0)}`, 'punch'); punch(m.power); },
+  });
+  const mirror = $('liveMirror'), serp = $('liveSerp');
+  mirror.checked = live.enabled = prefs.liveMirror; serp.checked = live.serpentine = prefs.liveSerp;
+  mirror.onchange = () => { live.enabled = prefs.liveMirror = mirror.checked; savePrefs(); renderLive(live); };
+  $('liveTake').onclick = () => live.take();
+  serp.onchange = () => { live.serpentine = prefs.liveSerp = serp.checked; savePrefs(); };
+}
+
 // ------------------------------------------------------------------ fidelity toggles
 function bindPref(id, key, onChange) {
   const el = $(id); el.checked = !!prefs[key];
@@ -408,6 +442,7 @@ function frame(tms) {
       inactiveFor: info.timeSinceLastActivitySec ?? 0, inactivityTimeout: cfg.fight_inactivity_timeout_sec,
     }, dt);
     drawStrips();
+    live?.frame(rig, tms);
     if (tms - lastPanel > 66) { lastPanel = tms; updatePanels(info); }
   } catch (err) {
     errors.push(String(err && err.stack || err));
@@ -425,5 +460,5 @@ window.sim = {
   playlist,
   get state() { return sm.currentState; }, get info() { return arena.getStateInfo(); }, get game() { return game; },
   get cfg() { return cfg; }, get errors() { return errors; }, get lastFeat() { return lastFeat; }, get detector() { return detector; },
-  punch: (p) => punch(p), setSensor, shoutFor: (ms) => feats.pulse(ms), skip: (sec) => { simNow += sec; presence.tick(simNow, sensorOn); arena.tick(simNow); }, arena, presence, sm,
+  rig, punch: (p) => punch(p), setSensor, get live() { return live; }, shoutFor: (ms) => feats.pulse(ms), skip: (sec) => { simNow += sec; presence.tick(simNow, sensorOn); arena.tick(simNow); }, arena, presence, sm,
 };

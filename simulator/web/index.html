@@ -15,6 +15,7 @@
       <span data-s="SUSPENDED">SUSP</span><span data-s="IDLE">IDLE</span><span data-s="WARMING">WARM</span><span data-s="FIGHT">FIGHT</span><span data-s="COOLDOWN">COOL</span>
     </div>
     <div class="topbtns">
+      <span id="liveTag" class="liveTag" hidden title="Live hardware bridge">LIVE</span>
       <button id="micBtn" class="btn small" title="Use the microphone for shout detection">Enable mic</button>
       <button id="soundBtn" class="btn small" title="Sound effects and fight music">Sound on</button>
     </div>
@@ -53,6 +54,14 @@
         </div>
         <div class="effectLabel" id="effectLabel"></div>
         <canvas id="strips" aria-label="Per-LED view of the four columns"></canvas>
+        <div class="live" id="livePanel" hidden>
+          <div class="liveRow">
+            <label class="toggle"><input type="checkbox" id="liveMirror" checked><span class="sw"></span><span>Mirror to real strip</span></label>
+            <label class="toggle" title="Every other column runs top-down on the strip"><input type="checkbox" id="liveSerp"><span class="sw"></span><span>Serpentine</span></label>
+          </div>
+          <div class="liveStat"><span class="dot" id="wledDot"></span><span id="wledStatus">Strip: connecting to bridge...</span><button class="btn small" id="liveTake" hidden>Use this tab</button></div>
+          <div class="liveStat"><span class="dot" id="bagDot"></span><span id="bagStatus">Bag: -</span></div>
+        </div>
       </div>
     </section>
 

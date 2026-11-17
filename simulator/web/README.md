@@ -17,6 +17,41 @@ python3 -m http.server 8000
 The mic needs a secure context: `localhost` or https (GitHub Pages works as-is).
 Without a mic, the SHOUT button feeds synthetic frames through the same detector.
 
+## Live hardware (real strip and bag)
+
+Mirror the simulator to the real WLED strip and punch the real bag into it:
+
+```sh
+simulator/live/live.sh            # from the repo root; then open http://localhost:8090/
+simulator/live/live.sh stop       # also: status, log; start takes bridge.py flags
+```
+
+Stop the brain first: BLE allows one central, and two writers fight over the strip.
+`live.sh` runs `uv run simulator/live/bridge.py` in the background (PID and log in
+`~/.local/state/shadow-warrior-live/`). For a foreground run use
+`uv run simulator/live/bridge.py [--wled 192.168.1.203] [--port 8090] [--no-ble]`.
+
+- **Serving**: the bridge serves the repo root (fight music included) and redirects `/`
+  to `index.html?live=1`. Only `?live=1` turns live mode on, so the static/Pages build is unchanged.
+- **Strip**: each rendered frame (the same colours as the LED columns panel) goes over a
+  WebSocket at ~30 fps. The four columns are laid end to end on the strip (column 1 first,
+  each base first, resampled by area averaging: 4 x 90 sim LEDs -> 4 x 45 on 180 LEDs; the LED count
+  comes from WLED at startup). Tick **Serpentine** when every other column runs top-down.
+  The bridge applies `--brightness 0.7` and `--gamma 2.2` (screen colours to LED duty) and
+  sends WLED UDP realtime DNRGB to port 21324 with a 2 s timeout. When the page closes,
+  mirroring is switched off or the bridge stops, WLED goes back to its own effect.
+  The newest tab drives the strip; other tabs show "another tab is driving it" and a
+  **Use this tab** button. Browsers pause hidden tabs, so keep the simulator tab visible.
+- **Bag**: the bridge connects to `ShadowWarriorPunchingBag` over BLE (bleak), writes
+  `bags.alpha`/`bags.threshold` from `brain-rs/config.yaml` (0.8, 2.0 m/s^2), and keeps fight
+  mode (IMU on) while a page is connected. As `ble_manager.rs` does, it folds each burst of
+  acceleration notifications into one punch (power = min(100, 10 x m/s^2), 350 ms refractory)
+  and the page feeds it to the same `punch()` a click on the arena uses. A punch counts only in FIGHT, as in brain-rs. Without
+  Bluetooth or with `--no-ble` the strip still works. The panel under the LED columns
+  shows strip and bag status; the topbar **LIVE** pill is green while frames stream.
+- **Endpoints**: `GET /live/status`; `POST /live/punch?power=60` (same message as a bag punch);
+  `GET`/`POST /live/threshold?value=2` reads/sets the bag threshold (RAM only, reset on bag reboot).
+
 ## Controls
 
 | Action | Mouse / touch | Keys |
@@ -130,4 +165,6 @@ Naruto, Pantera, Metallica, RATM, Mortal Kombat…). Audio files are not committ
 
 `test/e2e.mjs` drives the whole loop headless (fake mic, shout to FIGHT, music,
 punches, COOLDOWN, re-arm, YAML export) at desktop and phone sizes. Usage is in
-the file header; it exits 1 on any problem.
+the file header; it exits 1 on any problem. `test/live.mjs` checks live mode against a
+running bridge: frame rate, sent frames equal to the rendered LEDs, the resampler, a bridge
+punch counted in FIGHT and, with `WLED_HOST` set, WLED in realtime mode.
