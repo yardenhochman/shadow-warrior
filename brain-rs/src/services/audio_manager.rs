@@ -50,6 +50,10 @@ impl AudioManager {
     /// Start audio capture — negotiates best supported config with device
     pub async fn start(&self) -> Result<()> {
         info!("Starting audio manager");
+        if !self.config.read().await.input {
+            info!("Audio input disabled (audio.input: false): no microphone capture");
+            return Ok(());
+        }
 
         let host = cpal::default_host();
         let device = host
@@ -478,6 +482,16 @@ unsafe impl Sync for AudioManager {}
 mod tests {
     use super::*;
     use crate::core::EventBus;
+
+    /// `audio.input: false` never opens a device and is not an error.
+    #[tokio::test]
+    async fn input_disabled_opens_no_device() {
+        let mut cfg = crate::config::Config::default().audio;
+        cfg.input = false;
+        let am = AudioManager::new(cfg, Arc::new(EventBus::new(16)));
+        am.start().await.expect("disabled input is not an error");
+        assert!(!am.connected.load(std::sync::atomic::Ordering::Relaxed));
+    }
 
     #[test]
     fn stream_errors_publish_health_events() {

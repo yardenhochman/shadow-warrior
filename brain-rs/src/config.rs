@@ -198,6 +198,11 @@ pub struct AudioConfig {
     /// Also write a raw (pre band-pass, device-rate) WAV next to each clip by default.
     #[serde(default = "d_true")]
     pub clip_raw: bool,
+    /// Capture the default microphone. `false` (env `BRAIN_AUDIO='{input=false}'`): no
+    /// capture at all, e.g. on a dev machine whose default source is a headset; shouts then
+    /// come only from `POST /api/arena/shout`.
+    #[serde(default = "d_true")]
+    pub input: bool,
     /// Long-session recorder: seconds of raw audio per WAV chunk.
     #[serde(default = "d_record_chunk")]
     pub record_chunk_sec: f32,
@@ -456,6 +461,7 @@ impl Default for Config {
                 clip_on_shout: default_clip_on_shout(),
                 clip_cooldown_sec: default_clip_cooldown_sec(),
                 clip_raw: d_true(),
+                input: d_true(),
                 record_chunk_sec: d_record_chunk(),
                 record_min_free_mb: d_record_min_free(),
                 record_max_session_sec: d_record_max(),
