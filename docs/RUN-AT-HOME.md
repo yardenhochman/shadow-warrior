@@ -48,6 +48,8 @@ Without it the simulator plays a synth loop during FIGHT.
 simulator/live/live.sh start --wled <WLED IP>
 ```
 
+![The simulator in sim mode during a fight](img/sim-mode-fight.png)
+
 Open <http://localhost:8090/>. The top bar shows **LIVE**; the LED columns panel shows
 "Strip: live, 30 fps" and "Bag: connected" once the bag is found (a few seconds; it retries on
 its own). Everything the LED columns show is on the strip.
@@ -69,6 +71,8 @@ The first run builds `brain-rs` (`cargo build --release`, a few minutes). Open
 <http://localhost:8090/>: the page now shows the brain's state and exactly the frames the brain
 sends to the strip, and its buttons (presence, SHOUT, punches, **Set state**) call the brain's
 API. The brain connects to the bag itself.
+
+![The simulator in brain mode: state, events and LED frames come from brain-rs](img/brain-mode-fight.png)
 
 - `BRAIN_AUDIO='{input=false}'` keeps the brain off your microphone (its default input could be
   a headset, which Bluetooth then switches to call quality). Drop it to test real shouting with a
