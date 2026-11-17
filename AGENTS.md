@@ -51,6 +51,15 @@ Standard USB microphone is used for the microphone. It is connected to the brain
 
 Standard Bluetooth speakers are used for the speakers. They are connected to the brain via Bluetooth and are used to play music and sound effects to the user. Brain communicates with the speakers via Bluetooth API.
 
+## Running the brain on a dev machine
+
+- Never let a test brain capture a real microphone: its default input may be someone's headset
+  (opening it switches Bluetooth headphones to call mode). Run test brains with
+  `BRAIN_AUDIO='{input=false}'` and send shouts through `POST /api/arena/shout`.
+- When another process owns the bag or the strip (e.g. a sim-mode bridge), add
+  `BRAIN_BLE='{auto_connect=false}'` and point `wled.controllers` at a stand-in
+  (`simulator/live/bridge.py --brain ... --wled none`), not at the real WLED.
+
 ## Task tracking and status docs
 
 - Work items, status and planning live in **beads** (`bd ready`, `bd list`, `bd show <id>`). It is the only source of truth for what is open, in progress or done.

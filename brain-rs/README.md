@@ -83,6 +83,12 @@ music:
   volume: 0.8
 ```
 
+A WLED controller `ip` may carry an HTTP port (`"192.168.1.5:8090"`); realtime UDP still goes
+to that host's port 21324. The browser simulator's bridge uses this to stand in for WLED
+(see `simulator/web/README.md`, "Brain mode"). Any key can be overridden from the environment
+with a `BRAIN_` prefix, e.g. `BRAIN_WLED='{controllers=[{ip="127.0.0.1:8090",num_leds=180}]}'`.
+`audio.input: false` (`BRAIN_AUDIO='{input=false}'`) runs without microphone capture.
+
 ### BLE status service: threat model
 
 The optional `ble_status` GATT server (off by default) is reachable by any BLE

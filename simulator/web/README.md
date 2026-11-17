@@ -19,20 +19,27 @@ Without a mic, the SHOUT button feeds synthetic frames through the same detector
 
 ## Live hardware (real strip and bag)
 
-Mirror the simulator to the real WLED strip and punch the real bag into it:
+The bridge (`simulator/live/bridge.py`, run by `live.sh`) serves this page and connects it to
+real hardware. It has two modes:
+
+| Mode | Who runs the game | Strip | Bag (BLE) |
+| --- | --- | --- | --- |
+| **sim** (`live.sh start`) | this page's JS port | page frames -> WLED | the bridge |
+| **brain** (`live.sh brain`) | the real `brain-rs` | brain frames -> WLED, shown in the page | the brain |
+
+Needs [uv](https://docs.astral.sh/uv/) (`curl -LsSf https://astral.sh/uv/install.sh | sh`);
+`uv` fetches `aiohttp` and `bleak` itself. Brain mode also needs Rust (`cargo`) the first time,
+to build `brain-rs`. Linux (BlueZ) or macOS. `live.sh stop | status | log`; PIDs and logs are in
+`~/.local/state/shadow-warrior-live/`.
+
+### Sim mode
 
 ```sh
-simulator/live/live.sh            # from the repo root; then open http://localhost:8090/
-simulator/live/live.sh stop       # also: status, log; start takes bridge.py flags
+simulator/live/live.sh start --wled <WLED IP>   # from the repo root; open http://localhost:8090/
 ```
 
 Stop the brain first: BLE allows one central, and two writers fight over the strip.
-`live.sh` runs `uv run simulator/live/bridge.py` in the background (PID and log in
-`~/.local/state/shadow-warrior-live/`). For a foreground run use
-`uv run simulator/live/bridge.py [--wled 192.168.1.203] [--port 8090] [--no-ble]`.
 
-- **Serving**: the bridge serves the repo root (fight music included) and redirects `/`
-  to `index.html?live=1`. Only `?live=1` turns live mode on, so the static/Pages build is unchanged.
 - **Strip**: each rendered frame (the same colours as the LED columns panel) goes over a
   WebSocket at ~30 fps. The four columns are laid end to end on the strip (column 1 first,
   each base first, resampled by area averaging: 4 x 90 sim LEDs -> 4 x 45 on 180 LEDs; the LED count
@@ -47,10 +54,60 @@ Stop the brain first: BLE allows one central, and two writers fight over the str
   mode (IMU on) while a page is connected. As `ble_manager.rs` does, it folds each burst of
   acceleration notifications into one punch (power = min(100, 10 x m/s^2), 350 ms refractory)
   and the page feeds it to the same `punch()` a click on the arena uses. A punch counts only in FIGHT, as in brain-rs. Without
-  Bluetooth or with `--no-ble` the strip still works. The panel under the LED columns
-  shows strip and bag status; the topbar **LIVE** pill is green while frames stream.
+  Bluetooth or with `--no-ble` the strip still works.
 - **Endpoints**: `GET /live/status`; `POST /live/punch?power=60` (same message as a bag punch);
   `GET`/`POST /live/threshold?value=2` reads/sets the bag threshold (RAM only, reset on bag reboot).
+
+### Brain mode
+
+```sh
+simulator/live/live.sh brain --wled <WLED IP>   # builds/starts brain-rs + bridge; open http://localhost:8090/
+```
+
+The bridge stands in for WLED. `live.sh brain` starts `brain-rs/target/release/shadow-warrior-brain`
+(built with `cargo build --release` if missing) in `brain-rs/` with its own `config.yaml`, except
+that `wled.controllers` point at the bridge (`BRAIN_WLED` env override; nothing in the file changes).
+
+- **Strip**: the brain's UDP realtime (FIGHT) arrives at the bridge on 21324, goes on
+  **unchanged** to the real WLED and is split back into the four columns on the page (the inverse
+  of the sim layout, Serpentine included). The brain's HTTP effects (IDLE, WARMING, COOLDOWN) are
+  proxied to WLED, which renders them; the page then shows WLED's own live view. So the LED
+  columns show what the strip shows. `--wled none`: no strip, the bridge answers `/json` itself.
+- **Game**: state comes from the brain (`/api/state`, polled; `/api/events`, SSE), proxied under
+  `/brain/` on the same origin. Presence toggle, SHOUT (one `intensity 1` shout every 350 ms while
+  held), Jab/Hook/Heavy, Force absent/present and the **Set state** buttons call
+  `/api/arena/{presence,shout,punch,state}`. The JS engine, its shout detector and tunables are
+  hidden; the brain uses its own mic, music and config.
+- **Bag**: the brain connects it (the bridge holds no BLE in this mode).
+- No microphone: `BRAIN_AUDIO='{input=false}' live.sh brain ...`. Other `BRAIN_*` overrides pass
+  through, e.g. `BRAIN_BLE='{auto_connect=false}'`, `BRAIN_PORT=8001` (brain API port).
+- Endpoints: `GET /live/frame?seq=N` (a frame sent to the pages, for tests), `/json/*` (stand-in WLED).
+
+#### At home (Pi or laptop)
+
+Same machine for brain and bridge (Pi or laptop): run the brain-mode command above there with
+your WLED's IP, then open `http://<that machine>:8090/` from a laptop or phone (add `--host 0.0.0.0`).
+
+Brain already running elsewhere (e.g. the Pi's systemd service):
+
+1. Bridge, on any machine in the LAN: `simulator/live/live.sh start --host 0.0.0.0 --wled <WLED IP> --brain http://<pi>:8000`.
+2. Brain: point its WLED at the bridge, without editing `config.yaml`, with the environment
+   variable `BRAIN_WLED='{controllers=[{ip="<bridge host>:8090",num_leds=180}]}'`
+   (systemd: `systemctl edit shadow-brain`, `Environment=...`), or set
+   `wled.controllers: [{ip: "<bridge host>:8090", num_leds: 180}]`. Restart the brain.
+   It sends realtime to `<bridge host>:21324`, so UDP 21324 must reach the bridge.
+3. Open `http://<bridge host>:8090/`.
+
+Back to the real WLED: remove `BRAIN_WLED` (or restore `wled.controllers` to the WLED IP) and
+restart the brain; stop the bridge with `live.sh stop`.
+
+### From GitHub Pages: Connect to device
+
+An https page can't call a plain-http device on your LAN (browsers block mixed content and
+private-network requests), so the Pages build doesn't try. **Connect to device** (top bar) opens
+`http://<address>:<port>/`, the simulator served by the bridge on that machine, in its sim or
+brain mode. Defaults: `shadow-warrior.local`, port 8090; the last address is remembered, and
+`?device=<host[:port]>` pre-fills it (deep link).
 
 ## Controls
 
@@ -139,6 +196,11 @@ Turn off the matching toggles under "brain-rs fidelity" to reproduce brain-rs as
    `playback_active` raised.
 7. Known and not replicated: punch detection counting gravity, and the WARLS UDP frame
    format (`generate_*_frame` omit the per-LED index; protocol 1 is limited to 255 LEDs).
+8. **IDLE runs on the Ocean palette** (found in brain mode): `config.yaml` sets `wled.effects.idle`
+   to Fade with ember-red colours and no `palette`, but the YAML is merged over
+   `Config::default()`, whose idle effect has `palette: "ocean"`, so the key survives and the brain
+   posts `pal: 9`: the strip fades in blue/teal. Same for any effect that leaves out a key the
+   default sets. Workaround: give every effect an explicit `palette` (e.g. `"Default"`).
 
 ## Tuning workflow
 
@@ -167,4 +229,7 @@ Naruto, Pantera, Metallica, RATM, Mortal Kombat…). Audio files are not committ
 punches, COOLDOWN, re-arm, YAML export) at desktop and phone sizes. Usage is in
 the file header; it exits 1 on any problem. `test/live.mjs` checks live mode against a
 running bridge: frame rate, sent frames equal to the rendered LEDs, the resampler, a bridge
-punch counted in FIGHT and, with `WLED_HOST` set, WLED in realtime mode.
+punch counted in FIGHT and, with `WLED_HOST` set, WLED in realtime mode. `test/brain.mjs`
+drives a running brain through the page in brain mode (presence and SHOUT to FIGHT, LED columns
+equal to the brain's UDP frames, a page punch counted by the brain, state buttons).
+`test/connect.mjs` checks the static build offline and the Connect to device navigation.
