@@ -109,6 +109,9 @@ export const TUNABLES = [
     more: 'Counted from the last evidence (a loud voice frame or a punch). When it runs out the arena is marked empty and goes to suspended from any state, even mid-fight. Raise it so quiet or fighting players are not dropped; lower it to sleep sooner.' },
 
   // simulator-only (not in config.yaml)
+  { section: 'sim', key: 'energy_curve', def: 0.35, min: 0, max: 0.8, step: 0.05, name: 'Energy bar curve', unit: '',
+    help: 'Early shouts fill the bar faster, the last stretch fills slower. 0 = every shout counts the same.',
+    more: 'Each shout\'s energy is multiplied by (1 + curve) on an empty bar, falling evenly to (1 - curve) on a full one. At 0.35 the first shouts count 1.35x and the last ones 0.65x, so the total number of shouts stays about the same, but the bar races ahead at first (people feel they are close) and the last quarter takes real effort. Sim proposal: brain-rs fills the bar linearly, so this is not exported yet.' },
   { section: 'sim', key: 'time_scale', def: 1, min: 1, max: 20, step: 1, int: true, name: 'Game speed-up', unit: 'x',
     help: 'Runs the game clock faster so you can test long timers quickly. The microphone stays real time.',
     more: 'Multiplies the simulated clock: timers like fight length, cooldown and energy drain all run this much faster, while the microphone and shout timing do not. Handy for waiting out a 3 minute fight; keep it at 1 when judging how shouting feels.' },
