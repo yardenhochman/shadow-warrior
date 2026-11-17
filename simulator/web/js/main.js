@@ -1,5 +1,5 @@
 // UI glue: wires the ported brain-rs logic to the scene, LEDs, mic and panels.
-import { TUNABLES, loadTunables, saveTunables, exportYaml, formatValue, defaults } from './config.js';
+import { TUNABLES, SECTIONS, loadTunables, saveTunables, exportYaml, formatValue, defaults } from './config.js';
 import { EventBus } from './events.js';
 import { StateMachine, ArenaState } from './state_machine.js';
 import { ArenaManager } from './arena_manager.js';
@@ -292,19 +292,26 @@ bindPref('koEnds', 'koEnds');
 bindPref('musicPlayback', 'musicPlayback', (v) => { if (!v) feats.setPlaybackActive(false); else if (sm.currentState === S.Fight) feats.setPlaybackActive(true); });
 
 // ------------------------------------------------------------------ tunables UI
-const GROUPS = { arena: 'arena (ArenaConfig)', audio: 'audio: shout detector', presence: 'presence (fusion)', sim: 'simulator only (not exported)' };
 const tunEls = {};
 function buildTunables() {
   const root = $('tunables'); root.textContent = '';
-  for (const [sec, title] of Object.entries(GROUPS)) {
+  for (const [sec, title] of Object.entries(SECTIONS)) {
     const det = document.createElement('details'); det.className = 'group'; det.open = sec === 'arena' || sec === 'sim';
     const sum = document.createElement('summary'); sum.textContent = title; det.append(sum);
     for (const t of TUNABLES.filter((x) => x.section === sec)) {
       const row = document.createElement('div'); row.className = 'tun';
-      const lab = document.createElement('label'); lab.textContent = t.key; lab.title = t.help; lab.htmlFor = `t_${t.key}`;
-      const num = document.createElement('input'); num.type = 'number'; num.step = t.step; num.min = t.min; num.max = t.max;
+      const lab = document.createElement('label'); lab.htmlFor = `t_${t.key}`; lab.className = 'tunName';
+      const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = t.name;
+      const kc = document.createElement('code'); kc.className = 'key'; kc.textContent = t.key; lab.append(nm, kc);
+      const num = document.createElement('input'); num.type = 'number'; num.step = t.step; num.min = t.min; num.max = t.max; num.setAttribute('aria-label', t.name);
+      const unit = document.createElement('span'); unit.className = 'unit'; unit.textContent = t.unit || '';
+      const val = document.createElement('div'); val.className = 'val'; val.append(num, unit);
       const rng = document.createElement('input'); rng.type = 'range'; rng.id = `t_${t.key}`; rng.min = t.min; rng.max = t.max; rng.step = t.step;
       const help = document.createElement('div'); help.className = 'help'; help.textContent = t.help;
+      const more = document.createElement('button'); more.type = 'button'; more.className = 'moreBtn'; more.textContent = 'More…';
+      const moreBox = document.createElement('div'); moreBox.className = 'more'; moreBox.hidden = true; moreBox.id = `more_${t.key}`; moreBox.textContent = t.more;
+      more.setAttribute('aria-expanded', 'false'); more.setAttribute('aria-controls', moreBox.id);
+      more.onclick = () => { moreBox.hidden = !moreBox.hidden; more.setAttribute('aria-expanded', String(!moreBox.hidden)); more.textContent = moreBox.hidden ? 'More…' : 'Less'; };
       const set = (v, src) => {
         v = Number(v); if (!Number.isFinite(v)) return;
         if (t.int) v = Math.round(v);
@@ -318,7 +325,7 @@ function buildTunables() {
       rng.oninput = () => set(rng.value, rng);
       num.onchange = () => set(num.value, num);
       tunEls[t.key] = { set };
-      row.append(lab, num, rng, help); det.append(row);
+      row.append(lab, val, rng, help, more, moreBox); det.append(row);
       set(cfg[t.key]);
     }
     root.append(det);
