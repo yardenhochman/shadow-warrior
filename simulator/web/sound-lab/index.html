@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shadow Warrior Sound Lab</title>
+<meta name="description" content="Listen and pick: fight starts, evil laughs, announcer voices, Hebrew shadow taunts with a recorder, bag impacts, ambience and Break Stuff mode.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Crect width=%2216%22 height=%2216%22 rx=%224%22 fill=%22%23f97316%22/%3E%3Cpath d=%22M3 8h2l1.5-4 3 8L11 8h2%22 stroke=%22%23160b04%22 stroke-width=%221.6%22 fill=%22none%22/%3E%3C/svg%3E">
+<link rel="stylesheet" href="lab.css">
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <p class="kicker">Shadow Warrior</p>
+    <h1>Sound Lab</h1>
+    <p class="lede">Every sound direction for the game, ready to hear and pick. Press play on anything; letters (A, B, C...) are there so you can answer by letter. Headphones or a real speaker help: there is a lot of sub-bass.</p>
+    <nav aria-label="Sections">
+      <a href="#picks">Top 3</a><a href="#fight-start">Fight start</a><a href="#laughs">Laughs</a><a href="#demos">Mix demos</a><a href="#announcer">Announcer</a><a href="#taunts">Hebrew taunts</a><a href="#impacts">Impacts</a><a href="#ambience">Ambience</a><a href="#surprises">Surprises</a><a href="#break-stuff">Break Stuff</a><a href="#loudness">Loudness</a>
+    </nav>
+  </div>
+</header>
+<main id="main" class="wrap"></main>
+<button id="stop" class="stop" type="button" aria-label="Stop all sound">Stop all</button>
+<footer class="wrap foot"><p>All synthesized in WebAudio or rendered offline with open-source TTS (Piper, Phonikud) and ffmpeg; no samples from games or films. Voice clips: <code>tools/render_voices.py</code>. Your own recordings: <code>tools/demonize.py</code>.</p></footer>
+<script type="module" src="js/lab.js"></script>
+</body>
+</html>

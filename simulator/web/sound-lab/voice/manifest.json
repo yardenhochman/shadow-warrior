@@ -1,0 +1,698 @@
+{
+ "monk": [
+  {
+   "id": "round1",
+   "cat": "Round start",
+   "text": "Breathe in. Hold it. Round one.",
+   "file": "voice/monk/round1.mp3",
+   "dur": 6.48,
+   "lufs": -16.5,
+   "tp": -2.7
+  },
+  {
+   "id": "fight",
+   "cat": "Fight",
+   "text": "Now. Breathe out. And fight.",
+   "file": "voice/monk/fight.mp3",
+   "dur": 6.56,
+   "lufs": -16.4,
+   "tp": -1.6
+  },
+  {
+   "id": "energy",
+   "cat": "Energy full",
+   "text": "Your breath is full. The fire is awake.",
+   "file": "voice/monk/energy.mp3",
+   "dur": 6.33,
+   "lufs": -16.4,
+   "tp": -2.4
+  },
+  {
+   "id": "first_heavy",
+   "cat": "First heavy",
+   "text": "There. The first wound. Feel how good it is.",
+   "file": "voice/monk/first_heavy.mp3",
+   "dur": 7.48,
+   "lufs": -16.5,
+   "tp": -3.3
+  },
+  {
+   "id": "combo3",
+   "cat": "Combo 3",
+   "text": "Three. Let it flow.",
+   "file": "voice/monk/combo3.mp3",
+   "dur": 4.79,
+   "lufs": -16.4,
+   "tp": -2.8
+  },
+  {
+   "id": "combo5",
+   "cat": "Combo 5",
+   "text": "Five. Do not think. Only strike.",
+   "file": "voice/monk/combo5.mp3",
+   "dur": 6.87,
+   "lufs": -16.4,
+   "tp": -1.8
+  },
+  {
+   "id": "combo10",
+   "cat": "Combo 10",
+   "text": "Ten. You are not the storm. You are the end of it.",
+   "file": "voice/monk/combo10.mp3",
+   "dur": 7.25,
+   "lufs": -16.4,
+   "tp": -1.9
+  },
+  {
+   "id": "low",
+   "cat": "Shadow low HP",
+   "text": "It is cracking. Do not let go of it.",
+   "file": "voice/monk/low.mp3",
+   "dur": 6.18,
+   "lufs": -16.5,
+   "tp": -2.5
+  },
+  {
+   "id": "ko",
+   "cat": "K.O. / victory",
+   "text": "Be still now. Knocked out.",
+   "file": "voice/monk/ko.mp3",
+   "dur": 5.69,
+   "lufs": -16.4,
+   "tp": -2.9
+  },
+  {
+   "id": "round2",
+   "cat": "Round 2+",
+   "text": "Again. Round two. Deeper this time.",
+   "file": "voice/monk/round2.mp3",
+   "dur": 6.88,
+   "lufs": -16.5,
+   "tp": -2.5
+  },
+  {
+   "id": "time",
+   "cat": "Time running out",
+   "text": "Ten breaths remain. Spend them.",
+   "file": "voice/monk/time.mp3",
+   "dur": 5.69,
+   "lufs": -16.4,
+   "tp": -2.5
+  },
+  {
+   "id": "defeat",
+   "cat": "Game over",
+   "text": "Let it go. Let it all go. Game over.",
+   "file": "voice/monk/defeat.mp3",
+   "dur": 7.44,
+   "lufs": -16.4,
+   "tp": -2.6
+  },
+  {
+   "id": "taunt1",
+   "cat": "Taunt",
+   "text": "Your fists are soft. Your shadow is not.",
+   "file": "voice/monk/taunt1.mp3",
+   "dur": 6.56,
+   "lufs": -16.3,
+   "tp": -2.8
+  },
+  {
+   "id": "taunt2",
+   "cat": "Taunt",
+   "text": "Inhale the doubt. Exhale the beast.",
+   "file": "voice/monk/taunt2.mp3",
+   "dur": 6.28,
+   "lufs": -16.5,
+   "tp": -2.3
+  }
+ ],
+ "announcer": [
+  {
+   "id": "round1",
+   "cat": "Round start",
+   "text": "From the dark side of the room. Round one!",
+   "file": "voice/announcer/round1.mp3",
+   "dur": 4.64,
+   "lufs": -16.3,
+   "tp": -4.7
+  },
+  {
+   "id": "fight",
+   "cat": "Fight",
+   "text": "Now... fight!",
+   "file": "voice/announcer/fight.mp3",
+   "dur": 2.7,
+   "lufs": -16.4,
+   "tp": -2.8
+  },
+  {
+   "id": "energy",
+   "cat": "Energy full",
+   "text": "Fully charged!",
+   "file": "voice/announcer/energy.mp3",
+   "dur": 2.81,
+   "lufs": -16.4,
+   "tp": -5.1
+  },
+  {
+   "id": "first_heavy",
+   "cat": "First heavy",
+   "text": "First blood!",
+   "file": "voice/announcer/first_heavy.mp3",
+   "dur": 2.77,
+   "lufs": -16.4,
+   "tp": -5.1
+  },
+  {
+   "id": "combo3",
+   "cat": "Combo 3",
+   "text": "Triple strike!",
+   "file": "voice/announcer/combo3.mp3",
+   "dur": 2.69,
+   "lufs": -16.3,
+   "tp": -4.0
+  },
+  {
+   "id": "combo5",
+   "cat": "Combo 5",
+   "text": "Five hit flurry!",
+   "file": "voice/announcer/combo5.mp3",
+   "dur": 3.05,
+   "lufs": -16.4,
+   "tp": -4.2
+  },
+  {
+   "id": "combo10",
+   "cat": "Combo 10",
+   "text": "Ten hits! Absolute frenzy!",
+   "file": "voice/announcer/combo10.mp3",
+   "dur": 4.07,
+   "lufs": -16.3,
+   "tp": -4.2
+  },
+  {
+   "id": "low",
+   "cat": "Shadow low HP",
+   "text": "The shadow is wobbling!",
+   "file": "voice/announcer/low.mp3",
+   "dur": 3.33,
+   "lufs": -16.4,
+   "tp": -5.5
+  },
+  {
+   "id": "ko",
+   "cat": "K.O. / victory",
+   "text": "K.O.! The shadow is down!",
+   "file": "voice/announcer/ko.mp3",
+   "dur": 4.21,
+   "lufs": -16.0,
+   "tp": -4.5
+  },
+  {
+   "id": "round2",
+   "cat": "Round 2+",
+   "text": "Round two! Hands up!",
+   "file": "voice/announcer/round2.mp3",
+   "dur": 3.51,
+   "lufs": -16.2,
+   "tp": -4.5
+  },
+  {
+   "id": "time",
+   "cat": "Time running out",
+   "text": "Ten seconds! Empty the tank!",
+   "file": "voice/announcer/time.mp3",
+   "dur": 3.9,
+   "lufs": -16.3,
+   "tp": -3.9
+  },
+  {
+   "id": "defeat",
+   "cat": "Game over",
+   "text": "Time! The shadow survives. Game over.",
+   "file": "voice/announcer/defeat.mp3",
+   "dur": 5.07,
+   "lufs": -16.3,
+   "tp": -4.1
+  },
+  {
+   "id": "taunt1",
+   "cat": "Taunt",
+   "text": "Is that a punch or a handshake?",
+   "file": "voice/announcer/taunt1.mp3",
+   "dur": 3.53,
+   "lufs": -16.4,
+   "tp": -5.2
+  }
+ ],
+ "choir": [
+  {
+   "id": "round1",
+   "cat": "Round start",
+   "text": "I am what you left behind. Round one.",
+   "file": "voice/choir/round1.mp3",
+   "dur": 5.82,
+   "lufs": -17.0,
+   "tp": -1.9
+  },
+  {
+   "id": "fight",
+   "cat": "Fight",
+   "text": "Come. Hit what you are.",
+   "file": "voice/choir/fight.mp3",
+   "dur": 4.72,
+   "lufs": -16.7,
+   "tp": -2.2
+  },
+  {
+   "id": "energy",
+   "cat": "Energy full",
+   "text": "So loud. I heard every word.",
+   "file": "voice/choir/energy.mp3",
+   "dur": 5.41,
+   "lufs": -16.5,
+   "tp": -2.2
+  },
+  {
+   "id": "first_heavy",
+   "cat": "First heavy",
+   "text": "That one. I felt that one.",
+   "file": "voice/choir/first_heavy.mp3",
+   "dur": 5.25,
+   "lufs": -16.5,
+   "tp": -2.0
+  },
+  {
+   "id": "combo3",
+   "cat": "Combo 3",
+   "text": "Again?",
+   "file": "voice/choir/combo3.mp3",
+   "dur": 3.1,
+   "lufs": -17.5,
+   "tp": -1.8
+  },
+  {
+   "id": "combo5",
+   "cat": "Combo 5",
+   "text": "Stop. Stop it.",
+   "file": "voice/choir/combo5.mp3",
+   "dur": 4.65,
+   "lufs": -16.5,
+   "tp": -2.3
+  },
+  {
+   "id": "combo10",
+   "cat": "Combo 10",
+   "text": "What... are you?",
+   "file": "voice/choir/combo10.mp3",
+   "dur": 3.35,
+   "lufs": -16.4,
+   "tp": -2.5
+  },
+  {
+   "id": "low",
+   "cat": "Shadow low HP",
+   "text": "I am fading. No. Not yet.",
+   "file": "voice/choir/low.mp3",
+   "dur": 6.12,
+   "lufs": -16.6,
+   "tp": -2.2
+  },
+  {
+   "id": "ko",
+   "cat": "K.O. / victory",
+   "text": "You will not always win.",
+   "file": "voice/choir/ko.mp3",
+   "dur": 3.77,
+   "lufs": -16.5,
+   "tp": -1.7
+  },
+  {
+   "id": "round2",
+   "cat": "Round 2+",
+   "text": "I came back. Round two.",
+   "file": "voice/choir/round2.mp3",
+   "dur": 5.25,
+   "lufs": -17.2,
+   "tp": -1.6
+  },
+  {
+   "id": "time",
+   "cat": "Time running out",
+   "text": "Tick. Tock. Tick.",
+   "file": "voice/choir/time.mp3",
+   "dur": 5.73,
+   "lufs": -16.9,
+   "tp": -1.6
+  },
+  {
+   "id": "defeat",
+   "cat": "Game over",
+   "text": "Mine again. Game over.",
+   "file": "voice/choir/defeat.mp3",
+   "dur": 5.15,
+   "lufs": -16.5,
+   "tp": -2.3
+  },
+  {
+   "id": "taunt1",
+   "cat": "Taunt",
+   "text": "Is that all?",
+   "file": "voice/choir/taunt1.mp3",
+   "dur": 3.26,
+   "lufs": -16.5,
+   "tp": -3.4
+  },
+  {
+   "id": "taunt2",
+   "cat": "Taunt",
+   "text": "I can wait all night.",
+   "file": "voice/choir/taunt2.mp3",
+   "dur": 3.93,
+   "lufs": -16.4,
+   "tp": -3.0
+  },
+  {
+   "id": "taunt3",
+   "cat": "Taunt",
+   "text": "You hit like a whisper.",
+   "file": "voice/choir/taunt3.mp3",
+   "dur": 3.8,
+   "lufs": -16.6,
+   "tp": -2.4
+  }
+ ],
+ "arcade": [
+  {
+   "id": "round1",
+   "cat": "Round start",
+   "text": "Round one!",
+   "file": "voice/arcade/round1.mp3",
+   "dur": 1.66,
+   "lufs": -16.4,
+   "tp": -5.8
+  },
+  {
+   "id": "fight",
+   "cat": "Fight",
+   "text": "Fight!",
+   "file": "voice/arcade/fight.mp3",
+   "dur": 1.36,
+   "lufs": -16.4,
+   "tp": -4.1
+  },
+  {
+   "id": "ko",
+   "cat": "K.O. / victory",
+   "text": "Knockout! Perfect.",
+   "file": "voice/arcade/ko.mp3",
+   "dur": 2.41,
+   "lufs": -16.4,
+   "tp": -3.9
+  },
+  {
+   "id": "defeat",
+   "cat": "Game over",
+   "text": "Game over. Insert coin.",
+   "file": "voice/arcade/defeat.mp3",
+   "dur": 3.03,
+   "lufs": -16.5,
+   "tp": -3.9
+  }
+ ],
+ "hebrew": [
+  {
+   "id": "zero1",
+   "cat": "Pre-fight: presence / WARMING starts",
+   "text": "סליחה... אַתְּ... אַתָּה... לא משנה. אפס.",
+   "file": "voice/hebrew/zero1.mp3",
+   "dur": 6.22,
+   "lufs": -16.5,
+   "tp": -2.0,
+   "gloss": "Excuse me... you (f)... you (m)... never mind. Zero."
+  },
+  {
+   "id": "zero2",
+   "cat": "Pre-fight: presence / WARMING starts",
+   "text": "סליחה, את... או אתה? לא חשוב. אפס, בשני המינים.",
+   "file": "voice/hebrew/zero2.mp3",
+   "dur": 8.48,
+   "lufs": -16.4,
+   "tp": -2.3,
+   "gloss": "Excuse me, you (f)... or you (m)? Does not matter. A zero, in both genders."
+  },
+  {
+   "id": "zero3",
+   "cat": "Pre-fight: presence / WARMING starts",
+   "text": "סליחה... אַתְּ, אַתָּה, אַתֶּם... אפס.",
+   "file": "voice/hebrew/zero3.mp3",
+   "dur": 5.99,
+   "lufs": -16.6,
+   "tp": -2.2,
+   "gloss": "Excuse me... you, you, all of you... zero."
+  },
+  {
+   "id": "welcome1",
+   "cat": "Pre-fight: presence / WARMING starts",
+   "text": "ברוכים הבאים. נא לנגב את הרגליים, ואת הכבוד העצמי.",
+   "file": "voice/hebrew/welcome1.mp3",
+   "dur": 7.04,
+   "lufs": -16.4,
+   "tp": -3.1,
+   "gloss": "Welcome. Kindly wipe your feet. And your self-respect."
+  },
+  {
+   "id": "welcome2",
+   "cat": "Pre-fight: presence / WARMING starts",
+   "text": "אורחים! איזה כבוד. איזה ריח.",
+   "file": "voice/hebrew/welcome2.mp3",
+   "dur": 6.15,
+   "lufs": -16.4,
+   "tp": -2.3,
+   "gloss": "Guests! What an honour. What a smell."
+  },
+  {
+   "id": "idle1",
+   "cat": "Idle / hesitating mid-fight",
+   "text": "מה, נגמר הסוס?",
+   "file": "voice/hebrew/idle1.mp3",
+   "dur": 3.61,
+   "lufs": -16.3,
+   "tp": -2.5,
+   "gloss": "What, out of horse already? (out of steam)"
+  },
+  {
+   "id": "idle2",
+   "cat": "Idle / hesitating mid-fight",
+   "text": "מה קרה, נתקענו? אפשר להביא כיסא.",
+   "file": "voice/hebrew/idle2.mp3",
+   "dur": 5.54,
+   "lufs": -16.3,
+   "tp": -2.7,
+   "gloss": "What happened, stuck? I can fetch you a chair."
+  },
+  {
+   "id": "idle3",
+   "cat": "Idle / hesitating mid-fight",
+   "text": "בבקשה, קחו את הזמן. אני מחכה בסבלנות. ובגועל.",
+   "file": "voice/hebrew/idle3.mp3",
+   "dur": 7.85,
+   "lufs": -16.4,
+   "tp": -2.6,
+   "gloss": "Please, take your time. I wait patiently. And with disgust."
+  },
+  {
+   "id": "idle4",
+   "cat": "Idle / hesitating mid-fight",
+   "text": "תזכורת קטנה ומנומסת: את האגרופים זורקים, לא חושבים עליהם.",
+   "file": "voice/hebrew/idle4.mp3",
+   "dur": 7.04,
+   "lufs": -16.4,
+   "tp": -2.4,
+   "gloss": "A small polite reminder: punches are thrown, not thought about."
+  },
+  {
+   "id": "stamina1",
+   "cat": "Stamina: punch rate drops",
+   "text": "מתנשפים כבר? חמוד. ממש חמוד.",
+   "file": "voice/hebrew/stamina1.mp3",
+   "dur": 5.54,
+   "lufs": -16.4,
+   "tp": -2.1,
+   "gloss": "Panting already? Cute. Really cute."
+  },
+  {
+   "id": "stamina2",
+   "cat": "Stamina: punch rate drops",
+   "text": "נגמר לְךָ... סליחה, לָךְ... נו, למישהו פה נגמר הסוס.",
+   "file": "voice/hebrew/stamina2.mp3",
+   "dur": 7.51,
+   "lufs": -16.4,
+   "tp": -1.6,
+   "gloss": "You (m) ran out... sorry, you (f)... well, someone here ran out of horse."
+  },
+  {
+   "id": "stamina3",
+   "cat": "Stamina: punch rate drops",
+   "text": "אין לחץ. אני רק אזדקן פה בנחת.",
+   "file": "voice/hebrew/stamina3.mp3",
+   "dur": 5.04,
+   "lufs": -16.4,
+   "tp": -2.1,
+   "gloss": "No pressure. I will just grow old here, comfortably."
+  },
+  {
+   "id": "weak1",
+   "cat": "Weak punch",
+   "text": "מה זה, התחפשת למלכה אסתר?",
+   "file": "voice/hebrew/weak1.mp3",
+   "dur": 7.16,
+   "lufs": -16.4,
+   "tp": -2.0,
+   "gloss": "What is this, dressed up (m)... (f)... as Queen Esther?"
+  },
+  {
+   "id": "weak2",
+   "cat": "Weak punch",
+   "text": "סליחה על השאלה: זה היה אגרוף, או ליטוף?",
+   "file": "voice/hebrew/weak2.mp3",
+   "dur": 4.9,
+   "lufs": -16.4,
+   "tp": -3.7,
+   "gloss": "Pardon the question: was that a punch, or a caress?"
+  },
+  {
+   "id": "weak3",
+   "cat": "Weak punch",
+   "text": "תודה רבה על העיסוי. ממש נעים.",
+   "file": "voice/hebrew/weak3.mp3",
+   "dur": 5.49,
+   "lufs": -16.4,
+   "tp": -3.7,
+   "gloss": "Thank you so much for the massage. Very pleasant."
+  },
+  {
+   "id": "weak4",
+   "cat": "Weak punch",
+   "text": "מרגש. באמת. עוד מעט אולי ארגיש משהו.",
+   "file": "voice/hebrew/weak4.mp3",
+   "dur": 6.57,
+   "lufs": -16.4,
+   "tp": -2.5,
+   "gloss": "Moving. Truly. Any minute now I might feel something."
+  },
+  {
+   "id": "lose1",
+   "cat": "Player loses / time out",
+   "text": "נגמר הזמן. היה לי לעונג. לכם פחות.",
+   "file": "voice/hebrew/lose1.mp3",
+   "dur": 6.41,
+   "lufs": -16.5,
+   "tp": -2.5,
+   "gloss": "Time is up. It was my pleasure. Less so yours."
+  },
+  {
+   "id": "lose2",
+   "cat": "Player loses / time out",
+   "text": "תודה שבאתם. היציאה משמאל, הבושה מימין.",
+   "file": "voice/hebrew/lose2.mp3",
+   "dur": 6.79,
+   "lufs": -16.4,
+   "tp": -3.0,
+   "gloss": "Thank you for coming. The exit is on the left, the shame on the right."
+  },
+  {
+   "id": "rise1",
+   "cat": "Shadow rises, new round",
+   "text": "חשבתם שזה נגמר? איזה חמודים.",
+   "file": "voice/hebrew/rise1.mp3",
+   "dur": 5.26,
+   "lufs": -16.4,
+   "tp": -3.1,
+   "gloss": "You thought it was over? How adorable."
+  },
+  {
+   "id": "rise2",
+   "cat": "Shadow rises, new round",
+   "text": "קמתי. סליחה על ההפרעה. עכשיו אני ממש עצבני.",
+   "file": "voice/hebrew/rise2.mp3",
+   "dur": 6.82,
+   "lufs": -16.4,
+   "tp": -2.5,
+   "gloss": "I am up. Sorry for the interruption. Now I am truly annoyed."
+  },
+  {
+   "id": "win1",
+   "cat": "Player wins (bonus)",
+   "text": "כל הכבוד. באמת. אני אזכור את הפרצופים.",
+   "file": "voice/hebrew/win1.mp3",
+   "dur": 5.89,
+   "lufs": -16.5,
+   "tp": -2.4,
+   "gloss": "Well done. Truly. I will remember your faces."
+  }
+ ],
+ "laugh": [
+  {
+   "id": "abyss",
+   "name": "Abyss rumble",
+   "when": "Fight start, after \"Round one\"",
+   "desc": "Low \"huh... huh...\" from deep in the chest that builds into a full sub-octave demon laugh.",
+   "file": "voice/laugh/abyss.mp3",
+   "dur": 3.97,
+   "lufs": -16.4,
+   "tp": -3.3
+  },
+  {
+   "id": "villain",
+   "name": "Villain crescendo",
+   "when": "Player loses / time out",
+   "desc": "Slow \"heh... heh...\" that keeps climbing into a theatrical HA HA HA with a temple echo.",
+   "file": "voice/laugh/villain.mp3",
+   "dur": 5.28,
+   "lufs": -17.4,
+   "tp": -2.4
+  },
+  {
+   "id": "legion",
+   "name": "Legion",
+   "when": "Shadow rises again in a new round",
+   "desc": "Five voices from an octave down to a child-high giggle laugh a beat apart, smeared into one crowd of shadows.",
+   "file": "voice/laugh/legion.mp3",
+   "dur": 7.16,
+   "lufs": -16.6,
+   "tp": -2.4
+  },
+  {
+   "id": "glitch",
+   "name": "Corrupted signal",
+   "when": "Shadow regains HP / defeat screen",
+   "desc": "A laugh chewed by a broken buffer: stutters, reversed grains, 4-bit crush and a frequency shift.",
+   "file": "voice/laugh/glitch.mp3",
+   "dur": 2.77,
+   "lufs": -16.6,
+   "tp": -2.0
+  },
+  {
+   "id": "whisper_roar",
+   "name": "Giggle to roar",
+   "when": "Idle mid-fight (long pause)",
+   "desc": "A thin whispered giggle right behind you, then a sudden demon roar-laugh.",
+   "file": "voice/laugh/whisper_roar.mp3",
+   "dur": 7.42,
+   "lufs": -16.4,
+   "tp": -3.6
+  },
+  {
+   "id": "chuckle",
+   "name": "Taunt chuckle",
+   "when": "Between punches, after a weak jab",
+   "desc": "Short dry \"heh heh heh\" low in the throat, under a second long, safe to repeat.",
+   "file": "voice/laugh/chuckle.mp3",
+   "dur": 1.76,
+   "lufs": -16.5,
+   "tp": -2.3
+  }
+ ]
+}
