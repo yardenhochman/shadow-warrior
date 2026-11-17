@@ -16,6 +16,7 @@
     </div>
     <div class="topbtns">
       <span id="liveTag" class="liveTag" hidden title="Live hardware bridge">LIVE</span>
+      <button id="connectBtn" class="btn small" hidden title="Open the simulator served by a device on your network (bridge or Pi)">Connect to device</button>
       <button id="micBtn" class="btn small" title="Use the microphone for shout detection">Enable mic</button>
       <button id="soundBtn" class="btn small" title="Sound effects and fight music">Sound on</button>
     </div>
@@ -56,7 +57,7 @@
         <canvas id="strips" aria-label="Per-LED view of the four columns"></canvas>
         <div class="live" id="livePanel" hidden>
           <div class="liveRow">
-            <label class="toggle"><input type="checkbox" id="liveMirror" checked><span class="sw"></span><span>Mirror to real strip</span></label>
+            <label class="toggle" id="mirrorToggle"><input type="checkbox" id="liveMirror" checked><span class="sw"></span><span>Mirror to real strip</span></label>
             <label class="toggle" title="Every other column runs top-down on the strip"><input type="checkbox" id="liveSerp"><span class="sw"></span><span>Serpentine</span></label>
           </div>
           <div class="liveStat"><span class="dot" id="wledDot"></span><span id="wledStatus">Strip: connecting to bridge...</span><button class="btn small" id="liveTake" hidden>Use this tab</button></div>
@@ -66,6 +67,15 @@
     </section>
 
     <aside class="side">
+      <div class="panel connect" id="connectPanel" hidden>
+        <div class="panelHead"><h2>Connect to device</h2><button class="btn small ghost" id="connectClose" aria-label="Close">&times;</button></div>
+        <form id="connectForm" class="connectForm">
+          <label>Address <input id="connectAddr" type="text" inputmode="url" autocomplete="off" spellcheck="false" placeholder="shadow-warrior.local"></label>
+          <label>Port <input id="connectPort" type="number" min="1" max="65535" placeholder="8090"></label>
+          <button class="btn small" type="submit">Connect</button>
+        </form>
+        <p class="note">Opens <code id="connectUrl">http://shadow-warrior.local:8090/</code>: the simulator served by the bridge on that machine, in its live or brain mode. This page can't reach your network itself: browsers block an https page from calling plain-http local devices.</p>
+      </div>
       <div class="panel">
         <h2>Arena</h2>
         <div class="kv">
@@ -74,7 +84,7 @@
           <div><span>Presence</span><b id="stPresence">-</b></div>
           <div><span>Sessions</span><b id="stSessions">0</b></div>
         </div>
-        <div class="meter"><label>Presence evidence <em id="presVal"></em></label><div class="bar"><i id="presBar"></i><s id="presThr"></s></div></div>
+        <div class="meter" id="presRow"><label>Presence evidence <em id="presVal"></em></label><div class="bar"><i id="presBar"></i><s id="presThr"></s></div></div>
         <div class="meter"><label>Energy <em id="energyVal">-</em></label><div class="bar energy"><i id="energyBar"></i></div></div>
         <div class="kv" id="fightKv">
           <div><span>Fight left</span><b id="fightLeft">-</b></div>
@@ -88,9 +98,13 @@
           <button class="btn small" id="forceAbsent" title="API override: PresenceFusion::force(false)">Force absent</button>
           <button class="btn small" id="forcePresent" title="API override: PresenceFusion::force(true)">Force present</button>
         </div>
+        <div class="row brainStates" id="brainStates" hidden title="POST /api/arena/state (the brain refuses transitions its state machine does not allow)">
+          <span>Set state</span>
+          <button class="btn small" data-s="IDLE">IDLE</button><button class="btn small" data-s="WARMING">WARM</button><button class="btn small" data-s="FIGHT">FIGHT</button><button class="btn small" data-s="COOLDOWN">COOL</button><button class="btn small" data-s="SUSPENDED">SUSP</button>
+        </div>
       </div>
 
-      <div class="panel">
+      <div class="panel" id="detectorPanel">
         <div class="panelHead"><h2>Shout detector</h2><span class="micStatus" id="micStatus">synthetic frames</span></div>
         <div class="meter"><label>Band level <em id="lvlVal"></em></label>
           <div class="bar level"><i id="lvlBar"></i><s id="floorMark" title="noise floor"></s><s id="marginMark" class="margin" title="floor + margin"></s></div>
@@ -107,7 +121,7 @@
         <div class="row"><button class="btn small" id="resetFloor">Reset noise floor</button></div>
       </div>
 
-      <div class="panel">
+      <div class="panel" id="tunablesPanel">
         <div class="panelHead"><h2>Tunables</h2>
           <div class="row tight"><button class="btn small" id="exportBtn">Export YAML</button><button class="btn small ghost" id="resetBtn">Reset</button></div>
         </div>

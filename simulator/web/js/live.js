@@ -4,7 +4,10 @@
 // GitHub Pages build never opens a socket.
 import { COLUMNS } from './wled.js';
 
-export const LIVE_REQUESTED = new URLSearchParams(location.search).has('live');
+const QS = new URLSearchParams(location.search);
+/** Brain mode (bridge.py --brain): the real brain-rs runs the game; the page shows and drives it. */
+export const BRAIN_REQUESTED = QS.has('brain');
+export const LIVE_REQUESTED = QS.has('live') || BRAIN_REQUESTED;
 
 /**
  * Resample one column (Float32Array RGB 0..1, n LEDs) into `m` 8-bit LEDs by area
@@ -39,9 +42,30 @@ export function stripFrame(rig, count, serpentine, out) {
   return out;
 }
 
+/**
+ * Inverse of stripFrame: split a strip frame (`count` x RGB bytes) back into the four
+ * columns of `rig` (count / 4 LEDs each, column 1 first, base first; `serpentine`: odd
+ * columns run top-down). Resizes the rig to that many LEDs per column.
+ */
+export function unstripFrame(rgb, count, serpentine, rig) {
+  const per = Math.floor(count / COLUMNS);
+  if (rig.n !== per) rig.resize(per);
+  for (let c = 0; c < COLUMNS; c++) {
+    const col = rig.cols[c], rev = serpentine && c % 2 === 1;
+    for (let j = 0; j < per; j++) {
+      const k = (c * per + (rev ? per - 1 - j : j)) * 3;
+      col[j * 3] = rgb[k] / 255; col[j * 3 + 1] = rgb[k + 1] / 255; col[j * 3 + 2] = rgb[k + 2] / 255;
+    }
+  }
+  return rig;
+}
+
+/** Frame tags the bridge puts before brain-mode frames (bridge.py FRAME_BRAIN / FRAME_WLED). */
+export const FRAME_SOURCE = { 1: 'brain', 2: 'wled' };
+
 export class LiveLink {
-  constructor({ onPunch, onStatus, log }) {
-    this.onPunch = onPunch; this.onStatus = onStatus; this.log = log;
+  constructor({ onPunch, onStatus, onFrame, log }) {
+    this.onPunch = onPunch; this.onStatus = onStatus; this.onFrame = onFrame; this.log = log;
     this.ws = null; this.status = null; this.connected = false;
     this.enabled = true; this.serpentine = false;
     this.count = 180; this.buf = new Uint8Array(this.count * 3);
@@ -53,13 +77,19 @@ export class LiveLink {
     const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/live/ws`);
     ws.binaryType = 'arraybuffer';
     this.ws = ws;
-    ws.onopen = () => { this.connected = true; this.log?.('Live bridge connected: LED frames go to the real strip', 'state'); this.onStatus?.(this); };
+    ws.onopen = () => { this.connected = true; this.log?.(BRAIN_REQUESTED ? 'Live bridge connected: showing the brain\'s LED frames' : 'Live bridge connected: LED frames go to the real strip', 'state'); this.onStatus?.(this); };
     ws.onclose = () => {
       if (this.connected) this.log?.('Live bridge disconnected, retrying', 'ignored');
       this.connected = false; this.onStatus?.(this);
       setTimeout(() => this.connect(), 2000);
     };
     ws.onmessage = (e) => {
+      if (e.data instanceof ArrayBuffer) {
+        // Brain mode: [tag, seq u32 BE, RGB x count] from the brain (UDP) or WLED's live view.
+        const b = new Uint8Array(e.data);
+        if (b.length > 5) this.onFrame?.({ source: FRAME_SOURCE[b[0]] || '?', seq: new DataView(e.data).getUint32(1), rgb: b.subarray(5) });
+        return;
+      }
       let m; try { m = JSON.parse(e.data); } catch { return; }
       if (m.type === 'status') {
         const prevBag = this.status?.bag?.state;

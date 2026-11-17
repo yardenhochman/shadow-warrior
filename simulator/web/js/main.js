@@ -11,10 +11,15 @@ import { LedRig, COLUMNS, EFFECT_LABELS } from './wled.js';
 import { Scene } from './scene.js';
 import { Sfx } from './sfx.js';
 import { Playlist } from './music.js';
-import { LiveLink, LIVE_REQUESTED } from './live.js';
+import { LiveLink, LIVE_REQUESTED, BRAIN_REQUESTED, unstripFrame } from './live.js';
+import { BrainClient } from './brain.js';
+import { initConnect } from './connect.js';
 
 const $ = (id) => document.getElementById(id);
 const S = ArenaState;
+// Brain mode (bridge.py --brain): the real brain-rs runs the game; the JS engine stays idle.
+const BRAIN = BRAIN_REQUESTED;
+let brain = null;
 
 // ------------------------------------------------------------------ model
 const cfg = loadTunables();
@@ -41,7 +46,8 @@ playlist.onchange = () => {
   nowPlaying.textContent = `${playlist.playing ? 'Now playing' : 'Next fight'}: ${t.title} (${playlist.idx + 1}/${n})`;
   nowPlaying.classList.toggle('on', playlist.playing);
 };
-playlist.loadDefault().then((ok) => ok || playlist.loadSaved()).then((ok) => { if (ok && playlist.source === 'saved') log(`Restored ${playlist.tracks.length} saved music tracks`, 'state'); });
+// Brain mode: the brain plays the fight music itself.
+(BRAIN ? Promise.resolve(false) : playlist.loadDefault().then((ok) => ok || playlist.loadSaved())).then((ok) => { if (ok && playlist.source === 'saved') log(`Restored ${playlist.tracks.length} saved music tracks`, 'state'); });
 document.getElementById('musicFiles').addEventListener('change', (e) => {
   const n = playlist.loadFiles(e.target.files);
   if (n) log(`Loaded ${n} music tracks`, 'state');
@@ -56,9 +62,11 @@ let lastFeat = null;
 let sensorOn = false;
 let errors = [];
 
-arena.start();
-// main.rs: "Set initial state to IDLE" after the arena manager starts.
-sm.transition(S.Idle);
+if (!BRAIN) {
+  arena.start();
+  // main.rs: "Set initial state to IDLE" after the arena manager starts.
+  sm.transition(S.Idle);
+}
 
 // ------------------------------------------------------------------ log
 const logEl = $('log');
@@ -105,14 +113,17 @@ bus.subscribe((e) => {
 
 function onStateEnter(to) {
   if (to === S.Fight) {
+    game.punches = 0; game.maxPower = 0; game.endReason = null;
     game.maxHp = cfg.shadow_hp; game.hp = game.maxHp; game.kos = 0; game.combo = 0; game.respawnAt = null;
     scene.resetDamage();
     scene.showBanner('FIGHT!', 'punch the shadow');
     sfx.boom();
   } else if (to === S.Cooldown) {
-    const reason = { TimeElapsed: 'time up', InactivityTimeout: 'no punches', KnockOut: 'knock-out' }[arena.lastEndReason] || '';
-    game.summary = `${arena.currentSessionPunches} punches, max ${arena.currentSessionMaxPower.toFixed(0)}, ${game.kos} KO${game.kos === 1 ? '' : 's'}${reason ? `, ended: ${reason}` : ''}`;
-    const title = { KnockOut: 'VICTORY', TimeElapsed: 'TIME UP', InactivityTimeout: 'TOO QUIET' }[arena.lastEndReason] || 'FIGHT OVER';
+    const endReason = BRAIN ? game.endReason : arena.lastEndReason;
+    const punches = BRAIN ? game.punches : arena.currentSessionPunches, maxPower = BRAIN ? game.maxPower : arena.currentSessionMaxPower;
+    const reason = { TimeElapsed: 'time up', InactivityTimeout: 'no punches', KnockOut: 'knock-out' }[endReason] || '';
+    game.summary = `${punches} punches, max ${maxPower.toFixed(0)}, ${game.kos} KO${game.kos === 1 ? '' : 's'}${reason ? `, ended: ${reason}` : ''}`;
+    const title = { KnockOut: 'VICTORY', TimeElapsed: 'TIME UP', InactivityTimeout: 'TOO QUIET' }[endReason] || 'FIGHT OVER';
     scene.showBanner(title, game.summary, 3.5);
   } else if (to === S.Warming) {
     scene.showBanner('WAKE IT UP', 'shout!', 1.6);
@@ -132,6 +143,7 @@ feats.synthDb = cfg.synth_shout_db;
 
 $('micBtn').onclick = async () => {
   const btn = $('micBtn');
+  if (BRAIN) { log('Brain mode: the brain listens with its own microphone; SHOUT sends a shout to it', 'ignored'); return; }
   if (feats.micActive) { feats.stopMic(); btn.textContent = 'Enable mic'; $('micStatus').textContent = 'synthetic frames'; log('Mic stopped', 'ignored'); return; }
   try {
     btn.textContent = '...';
@@ -150,8 +162,19 @@ $('resetFloor').onclick = () => { feats.resetFloor(); log('Noise floor reset', '
 // Shout button: hold = shout; quick tap = 450 ms shout.
 const shoutBtn = $('shoutBtn');
 let shoutDownAt = 0;
-function shoutDown() { sfx.ensure(); shoutDownAt = performance.now(); feats.setHeld(true); shoutBtn.classList.add('down'); }
+let brainShoutTimer = null;
+function shoutDown() {
+  sfx.ensure(); shoutDownAt = performance.now(); shoutBtn.classList.add('down');
+  if (BRAIN) {
+    // POST /api/arena/shout (intensity 1) now and every 350 ms while held.
+    if (brainShoutTimer) return;
+    brain.shout(1); brainShoutTimer = setInterval(() => brain.shout(1), 350);
+    return;
+  }
+  feats.setHeld(true);
+}
 function shoutUp() {
+  if (BRAIN) { clearInterval(brainShoutTimer); brainShoutTimer = null; shoutBtn.classList.remove('down'); return; }
   if (!feats.synthHeld) return;
   feats.setHeld(false); shoutBtn.classList.remove('down');
   if (performance.now() - shoutDownAt < 300) feats.pulse(450 - (performance.now() - shoutDownAt));
@@ -163,23 +186,46 @@ shoutBtn.addEventListener('lostpointercapture', shoutUp);
 
 // ------------------------------------------------------------------ presence
 const presenceToggle = $('presenceToggle');
+let brainPresenceTimer = null;
 function setSensor(on) {
   sensorOn = on; presenceToggle.checked = on;
+  if (BRAIN) {
+    // The toggle forces the brain's presence fusion; re-asserted every 20 s so it outlasts leave_timeout_sec.
+    clearInterval(brainPresenceTimer); brainPresenceTimer = null;
+    brain.presence(on);
+    if (on) brainPresenceTimer = setInterval(() => brain.presence(true), 20000);
+    log(`Presence ${on ? 'ON' : 'OFF'} -> brain POST /api/arena/presence`, 'presence');
+    return;
+  }
   log(`Sim presence sensor ${on ? 'ON' : 'OFF'}${on ? '' : ` (fusion leaves after ${cfg.leave_timeout_sec}s without evidence)`}`, 'presence');
 }
 presenceToggle.onchange = () => { sfx.ensure(); setSensor(presenceToggle.checked); };
-$('forceAbsent').onclick = () => { if (sensorOn) setSensor(false); presence.forcePresent(false); log('Manual override: force absent', 'presence'); };
-$('forcePresent').onclick = () => { presence.forcePresent(true); log('Manual override: force present', 'presence'); };
+$('forceAbsent').onclick = () => { if (sensorOn) setSensor(false); if (BRAIN) brain.presence(false); else presence.forcePresent(false); log('Manual override: force absent', 'presence'); };
+$('forcePresent').onclick = () => { if (BRAIN) brain.presence(true); else presence.forcePresent(true); log('Manual override: force present', 'presence'); };
+document.querySelectorAll('#brainStates button').forEach((b) => { b.onclick = () => { log(`Set state ${b.dataset.s} -> brain POST /api/arena/state`, 'state'); brain?.setState(b.dataset.s); }; });
 
 // ------------------------------------------------------------------ punches
+let pendingHit = null;
 function punch(power, info) {
   sfx.ensure();
   power = Math.max(1, Math.min(100, power));
-  info = info || { dir: Math.random() < 0.5 ? 1 : -1, hx: scene.cx + (Math.random() - 0.5) * 20, hy: scene.H * (0.42 + Math.random() * 0.15) };
+  if (BRAIN) {
+    // The brain counts it; its PunchDetected event (SSE) animates the hit, like a bag punch.
+    pendingHit = info || null;
+    brain.punch(Math.round(power));
+    return;
+  }
   bus.publish({ type: 'PunchDetected', power });
-  const counted = sm.currentState === S.Fight;
+  landPunch(power, info, sm.currentState);
+}
+
+/** Show a punch on the arena (and, in FIGHT, damage the shadow). */
+function landPunch(power, info, state) {
+  info = info || { dir: Math.random() < 0.5 ? 1 : -1, hx: scene.cx + (Math.random() - 0.5) * 20, hy: scene.H * (0.42 + Math.random() * 0.15) };
+  const counted = state === S.Fight;
   scene.hit(power, info); rig.punch(power); sfx.punch(power);
-  if (!counted) { log(`PunchDetected power=${power.toFixed(0)} (not counted: ${sm.currentState})`, 'ignored'); return; }
+  if (!counted) { log(`PunchDetected power=${power.toFixed(0)} (not counted: ${state})`, 'ignored'); return; }
+  game.punches = (game.punches || 0) + 1; game.maxPower = Math.max(game.maxPower || 0, power);
   const t = performance.now() / 1000;
   game.combo = t - game.lastHitAt < 1.0 ? game.combo + 1 : 1;
   game.lastHitAt = t;
@@ -196,7 +242,7 @@ function punch(power, info) {
     game.kos++;
     scene.ko(); sfx.ko();
     log(`Shadow knocked out (#${game.kos})`, 'ko');
-    if (prefs.koEnds) { arena.endFightEarly('KnockOut'); return; }
+    if (prefs.koEnds && !BRAIN) { arena.endFightEarly('KnockOut'); return; }
     scene.showBanner('SHADOW BROKEN', 'it rises again, stronger...');
     game.respawnAt = t + 1.8;
   }
@@ -252,10 +298,27 @@ ledMode.onchange = () => { rig.mode = ledMode.value; prefs.ledMode = ledMode.val
 // Served by simulator/live/bridge.py with ?live=1: frames go to the real WLED strip and
 // real bag punches enter through punch(), the same path as a click on the arena.
 let live = null;
+// Brain mode: the newest frame from the bridge (brain UDP realtime or WLED's live view).
+const brainFrame = { seq: 0, source: null, at: -1e9, count: 0 };
 if (LIVE_REQUESTED) {
   $('livePanel').hidden = false; $('liveTag').hidden = false;
   const dot = (id, cls) => { $(id).className = `dot ${cls}`; };
+  const renderBrainLive = (l) => {
+    const st = l.status, w = st?.wled, br = st?.brain, hw = brain?.state?.hardware;
+    $('liveTag').classList.toggle('on', l.connected && brain?.ok === true);
+    if (!l.connected) { dot('wledDot', 'bad'); $('wledStatus').textContent = 'Strip: bridge not connected (retrying)'; return; }
+    const fresh = performance.now() - brainFrame.at < 1500;
+    const strip = w?.host ? `WLED ${w.host}` : 'no WLED (--wled none)';
+    if (br?.realtime) { dot('wledDot', 'ok'); $('wledStatus').textContent = `Strip: brain realtime ${br.udp_fps} fps from ${br.udp_from}, forwarded to ${strip}`; }
+    else if (fresh && brainFrame.source === 'wled') { dot('wledDot', 'ok'); $('wledStatus').textContent = `Strip: WLED effect${br?.effect ? ` "${br.effect}"` : ''}, live view from ${strip}`; }
+    else { dot('wledDot', 'warn'); $('wledStatus').textContent = `Strip: ${br?.effect ? `WLED effect "${br.effect}", ` : ''}${w?.host ? `no live view (${br?.live_view})` : 'no strip to show'}; brain ${br?.udp_packets ? 'not streaming' : 'has not sent realtime yet'}`; }
+    const ble = hw?.ble;
+    if (brain?.ok === false) { dot('bagDot', 'bad'); $('bagStatus').textContent = `Brain: unreachable at ${br?.url ?? '?'} (${brain.lastError})`; }
+    else if (ble) { dot('bagDot', ble.connected ? 'ok' : 'warn'); $('bagStatus').textContent = `Brain ${br?.url ?? ''}: bag ${ble.connected ? `connected${ble.device_name ? ` (${ble.device_name})` : ''}` : `not connected${ble.last_error ? ` (${ble.last_error})` : ''}`}`; }
+    else { dot('bagDot', 'warn'); $('bagStatus').textContent = 'Brain: connecting...'; }
+  };
   const renderLive = (l) => {
+    if (BRAIN) { renderBrainLive(l); return; }
     const st = l.status, w = st?.wled, b = st?.bag;
     $('liveTag').classList.toggle('on', l.connected && !!w?.streaming);
     if (!l.connected) { dot('wledDot', 'bad'); $('wledStatus').textContent = 'Strip: bridge not connected (retrying)'; dot('bagDot', 'bad'); $('bagStatus').textContent = 'Bag: -'; return; }
@@ -272,6 +335,11 @@ if (LIVE_REQUESTED) {
   live = new LiveLink({
     log,
     onStatus: renderLive,
+    onFrame: (f) => {
+      if (!BRAIN) return;
+      unstripFrame(f.rgb, f.rgb.length / 3, live.serpentine, rig);
+      Object.assign(brainFrame, { seq: f.seq, source: f.source, at: performance.now(), count: f.rgb.length / 3 });
+    },
     onPunch: (m) => { if (live.status?.owner === false) return; log(`Bag punch: ${m.accel} m/s^2 -> power ${m.power.toFixed(0)}`, 'punch'); punch(m.power); },
   });
   const mirror = $('liveMirror'), serp = $('liveSerp');
@@ -279,6 +347,44 @@ if (LIVE_REQUESTED) {
   mirror.onchange = () => { live.enabled = prefs.liveMirror = mirror.checked; savePrefs(); renderLive(live); };
   $('liveTake').onclick = () => live.take();
   serp.onchange = () => { live.serpentine = prefs.liveSerp = serp.checked; savePrefs(); };
+}
+
+if (BRAIN) {
+  // The brain owns the game, the mic, the music and the tunables: hide the JS engine's panels.
+  document.body.classList.add('brainMode');
+  $('liveTag').textContent = 'BRAIN'; $('liveTag').title = 'Real brain-rs via the bridge';
+  for (const id of ['detectorPanel', 'tunablesPanel', 'musicBar', 'ledMode', 'mirrorToggle']) $(id).hidden = true;
+  $('brainStates').hidden = false; $('presRow').hidden = true;
+  $('micBtn').disabled = true; $('micBtn').title = 'Brain mode: the brain uses its own microphone';
+  document.querySelector('.brand small').textContent = 'live brain';
+  brain = new BrainClient({
+    log,
+    onEvent: (type, d) => onBrainEvent(type, d),
+  });
+  brain.start();
+}
+
+function onBrainEvent(type, d) {
+  switch (type) {
+    case 'StateChanged': log(`${d.from} -> ${d.to}`, 'state'); onStateEnter(d.to, d.from); break;
+    case 'PresenceDetected': log(`PresenceDetected { detected: ${d.detected} }`, 'presence'); break;
+    case 'ShoutDetected': {
+      const st = brain.info().currentState, mult = brain.tunables?.shout_energy_multiplier ?? 10;
+      log(`ShoutDetected intensity=${(d.intensity ?? 0).toFixed(2)}${st === S.Warming ? ` (+${(d.intensity * mult).toFixed(1)} energy)` : ` (ignored: ${st})`}`, st === S.Warming ? 'shout' : 'ignored');
+      sfx.shout(d.intensity ?? 1);
+      const fl = $('shoutFlash'); fl.classList.add('on'); setTimeout(() => fl.classList.remove('on'), 120);
+      if (st === S.Warming) scene.floater(`+${(d.intensity * mult).toFixed(0)}`, scene.W / 2 + (Math.random() < 0.5 ? -1 : 1) * (40 + Math.random() * 50), scene.bagGeom().top + 30, '#d6a8ff');
+      break;
+    }
+    case 'PunchDetected': {
+      const info = pendingHit; pendingHit = null;
+      landPunch(d.power ?? 0, info, brain.info().currentState);
+      break;
+    }
+    case 'FightEnded': game.endReason = d.reason; log(`FightEnded { reason: ${d.reason} }`, 'state'); break;
+    case 'EnergyFull': case 'FightStarted': case 'SessionEnded': case 'MusicStarted': case 'MusicStopped': log(type, type === 'EnergyFull' ? 'state' : 'ignored'); break;
+    default: log(`${type} ${JSON.stringify(d)}`, 'ignored');
+  }
 }
 
 // ------------------------------------------------------------------ fidelity toggles
@@ -377,6 +483,7 @@ function updatePanels(info) {
   const tag = $('stateTag'); tag.textContent = st; tag.style.setProperty('--c', STATE_COLOR[st]);
   $('stState').textContent = st;
   $('stTime').textContent = `${info.timeInStateSec.toFixed(1)} s`;
+  if (BRAIN) { updateBrainPanels(info); return; }
   const fu = presence.fusion;
   $('stPresence').textContent = fu.present ? `present (${Math.max(0, cfg.leave_timeout_sec - presence.secondsSinceEvidence()).toFixed(0)}s)` : 'absent';
   $('stSessions').textContent = arena.totalSessions;
@@ -419,16 +526,35 @@ function updatePanels(info) {
   $('runVal').textContent = `${dur.toFixed(2)} / ${cfg.shout_min_duration_sec} s`;
 }
 
+function updateBrainPanels(info) {
+  const st = info.currentState, tu = brain.tunables || {};
+  $('stPresence').textContent = brain.ok === false ? 'brain unreachable' : brain.present ? 'present' : 'absent';
+  $('stSessions').textContent = info.sessions;
+  if (st === S.Warming && info.maxEnergy) {
+    $('energyBar').style.width = pct(info.energyPercentage); $('energyVal').textContent = `${info.energy.toFixed(1)} / ${info.maxEnergy}`;
+  } else { $('energyBar').style.width = st === S.Fight ? '100%' : '0%'; $('energyVal').textContent = st === S.Fight ? 'full' : '-'; }
+  $('fightLeft').textContent = info.fightRemainingSec != null ? `${info.fightRemainingSec.toFixed(0)} s` : '-';
+  $('inactive').textContent = info.timeSinceLastActivitySec != null ? `${info.timeSinceLastActivitySec.toFixed(0)} / ${tu.fight_inactivity_timeout_sec ?? '?'} s` : '-';
+  $('punches').textContent = info.punches;
+  $('maxPower').textContent = Number(info.maxPower).toFixed(0);
+  $('coolLeft').textContent = info.cooldownRemainingSec != null ? `${info.cooldownRemainingSec.toFixed(0)} s` : '-';
+  $('kos').textContent = game.kos;
+  const eff = live?.status?.brain?.effect;
+  $('effectLabel').textContent = `${st}: ${live?.status?.brain?.realtime ? 'brain realtime (UDP)' : `WLED effect${eff ? ` "${eff}"` : ''}`} - ${brainFrame.source === 'brain' ? 'frames from the brain' : brainFrame.source === 'wled' ? 'frames from the WLED live view' : 'no frames (no live view)'}`;
+}
+
 // ------------------------------------------------------------------ main loop
 let lastT = performance.now(), lastPanel = 0;
 function frame(tms) {
   const dt = Math.min((tms - lastT) / 1000, 0.1); lastT = tms;
   try {
     simNow += dt * cfg.time_scale;
-    feats.pump();
-    presence.tick(simNow, sensorOn);
-    arena.tick(simNow);
-    const info = arena.getStateInfo();
+    if (!BRAIN) {
+      feats.pump();
+      presence.tick(simNow, sensorOn);
+      arena.tick(simNow);
+    }
+    const info = BRAIN ? brain.info() : arena.getStateInfo();
     const st = info.currentState;
     // respawn after KO
     const t = performance.now() / 1000;
@@ -440,16 +566,19 @@ function frame(tms) {
     if (pdown) scene.charge = { x: pdown.x, y: pdown.y, p: Math.min(1, (performance.now() - pdown.t) / 600) };
     else if (spaceDown) { const g = scene.bagGeom(); scene.charge = { x: scene.cx, y: (g.top + g.bot) / 2, p: Math.min(1, (performance.now() - spaceDown) / 600) }; }
     const level = lastFeat ? Math.min(1, Math.max(0, lastFeat.db_above_floor / 30)) : 0;
-    const cooldownProgress = st === S.Cooldown ? 1 - info.cooldownRemainingSec / Math.max(1, cfg.cooldown_duration_sec) : 0;
-    rig.render(st, { energyPct: info.energyPercentage, fightRemaining: info.fightRemainingSec, cooldownProgress, cooldownLeft: info.cooldownRemainingSec, level });
+    const coolTotal = BRAIN ? brain.tunables?.cooldown_duration_sec ?? 60 : cfg.cooldown_duration_sec;
+    const cooldownProgress = st === S.Cooldown && info.cooldownRemainingSec != null ? 1 - info.cooldownRemainingSec / Math.max(1, coolTotal) : 0;
+    if (!BRAIN) rig.render(st, { energyPct: info.energyPercentage, fightRemaining: info.fightRemainingSec, cooldownProgress, cooldownLeft: info.cooldownRemainingSec, level });
+    // No frames for 1.5 s and WLED not holding a realtime frame: the strip shows nothing we can see.
+    else if (tms - brainFrame.at > 1500 && brainFrame.at > -1e9 && !live?.status?.brain?.realtime) { rig.cols.forEach((c) => c.fill(0)); brainFrame.at = -1e9; brainFrame.source = null; }
     scene.draw({
       state: st, energyPct: info.energyPercentage, hp: game.hp, hpPct: game.hp / game.maxHp, kos: game.kos,
-      combo: game.combo, comboMult: 1 + Math.min(game.combo - 1, 10) * 0.1, present: presence.fusion.present || sensorOn,
+      combo: game.combo, comboMult: 1 + Math.min(game.combo - 1, 10) * 0.1, present: (BRAIN ? brain.present : presence.fusion.present) || sensorOn,
       fightRemaining: info.fightRemainingSec, cooldownProgress, cooldownLeft: info.cooldownRemainingSec, summary: game.summary, respawning: game.respawnAt != null,
-      inactiveFor: info.timeSinceLastActivitySec ?? 0, inactivityTimeout: cfg.fight_inactivity_timeout_sec,
+      inactiveFor: info.timeSinceLastActivitySec ?? 0, inactivityTimeout: BRAIN ? brain.tunables?.fight_inactivity_timeout_sec ?? 30 : cfg.fight_inactivity_timeout_sec,
     }, dt);
     drawStrips();
-    live?.frame(rig, tms);
+    if (!BRAIN) live?.frame(rig, tms);
     if (tms - lastPanel > 66) { lastPanel = tms; updatePanels(info); }
   } catch (err) {
     errors.push(String(err && err.stack || err));
@@ -460,12 +589,13 @@ function frame(tms) {
 window.addEventListener('resize', () => scene.resize());
 new ResizeObserver(() => scene.resize()).observe($('scene'));
 requestAnimationFrame(frame);
-log('Simulator ready: brain-rs main.rs sets IDLE at startup', 'state');
+log(BRAIN ? 'Brain mode: state, LEDs and controls are the real brain-rs (via the bridge)' : 'Simulator ready: brain-rs main.rs sets IDLE at startup', 'state');
+if (!LIVE_REQUESTED) initConnect({ log });
 
 // Test / console hook
 window.sim = {
   playlist,
-  get state() { return sm.currentState; }, get info() { return arena.getStateInfo(); }, get game() { return game; },
+  get state() { return BRAIN ? brain.info().currentState : sm.currentState; }, get info() { return BRAIN ? brain.info() : arena.getStateInfo(); }, get game() { return game; },
   get cfg() { return cfg; }, get errors() { return errors; }, get lastFeat() { return lastFeat; }, get detector() { return detector; },
-  rig, punch: (p) => punch(p), setSensor, get live() { return live; }, shoutFor: (ms) => feats.pulse(ms), skip: (sec) => { simNow += sec; presence.tick(simNow, sensorOn); arena.tick(simNow); }, arena, presence, sm,
+  rig, punch: (p) => punch(p), setSensor, get live() { return live; }, get brain() { return brain; }, brainFrame, shoutDown, shoutUp, shoutFor: (ms) => feats.pulse(ms), skip: (sec) => { simNow += sec; presence.tick(simNow, sensorOn); arena.tick(simNow); }, arena, presence, sm,
 };

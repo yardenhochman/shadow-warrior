@@ -5,28 +5,36 @@
 # ///
 """Live-hardware bridge for the browser simulator.
 
-    uv run simulator/live/bridge.py                  # http://localhost:8090
-    uv run simulator/live/bridge.py --wled 192.168.1.203 --port 8090 --no-ble
+    uv run simulator/live/bridge.py --wled 192.168.1.50                 # sim mode
+    uv run simulator/live/bridge.py --wled 192.168.1.50 --brain http://127.0.0.1:8000   # brain mode
 
-Serves the repo root over HTTP (so the fight music in music/ works too) and opens
-http://localhost:<port>/ on the simulator in live mode. The page streams every rendered
-LED frame over a WebSocket (/live/ws, binary: <count> x RGB bytes, already laid out for the
-strip); the bridge applies brightness and gamma and sends it to WLED as UDP realtime DNRGB
-(port 21324) with a 2 s timeout, so WLED returns to its own effect when frames stop.
+Serves the repo root over HTTP (so the fight music in music/ works too); / opens the simulator.
 
-The bridge also connects to the punching bag over BLE (bleak), keeps its fight mode on
-while a page is connected, folds each burst of acceleration notifications into one punch
-(as brain-rs ble_manager.rs: power = min(100, 10 x m/s^2), 350 ms refractory) and pushes
-it to every page as {"type": "punch", "power": ...}. Without Bluetooth the rest still works.
-POST /live/punch?power=60 sends the same message without the bag (tests, phone);
-GET/POST /live/threshold[?value=10] reads/sets the bag's punch threshold (RAM, m/s^2).
+Sim mode (default): the page runs the game in JavaScript and streams every rendered LED frame
+over a WebSocket (/live/ws, binary: <count> x RGB bytes, already laid out for the strip); the
+bridge applies brightness and gamma and sends it to WLED as UDP realtime DNRGB (port 21324)
+with a 2 s timeout, so WLED returns to its own effect when frames stop. The bridge also
+connects to the punching bag over BLE (bleak), keeps its fight mode on while a page is
+connected, folds each burst of acceleration notifications into one punch (as brain-rs
+ble_manager.rs: power = min(100, 10 x m/s^2), 350 ms refractory) and pushes it to every page
+as {"type": "punch", "power": ...}. POST /live/punch?power=60 sends the same message without
+the bag; GET/POST /live/threshold[?value=10] reads/sets the bag's punch threshold (RAM, m/s^2).
 
-Stop the brain first: BLE allows one central and two writers fight over the strip.
+Brain mode (--brain URL): the real brain-rs runs the game and the page shows and drives it.
+The bridge stands in for WLED: point the brain's wled.controllers at <bridge host>:<port>.
+It answers /json/info|state|effects|palettes (proxied to the real WLED), receives the brain's
+UDP realtime on 21324, forwards every packet unchanged to the real strip and shows the frames
+in the page; outside realtime the page shows WLED's own live view. /brain/* is proxied to the
+brain API (same origin, so no CORS). The bag belongs to the brain (no BLE here).
+
+Stop the brain (sim mode) first: BLE allows one central and two writers fight over the strip.
 """
 import argparse
 import asyncio
+import collections
 import json
 import logging
+import os
 import signal
 import socket
 import struct
@@ -34,10 +42,13 @@ import time
 import urllib.request
 from pathlib import Path
 
+import aiohttp
 from aiohttp import WSMsgType, web
 
 REPO = Path(__file__).resolve().parents[2]
 SIM_PATH = "/simulator/web/index.html?live=1"
+BRAIN_PATH = "/simulator/web/index.html?brain=1"
+WLED_UDP_PORT = 21324
 
 BAG_NAME = "ShadowWarriorPunchingBag"
 ACCEL_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"
@@ -52,14 +63,15 @@ log = logging.getLogger("bridge")
 class Wled:
     """DNRGB realtime sender. Never polls the controller while streaming."""
 
-    def __init__(self, host, brightness, gamma, timeout_s=2):
-        self.host = host
-        self.addr = (socket.gethostbyname(host), 21324)
+    def __init__(self, host, brightness, gamma, timeout_s=2, leds=180):
+        self.host = host  # None: no strip, frames are dropped
+        self.addr = (socket.gethostbyname(host), WLED_UDP_PORT) if host else None
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.setblocking(False)
         self.timeout_s = timeout_s
         self.lut = bytes(round(255 * brightness * (i / 255) ** gamma) for i in range(256))
         self.count = None
+        self.default_count = leds
         self.frames = 0
         self.last_frame_at = 0.0
         self.fps = 0.0
@@ -68,16 +80,30 @@ class Wled:
 
     def probe(self):
         """One GET at startup for the LED count (the C3 dislikes frequent polling)."""
+        if not self.host:
+            self.count = self.default_count
+            log.warning("no --wled: strip output off, %d LEDs assumed", self.count)
+            return
         try:
             with urllib.request.urlopen(f"http://{self.host}/json/info", timeout=3) as r:
                 info = json.load(r)
             self.count = int(info["leds"]["count"])
             log.info("WLED %s %s, %d LEDs", self.host, info.get("ver"), self.count)
         except Exception as e:  # noqa: BLE001
-            log.warning("WLED info unavailable (%s); assuming 180 LEDs", e)
-            self.count = 180
+            log.warning("WLED info unavailable (%s); assuming %d LEDs", e, self.default_count)
+            self.count = self.default_count
+
+    def forward(self, packet: bytes):
+        """Pass a UDP realtime packet on unchanged (brain mode)."""
+        if self.addr:
+            try:
+                self.sock.sendto(packet, self.addr)
+            except (BlockingIOError, OSError) as e:
+                log.debug("udp forward: %s", e)
 
     def send(self, rgb: bytes):
+        if not self.addr:
+            return
         px = rgb.translate(self.lut)
         n = len(px) // 3
         for start in range(0, n, DNRGB_MAX):
@@ -97,7 +123,9 @@ class Wled:
 
     def release(self):
         """Timeout byte 1 + black: WLED drops realtime after 1 s and resumes its effect."""
-        n = self.count or 180
+        if not self.addr:
+            return
+        n = self.count or self.default_count
         for start in range(0, n, DNRGB_MAX):
             m = min(DNRGB_MAX, n - start)
             try:
@@ -237,17 +265,232 @@ class Bag:
                 log.warning("fight mode off failed: %s", e)
 
 
+FRAME_BRAIN, FRAME_WLED = 1, 2  # page frame tags: brain UDP realtime, WLED's own live view
+
+
+class BrainLink:
+    """Brain mode: a stand-in WLED for brain-rs plus a same-origin proxy to its API.
+
+    The brain's realtime UDP packets are forwarded unchanged to the real strip and decoded
+    into one frame for the page; its /json calls are proxied to the real WLED (or answered
+    here when there is none). Outside realtime the page gets WLED's own live view (/ws lv).
+    """
+
+    def __init__(self, hub, url, wled):
+        self.hub, self.url, self.wled = hub, url.rstrip("/"), wled
+        self.session = None
+        n = wled.count or wled.default_count
+        self.frame = bytearray(n * 3)
+        self.seq = 0
+        self.recent = collections.deque(maxlen=120)  # (seq, tag, rgb) sent to pages, for tests
+        self.udp_packets = 0
+        self.udp_from = None
+        self.last_udp = 0.0
+        self.rt_timeout = 2.0
+        self.udp_fps = 0.0
+        self._fps_t0, self._fps_n = time.monotonic(), 0
+        self.live_frames = 0
+        self.live_state = "off" if not wled.host else "idle"
+        self.last_post = None  # last /json/state body the brain posted
+        self.effects = []
+        self.reachable = None
+        self.brain_state = None
+        self._last_push = 0.0
+
+    # ---- UDP realtime from the brain
+    def realtime(self):
+        return time.monotonic() - self.last_udp < self.rt_timeout
+
+    def on_udp(self, data: bytes, addr):
+        if len(data) < 2:
+            return
+        self.wled.forward(data)
+        proto, t = data[0], data[1]
+        n = len(self.frame) // 3
+        if proto == 2:  # DRGB
+            px, start = data[2:], 0
+        elif proto == 4 and len(data) >= 4:  # DNRGB
+            px, start = data[4:], (data[2] << 8) | data[3]
+        elif proto == 3:  # DRGBW: drop white
+            w = data[2:]
+            px, start = b"".join(w[i:i + 3] for i in range(0, len(w) - 3, 4)), 0
+        elif proto == 1:  # WARLS: index, r, g, b
+            for i in range(2, len(data) - 3, 4):
+                k = data[i]
+                if k < n:
+                    self.frame[k * 3:k * 3 + 3] = data[i + 1:i + 4]
+            px, start = b"", None
+        else:
+            return
+        if start is not None:
+            m = min(len(px) // 3, max(0, n - start))
+            self.frame[start * 3:(start + m) * 3] = px[:m * 3]
+        self.rt_timeout = 3600.0 if t == 255 else max(t, 1)
+        self.udp_packets += 1
+        self.udp_from = addr[0]
+        now = time.monotonic()
+        self.last_udp = now
+        # A frame is complete when a packet reaches the strip end (DNRGB chunks) or for DRGB/WARLS.
+        if start is None or proto != 4 or start + len(px) // 3 >= n:
+            self._fps_n += 1
+            if now - self._fps_t0 >= 1.0:
+                self.udp_fps = self._fps_n / (now - self._fps_t0)
+                self._fps_t0, self._fps_n = now, 0
+            self.push(FRAME_BRAIN, self.frame)
+
+    def push(self, tag, rgb):
+        self.seq = (self.seq + 1) & 0xFFFFFFFF
+        self.recent.append((self.seq, tag, bytes(rgb)))
+        msg = bytes([tag]) + self.seq.to_bytes(4, "big") + bytes(rgb)
+        for ws in list(self.hub.clients):
+            if not ws.closed:
+                asyncio.ensure_future(ws.send_bytes(msg))
+
+    # ---- WLED live view (what the strip shows during its own effects)
+    async def live_view(self):
+        if not self.wled.host:
+            return
+        backoff = 2
+        while True:
+            if not self.hub.clients:
+                self.live_state = "idle"
+                await asyncio.sleep(0.5)
+                continue
+            try:
+                async with self.session.ws_connect(f"http://{self.wled.host}/ws", heartbeat=15, timeout=5) as ws:
+                    await ws.send_str('{"lv":true}')
+                    self.live_state = "on"
+                    backoff = 2
+                    async for m in ws:
+                        if not self.hub.clients:
+                            await ws.send_str('{"lv":false}')
+                            break
+                        if m.type == WSMsgType.BINARY and len(m.data) > 2 and m.data[0] == 76:  # 'L'
+                            self.live_frames += 1
+                            if not self.realtime():
+                                rgb = m.data[2:2 + len(self.frame)]
+                                if len(rgb) == len(self.frame):
+                                    self.push(FRAME_WLED, rgb)
+                        elif m.type in (WSMsgType.CLOSED, WSMsgType.ERROR):
+                            break
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # noqa: BLE001
+                self.live_state = f"error: {str(e)[:80] or type(e).__name__}"
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 15)
+
+    # ---- brain reachability (for the status panel)
+    async def poll(self):
+        while True:
+            try:
+                async with self.session.get(f"{self.url}/api/state", timeout=aiohttp.ClientTimeout(total=2)) as r:
+                    d = (await r.json()).get("data") or {}
+                    self.reachable = True
+                    self.brain_state = (d.get("arena") or {}).get("current_state")
+            except Exception:  # noqa: BLE001
+                self.reachable, self.brain_state = False, None
+            await asyncio.sleep(1.0)
+
+    def effect_name(self):
+        p = self.last_post or {}
+        if p.get("on") is False:
+            return "off"
+        seg = (p.get("seg") or [{}])[0]
+        fx = seg.get("fx")
+        if fx is None:
+            return None
+        return self.effects[fx] if isinstance(fx, int) and fx < len(self.effects) else f"effect {fx}"
+
+    def status(self):
+        rt = self.realtime()
+        return {"url": self.url, "reachable": self.reachable, "state": self.brain_state,
+                "realtime": rt, "udp_fps": round(self.udp_fps, 1) if rt else 0, "udp_packets": self.udp_packets,
+                "udp_from": self.udp_from, "effect": self.effect_name(), "live_view": self.live_state,
+                "live_frames": self.live_frames, "seq": self.seq, "posted": self.last_post}
+
+    # ---- stand-in WLED JSON API (brain -> bridge -> real WLED)
+    async def wled_json(self, req):
+        path = req.match_info.get("path", "")
+        body = await req.read() if req.method == "POST" else None
+        if req.method == "POST" and path in ("state", "si", ""):
+            try:
+                self.last_post = json.loads(body or b"{}")
+            except ValueError:
+                pass
+        if self.wled.host:
+            try:
+                async with self.session.request(req.method, f"http://{self.wled.host}/json/{path}", data=body,
+                                                headers={"Content-Type": "application/json"} if body else None,
+                                                timeout=aiohttp.ClientTimeout(total=4)) as r:
+                    data = await r.read()
+                    if path == "effects" and r.status == 200:
+                        try:
+                            self.effects = json.loads(data)
+                        except ValueError:
+                            pass
+                    return web.Response(body=data, status=r.status, content_type="application/json")
+            except Exception as e:  # noqa: BLE001
+                return web.json_response({"error": f"WLED {self.wled.host}: {e}"}, status=502)
+        # No real strip: answer like a minimal WLED.
+        n = len(self.frame) // 3
+        if path == "info":
+            return web.json_response({"ver": "sim-bridge", "name": "simulator bridge", "leds": {"count": n},
+                                      "live": self.realtime(), "lm": "UDP" if self.realtime() else ""})
+        if path in ("effects", "palettes", "eff", "pal"):
+            return web.json_response([])
+        if req.method == "POST":
+            return web.json_response({"success": True})
+        return web.json_response(self.last_post or {"on": True})
+
+    async def proxy(self, req):
+        """/brain/<path> -> <brain>/<path>, streamed (works for the SSE /api/events)."""
+        url = f"{self.url}/{req.match_info['tail']}"
+        body = await req.read()
+        headers = {"Content-Type": req.headers.get("Content-Type", "application/json")} if body else None
+        try:
+            r = await self.session.request(req.method, url, params=req.query, data=body or None, headers=headers,
+                                           timeout=aiohttp.ClientTimeout(total=None, sock_connect=3))
+        except Exception as e:  # noqa: BLE001
+            return web.json_response({"success": False, "error": f"brain {self.url} unreachable: {e}"}, status=502)
+        resp = web.StreamResponse(status=r.status, headers={"Content-Type": r.headers.get("Content-Type", "application/octet-stream"),
+                                                            "Cache-Control": "no-store"})
+        try:
+            await resp.prepare(req)
+            async for chunk in r.content.iter_any():
+                await resp.write(chunk)
+        except (ConnectionResetError, asyncio.CancelledError):
+            pass
+        finally:
+            r.release()
+        return resp
+
+
+class UdpIn(asyncio.DatagramProtocol):
+    def __init__(self, brain):
+        self.brain = brain
+
+    def datagram_received(self, data, addr):
+        self.brain.on_udp(data, addr)
+
+
 class Hub:
-    def __init__(self, wled, use_ble):
+    def __init__(self, wled, use_ble, brain_url=None):
         self.wled = wled
         self.clients = set()
+        self.brain = BrainLink(self, brain_url, wled) if brain_url else None
         self.owner = None  # the newest page drives the strip; frames from older tabs are dropped
         self.bag = Bag(self, *use_ble) if use_ble else None
 
     def status(self):
-        return {"type": "status", "wled": self.wled.status(),
-                "bag": self.bag.status() if self.bag else {"state": "disabled", "detail": "--no-ble", "fight": False, "punches": 0},
-                "clients": len(self.clients)}
+        off = {"state": "disabled", "detail": "the brain holds the bag" if self.brain else "--no-ble", "fight": False, "punches": 0}
+        st = {"type": "status", "mode": "brain" if self.brain else "sim", "wled": self.wled.status(),
+              "bag": self.bag.status() if self.bag else off, "clients": len(self.clients)}
+        if self.brain:
+            st["brain"] = self.brain.status()
+            st["wled"]["streaming"] = self.brain.realtime() and bool(self.wled.host)
+            st["wled"]["fps"] = st["brain"]["udp_fps"]
+        return st
 
     def broadcast(self, msg):
         for ws in list(self.clients):
@@ -274,7 +517,7 @@ class Hub:
         try:
             async for msg in ws:
                 if msg.type == WSMsgType.BINARY:
-                    if ws is self.owner:
+                    if ws is self.owner and not self.brain:
                         self.wled.send(msg.data)
                 elif msg.type == WSMsgType.TEXT:
                     try:
@@ -304,7 +547,7 @@ def make_app(hub):
     app = web.Application()
 
     async def root(_req):
-        raise web.HTTPFound(SIM_PATH)
+        raise web.HTTPFound(BRAIN_PATH if hub.brain else SIM_PATH)
 
     async def status(_req):
         return web.json_response(hub.status())
@@ -329,7 +572,8 @@ def make_app(hub):
 
     async def no_cache(request, handler):
         resp = await handler(request)
-        resp.headers["Cache-Control"] = "no-store"
+        if not resp.prepared:
+            resp.headers["Cache-Control"] = "no-store"
         return resp
 
     app.middlewares.append(web.middleware(no_cache))
@@ -338,13 +582,31 @@ def make_app(hub):
     app.router.add_get("/live/status", status)
     app.router.add_post("/live/punch", test_punch)
     app.router.add_route("*", "/live/threshold", threshold)
+    if hub.brain:
+        app.router.add_route("*", "/json/{path:.*}", hub.brain.wled_json)
+        app.router.add_route("*", "/json", hub.brain.wled_json)
+        app.router.add_route("*", "/brain/{tail:.*}", hub.brain.proxy)
+
+        async def last_frame(req):  # tests: a frame sent to the pages (?seq=N, default the newest)
+            b = hub.brain
+            want = int(req.query.get("seq", b.seq))
+            for seq, tag, rgb in reversed(b.recent):
+                if seq == want:
+                    return web.json_response({"seq": seq, "source": "brain" if tag == FRAME_BRAIN else "wled",
+                                              "realtime": b.realtime(), "rgb": rgb.hex()})
+            return web.json_response({"error": f"seq {want} not kept"}, status=404)
+        app.router.add_get("/live/frame", last_frame)
     app.router.add_static("/", REPO, show_index=False, follow_symlinks=False)
     return app
 
 
 async def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--wled", default="192.168.1.203", help="WLED host or IP (default %(default)s)")
+    ap.add_argument("--wled", default=os.environ.get("WLED_HOST"),
+                    help="real WLED host or IP (default $WLED_HOST; none: no strip, page only)")
+    ap.add_argument("--brain", metavar="URL", help="brain mode: brain-rs API, e.g. http://127.0.0.1:8000 or http://<pi>:8000")
+    ap.add_argument("--udp-port", type=int, default=WLED_UDP_PORT, help="brain mode: realtime UDP listen port (default %(default)s)")
+    ap.add_argument("--leds", type=int, default=180, help="LED count when WLED is not reachable (default %(default)s)")
     ap.add_argument("--port", type=int, default=8090)
     ap.add_argument("--host", default="127.0.0.1", help="bind address (0.0.0.0 to open it from a phone)")
     ap.add_argument("--brightness", type=float, default=0.7, help="0..1 master scale (WLED ABL still applies)")
@@ -353,21 +615,34 @@ async def main():
     ap.add_argument("--threshold", type=float, default=2.0, help="bag punch threshold, m/s^2 (brain-rs config.yaml)")
     ap.add_argument("--alpha", type=float, default=0.8, help="bag EMA alpha (brain-rs config.yaml)")
     a = ap.parse_args()
+    if a.wled in ("", "none"):
+        a.wled = None
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
 
-    wled = Wled(a.wled, a.brightness, a.gamma)
+    wled = Wled(a.wled, a.brightness, a.gamma, leds=a.leds)
     wled.probe()
-    hub = Hub(wled, None if a.no_ble else (a.threshold, a.alpha))
+    brain_mode = bool(a.brain)
+    # Brain mode: the brain is the bag's BLE central (one central only).
+    hub = Hub(wled, None if (a.no_ble or brain_mode) else (a.threshold, a.alpha), a.brain)
+    loop = asyncio.get_running_loop()
+    tasks = []
+    if hub.brain:
+        hub.brain.session = aiohttp.ClientSession()
+        await loop.create_datagram_endpoint(lambda: UdpIn(hub.brain), local_addr=(a.host, a.udp_port))
+        tasks += [asyncio.create_task(hub.brain.live_view()), asyncio.create_task(hub.brain.poll())]
     runner = web.AppRunner(make_app(hub), access_log=None)
     await runner.setup()
-    await web.TCPSite(runner, a.host, a.port).start()
-    log.info("simulator: http://localhost:%d/  (WLED %s, BLE %s)", a.port, a.wled, "off" if a.no_ble else "on")
+    await web.TCPSite(runner, a.host, a.port, shutdown_timeout=2).start()
+    if hub.brain:
+        log.info("brain mode: brain %s; point its wled.controllers at <this host>:%d (UDP %d on %s); strip %s",
+                 a.brain, a.port, a.udp_port, a.host, a.wled or "none")
+    log.info("simulator: http://localhost:%d/  (WLED %s, BLE %s)", a.port, a.wled or "none",
+             "brain" if brain_mode else "off" if a.no_ble else "on")
 
-    tasks = [asyncio.create_task(hub.status_loop())]
+    tasks.append(asyncio.create_task(hub.status_loop()))
     if hub.bag:
         tasks.append(asyncio.create_task(hub.bag.run()))
     stop = asyncio.Event()
-    loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, stop.set)
     await stop.wait()
@@ -376,7 +651,10 @@ async def main():
         await hub.bag.shutdown()
     for t in tasks:
         t.cancel()
-    wled.release()
+    if hub.brain:
+        await hub.brain.session.close()
+    else:
+        wled.release()  # brain mode: the brain owns the strip; WLED times out on its own
     await runner.cleanup()
 
 
