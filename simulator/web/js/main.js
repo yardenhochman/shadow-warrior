@@ -9,6 +9,7 @@ import { FeatureSource } from './feature_source.js';
 import { FRAME_SECS } from './audio_frontend.js';
 import { LedRig, COLUMNS, EFFECT_LABELS } from './wled.js';
 import { Scene } from './scene.js';
+import { HitPicker } from './hitfx.js';
 import { Sfx } from './sfx.js';
 import { Playlist } from './music.js';
 import { LiveLink, LIVE_REQUESTED, BRAIN_REQUESTED, unstripFrame } from './live.js';
@@ -56,6 +57,7 @@ document.getElementById('musicFiles').addEventListener('change', (e) => {
 document.getElementById('musicNext').addEventListener('click', () => playlist.skip());
 const rig = new LedRig(cfg.leds_per_column); rig.mode = prefs.ledMode;
 const scene = new Scene($('scene'), rig);
+const hitPicker = new HitPicker();
 
 const game = { hp: cfg.shadow_hp, maxHp: cfg.shadow_hp, kos: 0, combo: 0, lastHitAt: -9, respawnAt: null, summary: '', shouts: 0, lastShout: null };
 let lastFeat = null;
@@ -91,8 +93,9 @@ bus.subscribe((e) => {
     case 'ShoutDetected': {
       game.shouts++; game.lastShout = e;
       const st = sm.currentState;
-      log(`ShoutDetected intensity=${e.intensity.toFixed(2)} dur=${e.duration_sec.toFixed(2)}s level=${e.level_db.toFixed(1)}dB${st === S.Warming ? ` (+${(arena.energyBar?.lastAdded ?? e.intensity * cfg.shout_energy_multiplier).toFixed(1)} energy)` : ` (ignored: ${st})`}`, st === S.Warming ? 'shout' : 'ignored');
-      rig.shout(e.intensity); sfx.shout(e.intensity);
+      log(`ShoutDetected intensity=${e.intensity.toFixed(2)} dur=${e.duration_sec.toFixed(2)}s level=${e.level_db.toFixed(1)}dB${st === S.Warming ? ` (+${(arena.energyBar?.lastAdded ?? e.intensity * cfg.shout_energy_multiplier).toFixed(1)} energy)` : st === S.Fight ? ' (FIGHT, visual only)' : ` (ignored: ${st})`}`, st === S.Warming ? 'shout' : 'ignored');
+      rig.shout(e.intensity, st); sfx.shout(e.intensity);
+      if (st === S.Fight) scene.shoutWave(e.intensity);
       const fl = $('shoutFlash'); fl.classList.add('on'); setTimeout(() => fl.classList.remove('on'), 120);
       if (st === S.Warming) scene.floater(`+${(e.intensity * cfg.shout_energy_multiplier).toFixed(0)}`, scene.W / 2 + (Math.random() < 0.5 ? -1 : 1) * (40 + Math.random() * 50), scene.bagGeom().top + 30, '#d6a8ff');
       break;
@@ -117,7 +120,8 @@ function onStateEnter(to) {
     game.maxHp = cfg.shadow_hp; game.hp = game.maxHp; game.kos = 0; game.combo = 0; game.respawnAt = null;
     scene.resetDamage();
     scene.showBanner('FIGHT!', 'punch the shadow');
-    sfx.boom();
+    // Full bar -> FIGHT: one arena-opening moment (LED burst, screen ring, sound), synced on the impact.
+    rig.fightStart(); scene.fightOpen(); sfx.arenaOpen();
   } else if (to === S.Cooldown) {
     const endReason = BRAIN ? game.endReason : arena.lastEndReason;
     const punches = BRAIN ? game.punches : arena.currentSessionPunches, maxPower = BRAIN ? game.maxPower : arena.currentSessionMaxPower;
@@ -223,11 +227,14 @@ function punch(power, info) {
 function landPunch(power, info, state) {
   info = info || { dir: Math.random() < 0.5 ? 1 : -1, hx: scene.cx + (Math.random() - 0.5) * 20, hy: scene.H * (0.42 + Math.random() * 0.15) };
   const counted = state === S.Fight;
-  scene.hit(power, info); rig.punch(power); sfx.punch(power);
+  const t = performance.now() / 1000;
+  const combo = counted && t - game.lastHitAt < 1.0 ? game.combo + 1 : 1;
+  // One signature per punch (hitfx.js), shared by the LEDs, the arena and the sound.
+  const sig = hitPicker.pick(power, { combo, rage: rig.rage, dir: info.dir, variety: cfg.hit_fx_variety >= 1 });
+  scene.hit(power, info, sig); rig.punch(power, sig); sfx.punch(power, sig);
   if (!counted) { log(`PunchDetected power=${power.toFixed(0)} (not counted: ${state})`, 'ignored'); return; }
   game.punches = (game.punches || 0) + 1; game.maxPower = Math.max(game.maxPower || 0, power);
-  const t = performance.now() / 1000;
-  game.combo = t - game.lastHitAt < 1.0 ? game.combo + 1 : 1;
+  game.combo = combo;
   game.lastHitAt = t;
   const mult = Math.min(1 + (game.combo - 1) * 0.1, cfg.combo_max ?? 2);
   let dmg = 0;
@@ -237,7 +244,7 @@ function landPunch(power, info, state) {
   }
   const col = power >= 75 ? '#ffdf6a' : power >= 45 ? '#ffae6a' : '#ffffff';
   scene.floater(dmg ? `-${dmg.toFixed(0)}` : `${power.toFixed(0)}`, info.hx + info.dir * -30, info.hy - 20, col, power >= 75);
-  log(`PunchDetected power=${power.toFixed(0)} dmg=${dmg.toFixed(1)}${game.combo > 1 ? ` combo ${game.combo}` : ''}`, 'punch');
+  log(`PunchDetected power=${power.toFixed(0)} dmg=${dmg.toFixed(1)}${game.combo > 1 ? ` combo ${game.combo}` : ''}${sig.kind !== 'classic' ? ` [${sig.tier} ${sig.kind}]` : ''}`, 'punch');
   if (game.hp <= 0 && game.respawnAt == null) {
     game.kos++;
     scene.ko(); sfx.ko();
@@ -370,8 +377,9 @@ function onBrainEvent(type, d) {
     case 'PresenceDetected': log(`PresenceDetected { detected: ${d.detected} }`, 'presence'); break;
     case 'ShoutDetected': {
       const st = brain.info().currentState, mult = brain.tunables?.shout_energy_multiplier ?? 10;
-      log(`ShoutDetected intensity=${(d.intensity ?? 0).toFixed(2)}${st === S.Warming ? ` (+${(d.intensity * mult).toFixed(1)} energy)` : ` (ignored: ${st})`}`, st === S.Warming ? 'shout' : 'ignored');
-      sfx.shout(d.intensity ?? 1);
+      log(`ShoutDetected intensity=${(d.intensity ?? 0).toFixed(2)}${st === S.Warming ? ` (+${(d.intensity * mult).toFixed(1)} energy)` : st === S.Fight ? ' (FIGHT, visual only)' : ` (ignored: ${st})`}`, st === S.Warming ? 'shout' : 'ignored');
+      sfx.shout(d.intensity ?? 1); rig.shout(d.intensity ?? 1, st);
+      if (st === S.Fight) scene.shoutWave(d.intensity ?? 1);
       const fl = $('shoutFlash'); fl.classList.add('on'); setTimeout(() => fl.classList.remove('on'), 120);
       if (st === S.Warming) scene.floater(`+${(d.intensity * mult).toFixed(0)}`, scene.W / 2 + (Math.random() < 0.5 ? -1 : 1) * (40 + Math.random() * 50), scene.bagGeom().top + 30, '#d6a8ff');
       break;
@@ -441,6 +449,8 @@ function onTunable(key) {
   if (['warming_energy_threshold', 'shout_energy_multiplier', 'energy_decay_rate'].includes(key)) arena.onTunablesChanged();
   if (key === 'leds_per_column' && rig.n !== cfg.leds_per_column) rig.resize(cfg.leds_per_column);
   if (key === 'synth_shout_db') feats.synthDb = cfg.synth_shout_db;
+  if (key === 'hit_fx_variety') rig.variety = cfg.hit_fx_variety >= 1;
+  if (key === 'hit_fx_intensity') { rig.intensity = cfg.hit_fx_intensity; scene.intensity = cfg.hit_fx_intensity; }
 }
 buildTunables();
 $('exportBtn').onclick = () => { const box = $('yamlBox'); box.hidden = false; $('yamlOut').value = exportYaml(cfg); };
@@ -631,5 +641,5 @@ window.sim = {
   playlist,
   get state() { return BRAIN ? brain.info().currentState : sm.currentState; }, get info() { return BRAIN ? brain.info() : arena.getStateInfo(); }, get game() { return game; },
   get cfg() { return cfg; }, get errors() { return errors; }, get lastFeat() { return lastFeat; }, get detector() { return detector; },
-  rig, punch: (p) => punch(p), setSensor, get live() { return live; }, get brain() { return brain; }, brainFrame, shoutDown, shoutUp, shoutFor: (ms) => feats.pulse(ms), skip: (sec) => { simNow += sec; presence.tick(simNow, sensorOn); arena.tick(simNow); }, arena, presence, sm,
+  rig, scene, hitPicker, punch: (p) => punch(p), setSensor, get live() { return live; }, get brain() { return brain; }, brainFrame, shoutDown, shoutUp, shoutFor: (ms) => feats.pulse(ms), skip: (sec) => { simNow += sec; presence.tick(simNow, sensorOn); arena.tick(simNow); }, arena, presence, sm,
 };

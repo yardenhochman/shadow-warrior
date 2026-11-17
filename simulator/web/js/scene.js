@@ -2,6 +2,7 @@
 // opponent and the four LED columns in an arc behind it, plus a top-down inset.
 import { ArenaState } from './state_machine.js';
 import { COLUMNS } from './wled.js';
+import { hsv, SHOUT_HUE } from './hitfx.js';
 
 const COL_ANGLES = [-62, -21, 21, 62].map((d) => d * Math.PI / 180); // around the bag, from "behind"
 const ARC_R = 2.2;      // m, bag -> columns
@@ -18,6 +19,9 @@ export class Scene {
     this.shadowAlpha = 0; this.eyeOpen = 0; this.hpShown = 1; this.koFlash = 0;
     this.charge = null; // {x, y, p}
     this.banner = null; // {text, sub, t0, dur}
+    // Punch-signature moments: impact rings, lightning bolts, colour tint, blackout, hit-stop.
+    this.rings = []; this.bolts = []; this.tints = []; this.dark = 0; this.slow = 0; this.pending = []; this.intensity = 1;
+    this.reduceMotion = typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null;
     this.resize();
   }
 
@@ -56,30 +60,165 @@ export class Scene {
     return { dir, hx, hy };
   }
 
-  hit(power, info) {
+  /** Screen shake, skipped when the viewer asked the system to reduce motion. */
+  shakeBy(v) { if (!this.reduceMotion?.matches) this.shake = Math.max(this.shake, v); }
+  later(sec, fn) { this.pending.push({ at: performance.now() / 1000 + sec, fn }); }
+  ring(x, y, rgb, { r0 = 10, r1 = 160, life = 0.45, width = 6, delay = 0 } = {}) {
+    const add = () => this.rings.push({ x, y, rgb, r0, r1, life, width, age: 0 });
+    if (delay > 0) this.later(delay, add); else add();
+  }
+  tint(rgb, a, life = 0.25, delay = 0) {
+    const add = () => this.tints.push({ rgb, a: a * Math.min(1.3, this.intensity), life, age: 0 });
+    if (delay > 0) this.later(delay, add); else add();
+  }
+  burst(x, y, n, rgb, { speed = 420, up = 0, dir = 0, life = 0.6, size = 3, kind = 'spark' } = {}) {
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2, v = speed * (0.3 + 0.7 * Math.random());
+      this.particles.push({ x, y, vx: Math.cos(a) * v + dir, vy: Math.sin(a) * v - up, life: life * (0.6 + 0.6 * Math.random()), age: 0,
+        kind, size: size * (0.6 + 0.8 * Math.random()), col: rgb, rot: Math.random() * 6, vr: (Math.random() - 0.5) * 20 });
+    }
+  }
+  /** screen point of column c at height h (m) */
+  colPoint(c, h) { const a = COL_ANGLES[c]; const [x, y] = this.proj(ARC_R * Math.sin(a), h, ARC_R * Math.cos(a)); return [x, y]; }
+
+  hit(power, info, sig) {
     const p = power / 100;
+    const classic = !sig || sig.kind === 'classic';
+    const rgb = classic ? null : hsv(sig.hue, 0.8, 1);
     this.swingV += info.dir * (0.6 + 2.4 * p);
     this.squash = Math.max(this.squash, 0.25 + 0.5 * p);
     this.hitFlash = Math.max(this.hitFlash, 0.5 + 0.5 * p);
-    this.shake = Math.max(this.shake, 4 + 16 * p);
+    this.shakeBy(4 + 16 * p);
     const n = Math.round(10 + 40 * p);
     for (let i = 0; i < n; i++) {
       const a = Math.random() * Math.PI * 2, v = 80 + Math.random() * 420 * (0.4 + p);
       this.particles.push({ x: info.hx, y: info.hy, vx: Math.cos(a) * v - info.dir * 120, vy: Math.sin(a) * v - 80, life: 0.35 + Math.random() * 0.5, age: 0,
-        kind: Math.random() < 0.3 ? 'smoke' : 'spark', size: 1.5 + Math.random() * 2.5 * (0.5 + p) });
+        kind: Math.random() < 0.3 ? 'smoke' : 'spark', size: 1.5 + Math.random() * 2.5 * (0.5 + p), col: rgb && Math.random() < 0.6 ? rgb : null });
     }
     if (p > 0.55 && this.cracks.length < 14) {
       const g = this.bagGeom();
       this.cracks.push({ u: (info.hx - this.cx) / g.rw, v: (info.hy - g.top) / (g.bot - g.top), seed: Math.random() * 1000, size: p });
     }
+    if (classic) return;
+    const { hx: x, hy: y } = info, I = this.intensity, e = sig.esc || 0, sc = Math.min(this.W, 900) / 900;
+    if (sig.tier === 'jab') {
+      this.ring(x, y, rgb, { r0: 4, r1: 40 * sc + 20, life: 0.22, width: 2 });
+      this.burst(x, y, 8, rgb, { speed: 260, life: 0.3, size: 2 });
+      return;
+    }
+    if (sig.tier === 'hook') {
+      if (sig.kind === 'sweep') this.burst(x, y, 22, rgb, { speed: 380, dir: -sig.dir * 380, life: 0.45, size: 2.6 });
+      else if (sig.kind === 'ring') this.ring(x, y, rgb, { r0: 8, r1: 130 * sc + 40, life: 0.4, width: 4 });
+      else { this.ring(x, y, rgb, { r0: 6, r1: 70 * sc + 30, life: 0.25, width: 4 }); this.ring(x, y, hsv(sig.hue + 40, 0.8, 1), { r0: 6, r1: 100 * sc + 30, life: 0.3, width: 4, delay: 0.14 }); }
+      this.burst(x, y, 10, rgb, { speed: 300, life: 0.4, size: 2.2 });
+      this.tint(rgb, 0.08, 0.15);
+      return;
+    }
+    // heavy
+    this.slow = Math.max(this.slow, 0.1); // hit-stop: the arena freezes for a beat
+    const big = (1 + 0.35 * e) * sc;
+    { // the signature's name, beside the bag on the side the punch drives it to (the damage number sits on the other)
+      const g = this.bagGeom();
+      this.floater(`${sig.label}!`, this.cx + info.dir * (g.rw * 2.2 + 70 * sc), (g.top + g.bot) / 2, `rgb(${hsv(sig.hue, 0.55, 1).map((v) => v * 255 | 0)})`, true, 0.8 + 0.3 * e);
+    }
+    switch (sig.kind) {
+      case 'thunder': {
+        for (const [k, at] of [[0, 0], [1, 0.08], [2, 0.19], [3, 0.31], [4, 0.46]].slice(0, 3 + Math.round(2 * e))) {
+          this.later(at, () => {
+            const c = k === 0 ? (Math.random() < 0.5 ? 1 : 2) : Math.floor(Math.random() * 4);
+            this.bolts.push({ from: [x, y], to: this.colPoint(c, COL_H * (0.5 + 0.45 * Math.random())), age: 0, life: 0.14, rgb: hsv(225 + 40 * Math.random(), 0.45, 1) });
+            this.tint(hsv(235, 0.6, 1), 0.22, 0.1);
+          });
+        }
+        this.ring(x, y, hsv(230, 0.6, 1), { r1: 220 * big, life: 0.4, width: 5 });
+        this.shakeBy(22 * I);
+        break;
+      }
+      case 'gold':
+        this.burst(x, y, Math.round(50 * I * (1 + e)), rgb, { speed: 520, up: 520, life: 1.1, size: 3.2 });
+        this.ring(x, y, rgb, { r1: 200 * big, life: 0.5, width: 7 });
+        this.tint(hsv(45, 0.6, 1), 0.18, 0.3);
+        this.shakeBy(18 * I);
+        break;
+      case 'shatter':
+        this.tint(hsv(352, 0.95, 1), 0.38, 0.22);
+        this.burst(x, y, Math.round(26 * I * (1 + e)), hsv(350, 0.9, 1), { speed: 560, life: 0.9, size: 7, kind: 'shard' });
+        for (let i = 0; i < 3 && this.cracks.length < 18; i++) {
+          const g = this.bagGeom(); this.cracks.push({ u: (x - this.cx) / g.rw + (Math.random() - 0.5), v: (y - g.top) / (g.bot - g.top), seed: Math.random() * 1000, size: 1.2 });
+        }
+        this.shakeBy(26 * I);
+        break;
+      case 'strobe': {
+        const hues = [300, 48, 355, 265, 20];
+        for (let k = 0; k < 3 + Math.round(2 * e); k++) this.tint(hsv(hues[k], 0.7, 1), 0.3, 0.06, k * 0.13);
+        this.ring(x, y, rgb, { r1: 180 * big, life: 0.35, width: 4 });
+        this.shakeBy(16 * I);
+        break;
+      }
+      case 'split':
+        this.ring(x, y, rgb, { r1: 200 * big, life: 0.45, width: 6 });
+        this.ring(x, y, hsv(sig.hue + 15, 0.9, 1), { r1: 300 * big, life: 0.55, width: 3, delay: 0.1 });
+        this.burst(x, y, 30, rgb, { speed: 600, life: 0.5, size: 2.5 });
+        this.shakeBy(18 * I);
+        break;
+      case 'nova': {
+        const B = 0.2 + 0.06 * e;
+        this.dark = Math.max(this.dark, 0.75); this.darkUntil = performance.now() / 1000 + B;
+        this.later(B, () => {
+          this.dark = 0;
+          this.tint(hsv(30, 0.5, 1), 0.45, 0.3);
+          this.ring(x, y, hsv(40, 0.4, 1), { r1: 320 * big, life: 0.6, width: 9 });
+          this.ring(x, y, hsv(320, 0.8, 1), { r1: 240 * big, life: 0.7, width: 4, delay: 0.06 });
+          for (const h of [30, 0, 300, 270]) this.burst(x, y, Math.round(12 * I), hsv(h, 0.8, 1), { speed: 650, life: 0.8, size: 3 });
+          this.shakeBy(30 * I); this.slow = 0.12;
+        });
+        break;
+      }
+      default: break;
+    }
   }
 
-  floater(text, x, y, color, big = false) { this.floaters.push({ text, x, y, color, big, age: 0, life: big ? 1.4 : 0.9 }); }
+  /** A shout during FIGHT: teal sound-wave ripples from the shadow (visual only). */
+  shoutWave(k = 1) {
+    const g = this.bagGeom(), x = this.cx, y = g.top + (g.bot - g.top) * 0.3, sc = Math.min(this.W, 900) / 900;
+    for (let j = 0; j < 3; j++) this.ring(x, y, hsv(SHOUT_HUE + 12 * j, 0.55 - 0.12 * j, 1), { r0: 20, r1: (180 + 260 * k) * sc, life: 0.7 + 0.3 * k, width: 3 - 0.6 * j, delay: j * 0.11 });
+    this.tint(hsv(SHOUT_HUE, 0.6, 1), 0.06 * k, 0.25);
+  }
+
+  /** Full energy bar -> FIGHT: the screen sucks in, then a big ring at the impact (sfx ARENA_HIT = 0.35 s). */
+  fightOpen() {
+    const g = this.bagGeom(), x = this.cx, y = (g.top + g.bot) / 2, sc = Math.min(this.W, 900) / 900;
+    this.dark = 0.45; this.darkUntil = performance.now() / 1000 + 0.35;
+    this.later(0.35, () => {
+      this.dark = 0;
+      this.tint(hsv(32, 0.55, 1), 0.5, 0.45);
+      this.ring(x, y, hsv(40, 0.4, 1), { r0: 30, r1: 600 * sc + 100, life: 0.8, width: 10 });
+      this.ring(x, y, hsv(10, 0.9, 1), { r0: 20, r1: 420 * sc + 60, life: 0.9, width: 5, delay: 0.08 });
+      this.burst(x, y, 70, hsv(35, 0.7, 1), { speed: 700, up: 200, life: 1.0, size: 3 });
+      this.shakeBy(24);
+    });
+  }
+
+  floater(text, x, y, color, big = false, scale = 1) { this.floaters.push({ text, x, y, color, big, scale, age: 0, life: big ? 1.4 : 0.9 }); }
   showBanner(text, sub, dur = 2.2) { this.banner = { text, sub, t0: performance.now() / 1000, dur }; }
-  ko() { this.koFlash = 1; this.shake = 26; this.cracks = []; }
+  ko() { this.koFlash = 1; this.shakeBy(26); this.cracks = []; }
   resetDamage() { this.cracks = []; }
 
   step(dt) {
+    const now = performance.now() / 1000;
+    if (this.pending.length) {
+      const due = this.pending.filter((q) => q.at <= now); this.pending = this.pending.filter((q) => q.at > now);
+      for (const q of due) q.fn();
+    }
+    if (this.dark && now > (this.darkUntil ?? 0) + 0.05) this.dark *= Math.pow(0.001, dt);
+    for (const r of this.rings) r.age += dt;
+    this.rings = this.rings.filter((r) => r.age < r.life);
+    for (const b of this.bolts) b.age += dt;
+    this.bolts = this.bolts.filter((b) => b.age < b.life);
+    for (const tn of this.tints) tn.age += dt;
+    this.tints = this.tints.filter((tn) => tn.age < tn.life);
+    // Hit-stop: physics runs at 15% speed for a beat after a heavy.
+    if (this.slow > 0) { this.slow -= dt; dt *= 0.15; }
     // Damped pendulum + squash spring.
     const k = 18, damp = 2.6;
     this.swingV += (-k * this.swing - damp * this.swingV) * dt;
@@ -91,7 +230,7 @@ export class Scene {
     this.koFlash *= Math.pow(0.08, dt);
     for (const q of this.particles) {
       q.age += dt; q.x += q.vx * dt; q.y += q.vy * dt;
-      if (q.kind === 'spark') { q.vy += 900 * dt; q.vx *= Math.pow(0.2, dt); } else { q.vx *= Math.pow(0.05, dt); q.vy -= 60 * dt; }
+      if (q.kind === 'spark' || q.kind === 'shard') { q.vy += 900 * dt; q.vx *= Math.pow(0.2, dt); q.rot = (q.rot || 0) + (q.vr || 0) * dt; } else { q.vx *= Math.pow(0.05, dt); q.vy -= 60 * dt; }
     }
     this.particles = this.particles.filter((q) => q.age < q.life);
     for (const fl of this.floaters) fl.age += dt;
@@ -149,7 +288,32 @@ export class Scene {
     ctx.globalCompositeOperation = 'lighter';
     for (const q of this.particles) {
       const a = 1 - q.age / q.life;
-      if (q.kind === 'spark') { ctx.fillStyle = `rgba(255,${160 + 90 * a | 0},${60 * a | 0},${a})`; ctx.fillRect(q.x, q.y, q.size, q.size); }
+      if (q.kind === 'spark') {
+        ctx.fillStyle = q.col ? `rgba(${q.col[0] * 255 | 0},${q.col[1] * 255 | 0},${q.col[2] * 255 | 0},${a})` : `rgba(255,${160 + 90 * a | 0},${60 * a | 0},${a})`;
+        ctx.fillRect(q.x, q.y, q.size, q.size);
+      } else if (q.kind === 'shard') {
+        ctx.save(); ctx.translate(q.x, q.y); ctx.rotate(q.rot);
+        ctx.fillStyle = `rgba(${q.col[0] * 255 | 0},${q.col[1] * 255 | 0},${q.col[2] * 255 | 0},${a})`;
+        ctx.beginPath(); ctx.moveTo(0, -q.size); ctx.lineTo(q.size * 0.6, q.size * 0.7); ctx.lineTo(-q.size * 0.5, q.size * 0.4); ctx.closePath(); ctx.fill();
+        ctx.restore();
+      }
+    }
+    // impact rings
+    for (const r of this.rings) {
+      const k = r.age / r.life, ease = 1 - Math.pow(1 - k, 3), a = (1 - k) * Math.min(1, this.intensity);
+      ctx.strokeStyle = `rgba(${r.rgb[0] * 255 | 0},${r.rgb[1] * 255 | 0},${r.rgb[2] * 255 | 0},${a})`;
+      ctx.lineWidth = r.width * (1 - 0.6 * k) + 0.5;
+      ctx.beginPath(); ctx.ellipse(r.x, r.y, r.r0 + (r.r1 - r.r0) * ease, (r.r0 + (r.r1 - r.r0) * ease) * 0.62, 0, 0, Math.PI * 2); ctx.stroke();
+    }
+    // lightning bolts (re-jagged every frame)
+    for (const b of this.bolts) {
+      const a = 1 - b.age / b.life, [x0, y0] = b.from, [x1, y1] = b.to, seg = 9;
+      for (const [w, al] of [[7, 0.25], [2.2, 1]]) {
+        ctx.strokeStyle = `rgba(${b.rgb[0] * 255 | 0},${b.rgb[1] * 255 | 0},${b.rgb[2] * 255 | 0},${a * al})`; ctx.lineWidth = w;
+        ctx.beginPath(); ctx.moveTo(x0, y0);
+        for (let i = 1; i < seg; i++) { const u = i / seg, j = (Math.random() - 0.5) * 38; ctx.lineTo(x0 + (x1 - x0) * u + j, y0 + (y1 - y0) * u + j * 0.5); }
+        ctx.lineTo(x1, y1); ctx.stroke();
+      }
     }
     ctx.globalCompositeOperation = 'source-over';
     for (const q of this.particles) {
@@ -170,7 +334,7 @@ export class Scene {
     ctx.textAlign = 'center';
     for (const fl of this.floaters) {
       const a = 1 - fl.age / fl.life;
-      const sc = fl.big ? 1 + 0.4 * Math.min(1, fl.age * 6) : 1;
+      const sc = (fl.big ? 1 + 0.4 * Math.min(1, fl.age * 6) : 1) * (fl.scale || 1);
       ctx.font = `800 ${(fl.big ? 34 : 22) * sc | 0}px system-ui, sans-serif`;
       ctx.fillStyle = fl.color; ctx.globalAlpha = a;
       ctx.strokeStyle = 'rgba(0,0,0,0.8)'; ctx.lineWidth = 4;
@@ -179,6 +343,13 @@ export class Scene {
     }
     ctx.restore();
 
+    // colour tints (heavy flashes, strobe pops) and the blackout beat
+    if (this.dark > 0.02) { ctx.fillStyle = `rgba(0,0,0,${Math.min(0.9, this.dark)})`; ctx.fillRect(0, 0, W, H); }
+    if (this.tints.length) {
+      ctx.globalCompositeOperation = 'lighter';
+      for (const tn of this.tints) { const a = tn.a * (1 - tn.age / tn.life); ctx.fillStyle = `rgba(${tn.rgb[0] * 255 | 0},${tn.rgb[1] * 255 | 0},${tn.rgb[2] * 255 | 0},${a})`; ctx.fillRect(0, 0, W, H); }
+      ctx.globalCompositeOperation = 'source-over';
+    }
     if (this.koFlash > 0.02) { ctx.fillStyle = `rgba(255,240,220,${this.koFlash * 0.6})`; ctx.fillRect(0, 0, W, H); }
     if (v.state === S.Suspended) { ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillRect(0, 0, W, H); }
 

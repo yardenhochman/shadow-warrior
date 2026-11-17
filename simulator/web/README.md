@@ -138,7 +138,7 @@ the game clock so long fights and cooldowns go by quicker. The mic always runs i
 | `js/presence.js` | `src/services/presence.rs` | Faithful: `MicSource`, `PunchSource`, `PresenceFusion` (leaky accumulator, enter threshold, leave timeout, force) |
 | `js/wled.js` | `src/services/wled_manager.rs`, `config.yaml wled.effects` | "brain-rs" mode: approximations of WLED Breathe/Ocean, Rainbow, Fire 2012/Lava, plus the ported `generate_fight_frame` red pulse. "Sim proposal" mode is new |
 | `js/config.js` | `config.yaml`, `src/config.rs` defaults | Faithful defaults; export uses config.yaml key names and sections |
-| `js/scene.js`, `js/sfx.js`, `js/feature_source.js`, `js/main.js` | - | Simulator only |
+| `js/scene.js`, `js/sfx.js`, `js/hitfx.js`, `js/feature_source.js`, `js/main.js` | - | Simulator only |
 
 Music: as in `main.rs`, `FightStarted` starts music and sets `playback_active` (which
 raises the shout and presence margins), and `SessionEnded` stops it. The sim plays a
@@ -155,10 +155,30 @@ synthesised drum loop in its place.
   different VAD gate than on the Pi.
 - **Opponent**: health, damage (`power x damage_per_power x combo`), KO and respawn.
   Punches are power 0-100 events, without the IMU path.
-- **Sim proposal LED effects**: IDLE violet breathing with a rolling wave, WARMING
-  energy-bar fill that heats from blue to white with a flash on each shout, FIGHT
-  fire plus a shockwave per punch (full flash for >75 power) and a red warning in the
-  last 10 s, COOLDOWN embers that cool to calm blue.
+- **Sim proposal LED effects**: IDLE violet breathing with a rolling wave; WARMING an
+  energy bar in four stages (0-25 % calm deep-blue bar with a breathing glow above it,
+  25-50 % violet with sparks rising past the fill line, 50-75 % magenta-red with a
+  crackling fill line and a band chasing round the columns, 75-100 % red to orange to a
+  near-white top with flicker, strobe hints and lightning arcs between columns), each
+  shout a kick up the bar sized by its intensity; FIGHT fire that grows with punching
+  (candle when idle) and a red warning in the last 10 s; COOLDOWN embers that cool to
+  calm blue. Every proposal frame is capped at a mean LED level of 0.72 (`FRAME_CAP`),
+  so the real strip never gets a white wall.
+- **Punch signatures** (`js/hitfx.js`): each punch gets a named effect for its tier,
+  never the same one twice in a row, shared by the LEDs, the arena and the sound.
+  Jabs (< 45): a small spark, flick or twin dot in a rotating colour on one column.
+  Hooks (45-74): a band sweeping across the columns in the hook's direction, a coloured
+  ring, or a two-beat pop. Heavies (75+): THUNDER (blue-violet bolts), GOLD RUSH (spark
+  fountain), SHATTER (crimson flash breaking into falling shards), STROBE (colour pops),
+  SPLIT (green fronts from the inner columns outward), SUPERNOVA (blackout beat, then a
+  rainbow-fringed explosion), each with a hit-stop, rings, tint and its own sound layer.
+  Deep in a combo the big ones come more often and leave their colour on the column tops.
+  Tunables `hit_fx_variety` (0 = the old white flash) and `hit_fx_intensity`.
+- **Shouts in FIGHT**: visual only (brain-rs ignores them): a teal sound-wave ring on
+  the columns and on screen. Teal is kept out of the punch colours.
+- **Fight start**: the full bar opens the arena: the columns suck in, then explode into
+  the fire 0.35 s later, with a screen ring and a synthesised riser, sub boom, gong, war
+  drums and crowd swell on the same beat.
 
 ### brain-rs bugs found while porting (sim fixes are on by default)
 
