@@ -51,7 +51,8 @@ def main():
     if not BIN.exists():
         sys.exit(f"missing {BIN}; build first")
 
-    unit = (ROOT / "deploy/shadow-brain.service").read_text().replace("@USER@", a.user)
+    uid = subprocess.run(ssh + [f"id -u {shlex.quote(a.user)}"], check=True, capture_output=True, text=True).stdout.strip()
+    unit = (ROOT / "deploy/shadow-brain.service").read_text().replace("@USER@", a.user).replace("@UID@", uid)
     run(ssh + [f"mkdir -p ~/{STAGE}/src"])
     run(ssh + [f"cat > ~/{STAGE}/shadow-brain.service"], input=unit, text=True)
     run(["rsync", "-az", "-e", rsh, str(BIN), str(ROOT / "config.yaml"), f"{target}:{STAGE}/"])

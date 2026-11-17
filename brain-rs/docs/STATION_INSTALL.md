@@ -60,8 +60,53 @@ list but have not been run on hardware yet. Track work in beads, not here.
 - [ ] Select the adapter in `config.yaml` by hardware, never by `hciN` (the numbers swap
       between boots; verified): `ble.adapter: "usb:2357:0604"`. Other selectors: `usb`,
       `builtin`. A wrong value makes the brain log the available adapters.
-- [ ] Leave the onboard radio for the speakers (**untested**, see `shadow-warrior-b2r`).
-      Note the dongle becomes BlueZ's default controller.
+- [ ] Leave the onboard radio for the speakers unless the speaker sits far from the
+      board: the onboard radio is the weaker one (see section 0), and which adapter
+      suits the speakers depends on your layout (open question in `shadow-warrior-b2r`).
+      BlueZ's default controller can be either; check with `bluetoothctl list`.
+
+## 3b. Bluetooth speakers (verified with a UE BOOM 4 on 2026-11-17)
+
+BlueZ alone cannot play A2DP audio: without an audio server the pairing succeeds but
+the log says `a2dp-sink profile connect failed: Protocol not available`.
+
+- [ ] Install PipeWire (check first: `sudo apt-get install -s ...` must show **0 removals**):
+      ```
+      sudo apt-get install pipewire wireplumber libspa-0.2-bluetooth pipewire-alsa pipewire-pulse pulseaudio-utils
+      ```
+- [ ] PipeWire is a per-user service and the station has no login: enable lingering for the
+      service user, and tell WirePlumber not to wait for a login seat before enabling Bluetooth:
+      ```
+      sudo loginctl enable-linger warrior
+      mkdir -p ~/.config/wireplumber/wireplumber.conf.d
+      cat > ~/.config/wireplumber/wireplumber.conf.d/10-bluez-headless.conf <<'EOF'
+      wireplumber.profiles = {
+        main = {
+          monitor.bluez.seat-monitoring = disabled
+        }
+      }
+      EOF
+      export XDG_RUNTIME_DIR=/run/user/$(id -u)      # the uid is NOT necessarily 1000 (it was 1001)
+      systemctl --user enable --now pipewire.socket pipewire-pulse.socket wireplumber.service
+      ```
+      `RTKit` warnings in `wpctl status` are harmless.
+- [ ] Put the speaker in pairing mode, then (onboard controller shown; use `select` for another):
+      `sudo bluetoothctl --timeout 18 scan on` to find the address, then in one session
+      `agent NoInputNoOutput`, `default-agent`, `pair <addr>`, `trust <addr>`, `connect <addr>`.
+      Pairing prints `Pairing successful`; `trust` makes it reconnect by itself.
+- [ ] If the profile still says "Protocol not available" (the link came up before PipeWire
+      registered its A2DP endpoints), connect the profile directly:
+      `sudo busctl call org.bluez /org/bluez/hciN/dev_AA_BB_CC_DD_EE_FF org.bluez.Device1 ConnectProfile s 0000110b-0000-1000-8000-00805f9b34fb`.
+      `bluetoothctl connect` can hang; wrap it in `timeout`.
+- [ ] `XDG_RUNTIME_DIR=/run/user/<uid> wpctl status` lists the speaker under Audio > Sinks
+      (default sink `*`). Play a test: `pw-play tone.wav` and `aplay tone.wav` (the ALSA
+      `default` device is routed to PipeWire by `pipewire-alsa`).
+- [ ] The brain's unit already sets `XDG_RUNTIME_DIR` and starts after `user@<uid>.service`
+      (`deploy.py` fills in the uid). Not yet verified: the playlist playing through the
+      speaker from the brain, and surviving a speaker power-cycle (`shadow-warrior-67w`).
+- Side effect: once PipeWire is installed, the ALSA default also exposes a capture device,
+  so the brain's audio manager starts "successfully" even with **no microphone**, recording
+  silence; the health page then shows audio as connected. A real mic must be selected.
 
 ## 4. Deploy the brain
 
@@ -110,7 +155,7 @@ On your build machine (podman machine running; `just image` once):
       in about 10-30 s and fight mode is restored. Punches must not double (verified).
 - [ ] WLED: effects change with the arena state (**untested**, `shadow-warrior-2`).
 - [ ] Microphone: shout detection and clip recording (**untested**, `shadow-warrior-abr`, `-c6y`).
-- [ ] Speakers: pair, play the playlist, survive a reconnect (**untested**, `shadow-warrior-b2r`, `-67w`).
+- [ ] Speakers: pairing and a PipeWire sink verified (section 3b); the brain playing its playlist and surviving a speaker reconnect are **untested** (`shadow-warrior-b2r`, `-67w`).
 
 ## Pitfalls we hit
 
@@ -119,5 +164,6 @@ On your build machine (podman machine running; `just image` once):
 - `bluetoothctl scan on` runs an interleaved classic inquiry; to scan LE only use
   `bluetoothctl scan le`.
 - `btmgmt` exits at once when stdin is closed (background jobs); keep stdin open.
+- `apt-get -qq` hides removals: always run `apt-get install -s ...` and read every `Remv` line first.
 - A fight started through the API ends by itself after the inactivity timeout, which
   is easy to miss when testing by hand.
