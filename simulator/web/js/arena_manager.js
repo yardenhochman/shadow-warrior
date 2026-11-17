@@ -18,6 +18,7 @@ export class EnergyBar {
     const x = this.max > 0 ? this.current / this.max : 0;
     const g0 = this.gainStart ?? 1, g1 = this.gainEnd ?? 1;
     const added = intensity * this.multiplier * (g0 + (g1 - g0) * x);
+    this.lastAdded = Math.min(added, this.max - this.current);
     this.current = Math.min(this.current + added, this.max);
     this.eventBus.publish({ type: 'EnergyChanged', energy: this.current, max: this.max, added });
     if (this.current >= this.max) this.eventBus.publish({ type: 'EnergyFull' });

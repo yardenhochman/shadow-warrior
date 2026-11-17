@@ -91,7 +91,7 @@ bus.subscribe((e) => {
     case 'ShoutDetected': {
       game.shouts++; game.lastShout = e;
       const st = sm.currentState;
-      log(`ShoutDetected intensity=${e.intensity.toFixed(2)} dur=${e.duration_sec.toFixed(2)}s level=${e.level_db.toFixed(1)}dB${st === S.Warming ? ` (+${(e.intensity * cfg.shout_energy_multiplier).toFixed(1)} energy)` : ` (ignored: ${st})`}`, st === S.Warming ? 'shout' : 'ignored');
+      log(`ShoutDetected intensity=${e.intensity.toFixed(2)} dur=${e.duration_sec.toFixed(2)}s level=${e.level_db.toFixed(1)}dB${st === S.Warming ? ` (+${(arena.energyBar?.lastAdded ?? e.intensity * cfg.shout_energy_multiplier).toFixed(1)} energy)` : ` (ignored: ${st})`}`, st === S.Warming ? 'shout' : 'ignored');
       rig.shout(e.intensity); sfx.shout(e.intensity);
       const fl = $('shoutFlash'); fl.classList.add('on'); setTimeout(() => fl.classList.remove('on'), 120);
       if (st === S.Warming) scene.floater(`+${(e.intensity * cfg.shout_energy_multiplier).toFixed(0)}`, scene.W / 2 + (Math.random() < 0.5 ? -1 : 1) * (40 + Math.random() * 50), scene.bagGeom().top + 30, '#d6a8ff');
