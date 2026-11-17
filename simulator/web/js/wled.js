@@ -52,7 +52,7 @@ class Fire {
 }
 
 export class LedRig {
-  constructor(numLeds) { this.mode = 'proposal'; this.resize(numLeds); this.waves = []; this.flash = 0; this.shoutFlash = 0; this.lastT = null; }
+  constructor(numLeds) { this.mode = 'proposal'; this.resize(numLeds); this.waves = []; this.flash = 0; this.shoutFlash = 0; this.rage = 0; this.lastT = null; }
 
   resize(n) {
     this.n = n;
@@ -63,7 +63,9 @@ export class LedRig {
   /** Sim proposal: shockwave from the bag outwards (inner columns first). */
   punch(power) {
     const p = power / 100;
-    this.waves.push({ t0: performance.now() / 1000, p });
+    // Fight intensity: hard punches build it fast, light ones barely; it fades in a few seconds.
+    this.rage = Math.min(1, this.rage + 0.08 + 0.4 * p * p);
+    this.waves.push({ t0: performance.now() / 1000, p: p * p * 1.3 }); // light taps = small ripple
     if (p > 0.75) this.flash = Math.max(this.flash, p);
     if (this.waves.length > 24) this.waves.shift();
   }
@@ -81,6 +83,7 @@ export class LedRig {
     if (this.mode === 'brain-rs') this.renderBrainRs(state, t, frameScale);
     else this.renderProposal(state, t, g, frameScale);
     this.flash *= Math.pow(0.04, dt);
+    this.rage *= Math.pow(0.72, dt); // ~3 s half-life: stop punching and it sinks back to a candle
     this.shoutFlash *= Math.pow(0.05, dt);
     this.waves = this.waves.filter((w) => t - w.t0 < 2.5);
   }
@@ -184,13 +187,19 @@ export class LedRig {
       case ArenaState.Fight: {
         const left = g.fightRemaining ?? 99;
         const warn = left < 10 ? (0.5 + 0.5 * Math.sin(t * 12)) : 0;
+        // No punches: a low candle flicker at the base. More/harder punches: the fire grows
+        // taller and brighter until it fills the columns.
+        const rg = this.rage, gain = 0.1 + 0.9 * Math.pow(rg, 0.7);
         for (let c = 0; c < COLUMNS; c++) {
-          this.fires[c].step(70, 110, frameScale);
+          this.fires[c].step(lerp(160, 55, rg), lerp(25, 170, rg), frameScale);
           for (let i = 0; i < n; i++) {
             const x = i / n;
-            let [r, gg, b] = samplePalClamp(HEAT, this.fires[c].heat[i] * 0.85);
-            const pulse = 0.12 + 0.08 * Math.sin(t * 8.4); // ~80 bpm throb
-            r = Math.max(r, pulse * (1 - x * 0.6));
+            let [r, gg, b] = samplePalClamp(HEAT, this.fires[c].heat[i] * lerp(0.55, 0.9, rg));
+            r *= gain; gg *= gain; b *= gain;
+            const flick = 0.5 + 0.5 * Math.sin(t * 13 + c * 1.7) * Math.sin(t * 7.3 + c);
+            const candle = (0.035 + 0.025 * flick) * Math.max(0, 1 - x * 4); // bottom quarter only
+            const pulse = (0.02 + 0.13 * rg) * (0.6 + 0.4 * Math.sin(t * 8.4)) * (1 - x * 0.6); // throb grows with rage
+            r = Math.max(r, candle, pulse); gg = Math.max(gg, candle * 0.35);
             const w = this.waveAt(c, i, t);
             r += w * 1.0; gg += w * 0.75; b += w * 0.45;
             const f = this.flash * 0.8; r += f; gg += f; b += f;
