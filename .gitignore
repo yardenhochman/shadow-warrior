@@ -25,3 +25,9 @@ punching_bag/.claude/
 .vscode/
 .playwright-mcp/
 .claude/worktrees/
+
+# Fight music (downloaded by music/fetch.sh, not committed)
+music/*.mp3
+
+# Screenshots from simulator/web/test/e2e.mjs
+sim-shots/
