@@ -119,8 +119,9 @@ the log says `a2dp-sink profile connect failed: Protocol not available`.
       every `check_interval_sec` the brain reconnects a dropped speaker and re-requests the A2DP
       profile (retrying "operation in progress"), backing off up to `max_backoff_sec` while it
       keeps failing, and reports `hardware.health.speaker` plus `Speaker*` events.
-      Measured: BlueZ-level drop -> audio back after about 9 s; real power-off/on -> lost
-      detected at once, connected again about 15 s after the drop, no manual step.
+      Measured: BlueZ-level drop -> audio back after about 9 s; real power-off for 55 s, then on ->
+      lost detected within ~3 s, audio back about 10 s after the speaker came up (the backoff
+      during a long outage does not delay it), no manual step.
 - **Warning: with no microphone the brain "listens" to its own music.** Once PipeWire is
   installed the ALSA default also exposes a capture device, so the audio manager starts
   "successfully" without a mic, but PipeWire links that capture stream to the speaker's

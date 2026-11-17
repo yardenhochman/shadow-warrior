@@ -38,6 +38,8 @@ pub struct SpeakerWatcher {
     /// Longest wait (in ticks) between attempts while failing.
     max_backoff_ticks: u32,
     healthy: bool,
+    /// The last check found the link itself down (as opposed to audio failing on a live link).
+    link_down: bool,
     fails: u32,
     /// Ticks still to skip before the next attempt.
     wait: u32,
@@ -57,6 +59,7 @@ impl SpeakerWatcher {
             bus,
             max_backoff_ticks: max_backoff_ticks.max(1),
             healthy: false,
+            link_down: false,
             fails: 0,
             wait: 0,
             last_error: None,
@@ -73,8 +76,16 @@ impl SpeakerWatcher {
     /// One supervision step; call every check interval.
     pub async fn tick(&mut self, link: &dyn SpeakerLink) {
         if self.wait > 0 {
-            self.wait -= 1;
-            return;
+            // Backoff throttles reconnect *attempts*, not this cheap passive check: a speaker
+            // that was down and is switched back on reconnects itself and should be picked up
+            // right away (measured: waiting out the backoff delayed the audio by ~18 s). A
+            // live link whose audio keeps failing stays throttled.
+            if self.link_down && matches!(link.is_connected().await, Ok(true)) {
+                self.wait = 0;
+            } else {
+                self.wait -= 1;
+                return;
+            }
         }
         match self.check(link).await {
             Ok(()) => {
@@ -93,9 +104,11 @@ impl SpeakerWatcher {
 
     async fn check(&mut self, link: &dyn SpeakerLink) -> Result<()> {
         if !link.is_connected().await.context("checking link")? {
+            self.link_down = true;
             self.mark_down();
             link.connect().await.context("connect")?;
         }
+        self.link_down = false;
         let mut result = Ok(());
         for attempt in 1..=AUDIO_ATTEMPTS {
             result = link.ensure_audio().await;
@@ -418,5 +431,19 @@ mod tests {
         let _g = rt.enter();
         assert!(spawn(SpeakerConfig::default(), bus.clone()).is_none());
         assert!(spawn(SpeakerConfig { address: Some("  ".into()), ..Default::default() }, bus).is_none());
+    }
+
+    #[tokio::test]
+    async fn speaker_that_reconnects_itself_is_picked_up_during_backoff() {
+        let (mut w, mut rx) = setup(100);
+        let link = Fake::new(false);
+        *link.connect.lock().unwrap() = Err("device not available".into());
+        w.tick(&link).await; // attempt fails, long wait queued
+        drain(&mut rx);
+
+        *link.connected.lock().unwrap() = true; // speaker switched back on, links by itself
+        w.tick(&link).await;
+        assert_eq!(drain(&mut rx), ["SpeakerConnected", "SpeakerAlive"]);
+        assert_eq!(link.count("connect"), 1, "no extra connect attempt was needed");
     }
 }
