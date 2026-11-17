@@ -208,7 +208,7 @@ impl WledManager {
                         warn!("UDP socket for {} not usable: {}", controller.ip, e);
                         continue;
                     }
-                    let addr = format!("{}:21324", controller.ip);
+                    let addr = realtime_addr(&controller.ip);
                     match socket.connect(&addr) {
                         Ok(()) => {
                             info!("UDP socket connected to {}", addr);
@@ -584,7 +584,20 @@ impl WledManager {
     }
 }
 
-/// Convert HSV to RGB
+/// WLED's UDP realtime port.
+const REALTIME_PORT: u16 = 21324;
+
+/// UDP realtime target for a controller address. `ip` may carry an HTTP port
+/// (`"192.168.1.5:8090"`, e.g. the browser simulator's bridge standing in for WLED);
+/// the HTTP calls use it as given and realtime goes to that host's port 21324.
+fn realtime_addr(ip: &str) -> String {
+    let host = match ip.rsplit_once(':') {
+        Some((host, port)) if !host.contains(':') && port.parse::<u16>().is_ok() => host,
+        _ => ip,
+    };
+    format!("{host}:{REALTIME_PORT}")
+}
+
 /// Seconds WLED stays in realtime mode after the last frame before it resumes its own effect.
 const REALTIME_TIMEOUT_SEC: u8 = 2;
 /// DRGB carries at most 490 LEDs per packet; DNRGB at most 489 per packet.
@@ -616,6 +629,7 @@ fn encode_realtime_frames(rgb: &[u8], timeout_sec: u8) -> Vec<Vec<u8>> {
         .collect()
 }
 
+/// Convert HSV to RGB
 fn hsv_to_rgb(h: f32, s: f32, v: f32) -> (u8, u8, u8) {
     let c = v * s;
     let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
@@ -829,6 +843,33 @@ mod tests {
         assert_eq!((buf[0], n), (2, 2 + 30 * 3));
         let (n, _) = b.recv_from(&mut buf).unwrap();
         assert_eq!((buf[0], n), (2, 2 + 200 * 3));
+        wled.stop_realtime_mode().await;
+    }
+
+    #[test]
+    fn realtime_addr_strips_an_http_port() {
+        assert_eq!(realtime_addr("192.168.1.203"), "192.168.1.203:21324");
+        assert_eq!(realtime_addr("wled.local"), "wled.local:21324");
+        assert_eq!(realtime_addr("127.0.0.1:8090"), "127.0.0.1:21324");
+        assert_eq!(realtime_addr("pi.local:8090"), "pi.local:21324");
+    }
+
+    /// A controller given as host:port (HTTP port) still gets realtime on host:21324.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn realtime_goes_to_port_21324_of_a_host_port_controller() {
+        let rx = std::net::UdpSocket::bind("127.0.0.4:21324").unwrap();
+        rx.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let config = Config::default();
+        let db = Arc::new(DatabaseManager::new("sqlite::memory:").await.unwrap());
+        let bus: SharedEventBus = Arc::new(EventBus::new(100));
+        let wled = WledManager::new(config.wled.clone(), db, bus);
+        *wled.controllers.write().await = vec![WledController { ip: "127.0.0.4:8090".into(), num_leds: 12 }];
+        wled.rebuild_sockets().await.unwrap();
+        assert!(wled.get_status().await[0].connected);
+        wled.start_realtime_mode(ArenaState::Fight).await.unwrap();
+        let mut buf = [0u8; 256];
+        let (n, _) = rx.recv_from(&mut buf).unwrap();
+        assert_eq!((buf[0], n), (2, 2 + 12 * 3));
         wled.stop_realtime_mode().await;
     }
 
