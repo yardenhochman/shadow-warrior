@@ -99,6 +99,7 @@ music:
     - "mp3"
     - "flac"
     - "wav"
+    - "m4a"
   shuffle: true
   volume: 0.8
 

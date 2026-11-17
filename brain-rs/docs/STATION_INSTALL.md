@@ -104,9 +104,28 @@ the log says `a2dp-sink profile connect failed: Protocol not available`.
 - [ ] The brain's unit already sets `XDG_RUNTIME_DIR` and starts after `user@<uid>.service`
       (`deploy.py` fills in the uid). Not yet verified: the playlist playing through the
       speaker from the brain, and surviving a speaker power-cycle (`shadow-warrior-67w`).
-- Side effect: once PipeWire is installed, the ALSA default also exposes a capture device,
-  so the brain's audio manager starts "successfully" even with **no microphone**, recording
-  silence; the health page then shows audio as connected. A real mic must be selected.
+- **Warning: with no microphone the brain "listens" to its own music.** Once PipeWire is
+  installed the ALSA default also exposes a capture device, so the audio manager starts
+  "successfully" without a mic, but PipeWire links that capture stream to the speaker's
+  *output monitor* (`wpctl status` shows `input_FL < BOOM 4:monitor_FL`). Shout detection and
+  presence would then react to the playlist, and the health page shows audio as connected.
+  A real microphone must be the default source (see `shadow-warrior-abr`, `-c6y`); tracked in
+  the beads issue about the monitor capture.
+
+## 3c. Music
+
+- [ ] Download on a build machine, audio only and **without re-encoding**: YouTube's native
+      AAC stream is `m4a`, which the brain decodes (Opus/webm it cannot):
+      ```
+      yt-dlp -f "bestaudio[acodec^=mp4a]" --restrict-filenames --no-overwrites --ignore-errors \
+        -o "%(playlist_index)02d_%(title).80s.%(ext)s" "<playlist url>"
+      ```
+- [ ] `rsync` them to `/opt/shadow-brain/music/` and make sure `music.formats` lists the
+      extension (`m4a` is in the repo default; mp3, flac and wav also work). The brain loads the
+      playlist at startup, so restart the service. Verified: 18 `m4a` tracks load and the
+      brain starts playing when a fight begins.
+- [ ] Tracks come out at very different loudness (measured -15.1 to -3.4 LUFS, two peak above
+      0 dBFS); decide on normalisation before an event. Only use music you may play publicly.
 
 ## 4. Deploy the brain
 
