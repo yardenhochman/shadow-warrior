@@ -4,10 +4,11 @@
 # ///
 """Normalise a folder of tracks to one loudness (EBU R128, two-pass loudnorm).
 
-    uv run deploy/normalize_music.py ~/shadow-warrior-music [--lufs -14] [--tp -1.0]
+    uv run deploy/normalize_music.py ~/shadow-warrior-music [--lufs -14] [--tp -1.0] [--format flac|m4a]
 
-Reads every .m4a/.mp3/.flac/.wav/.ogg in SRC and writes AAC .m4a files to SRC/normalized/
-(originals untouched). Pass 1 measures, pass 2 applies a plain gain where the true-peak
+Reads every .m4a/.mp3/.flac/.wav/.ogg/.opus/.webm in SRC and writes 16-bit FLAC (default; no second
+lossy encode, works on any ffmpeg) or AAC .m4a (`--format m4a`, needs macOS's aac_at) to
+SRC/normalized/ (originals untouched). Pass 1 measures, pass 2 applies a plain gain where the true-peak
 limit allows (no dynamic compression; loudnorm limits only when it must), then every output is re-measured and a before/after
 table is printed. The brain plays whatever is in its music dir at the level it finds it, so
 this is the only place loudness is evened out.
@@ -20,7 +21,7 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 
-EXTS = {".m4a", ".mp3", ".flac", ".wav", ".ogg"}
+EXTS = {".m4a", ".mp3", ".flac", ".wav", ".ogg", ".opus", ".webm"}
 
 
 def ffmpeg(args):
@@ -44,7 +45,7 @@ def integrated(path: pathlib.Path) -> tuple[float, float]:
     return float(lufs[-1]), float(peak[-1])
 
 
-def normalise(src: pathlib.Path, dst: pathlib.Path, i: float, tp: float, bitrate: str) -> None:
+def normalise(src: pathlib.Path, dst: pathlib.Path, i: float, tp: float, bitrate: str, fmt: str) -> None:
     m = measure(src, i, tp)
     gain = i - float(m["input_i"])
     if float(m["input_tp"]) + gain <= tp:
@@ -57,8 +58,11 @@ def normalise(src: pathlib.Path, dst: pathlib.Path, i: float, tp: float, bitrate
             f"loudnorm=I={i}:TP={tp}:LRA=11:measured_I={m['input_i']}:measured_TP={m['input_tp']}"
             f":measured_LRA={m['input_lra']}:measured_thresh={m['input_thresh']}:offset={m['target_offset']}:linear=true"
         )
-    r = ffmpeg(["-y", "-i", str(src), "-vn", "-map_metadata", "0", "-af", flt, "-ar", "44100",
-                "-c:a", "aac_at", "-b:a", bitrate, "-movflags", "+faststart", str(dst)])
+    if fmt == "flac":
+        codec = ["-c:a", "flac", "-sample_fmt", "s16"]
+    else:
+        codec = ["-ar", "44100", "-c:a", "aac_at", "-b:a", bitrate, "-movflags", "+faststart"]
+    r = ffmpeg(["-y", "-i", str(src), "-vn", "-map_metadata", "0", "-af", flt, *codec, str(dst)])
     if r.returncode != 0:
         raise RuntimeError(f"encode failed for {src.name}: {r.stderr[-300:]}")
 
@@ -68,7 +72,9 @@ def main() -> None:
     ap.add_argument("src", type=pathlib.Path)
     ap.add_argument("--lufs", type=float, default=-14.0, help="target integrated loudness (default -14)")
     ap.add_argument("--tp", type=float, default=-1.0, help="true-peak ceiling in dBTP (default -1.0)")
-    ap.add_argument("--bitrate", default="192k")
+    ap.add_argument("--format", choices=["flac", "m4a"], default="flac",
+                    help="output: 16-bit FLAC (default) or AAC m4a (macOS aac_at only)")
+    ap.add_argument("--bitrate", default="192k", help="AAC bitrate for --format m4a")
     ap.add_argument("--jobs", type=int, default=4)
     a = ap.parse_args()
 
@@ -79,9 +85,9 @@ def main() -> None:
     out.mkdir(exist_ok=True)
 
     def work(p: pathlib.Path):
-        dst = out / (p.stem + ".m4a")
+        dst = out / (p.stem + "." + a.format)
         before = integrated(p)
-        normalise(p, dst, a.lufs, a.tp, a.bitrate)
+        normalise(p, dst, a.lufs, a.tp, a.bitrate, a.format)
         return p, before, integrated(dst)
 
     with ThreadPoolExecutor(a.jobs) as ex:

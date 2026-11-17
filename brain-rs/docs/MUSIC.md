@@ -40,24 +40,29 @@ you may play publicly before an event.
 
 ## Rebuilding the library
 
-On a build machine (macOS here), not on the station; the files are not in git.
+On a build machine, not on the station; the files are not in git.
 
-1. Download the native AAC audio, no re-encoding (`m4a`; the brain cannot decode the Opus/webm
-   streams):
+1. Download YouTube's best audio stream (Opus, about 125 kbps / 48 kHz; there is no
+   better YouTube stream):
    ```
-   yt-dlp -f "bestaudio[acodec^=mp4a]" --restrict-filenames --no-overwrites --ignore-errors \
+   yt-dlp -f bestaudio --restrict-filenames --no-overwrites --ignore-errors \
      -o "%(playlist_index)02d_%(title).80s.%(ext)s" "https://www.youtube.com/playlist?list=PLDwQ9Bbo4Ol8"
    ```
-   Files used so far: `~/shadow-warrior-music/` (AAC 44.1 kHz stereo, 128 kbps, 74 MB).
-2. Even out the loudness (the raw tracks span -15.1 to -3.4 LUFS and two clip):
+2. Even out the loudness and store as 16-bit FLAC (the raw tracks span about -15 to -3 LUFS
+   and some clip):
    ```
    uv run deploy/normalize_music.py ~/shadow-warrior-music
    ```
-   Writes `normalized/*.m4a` at -14 LUFS (spread 0.1 LU, peaks below 0 dBFS, AAC 192k, 111 MB).
-3. Copy to the station and restart:
+   Writes `normalized/*.flac` at -14 LUFS, true peak at most -1 dBTP: only a gain change,
+   no second lossy encode (about 490 MB for the 18 tracks). FLAC decodes on every build and
+   is in the default `music.formats`. `--format m4a` still writes AAC 192k instead, but
+   needs macOS's `aac_at` encoder.
+   The Bluetooth speakers (JBL Charge 4 / Flip 6) receive SBC only, so a lossless CD
+   source would not sound better through them.
+3. Copy to the station's music dir and restart:
    ```
-   rsync -a --delete -e "ssh ..." ~/shadow-warrior-music/normalized/ warrior@<station>:/opt/shadow-brain/music/
-   ssh warrior@<station> sudo systemctl restart shadow-brain
+   rsync -a --delete -e "ssh ..." ~/shadow-warrior-music/normalized/ <user>@<station>:<music dir>/
+   ssh <user>@<station> sudo systemctl restart shadow-brain
    ```
 
 At -14 LUFS the music is quieter than the raw tracks (most were -7 to -10), so raise
