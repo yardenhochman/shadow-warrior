@@ -72,6 +72,8 @@ pub trait AudioPlayer: Send + Sync {
     /// Decode `path` and append it to the queue.
     fn enqueue(&self, path: &Path) -> Result<()>;
     fn stop(&self);
+    /// Output volume (linear), applied now and to tracks queued later.
+    fn set_volume(&self, volume: f32);
 }
 
 struct RodioPlayer(Player);
@@ -90,6 +92,10 @@ impl AudioPlayer for RodioPlayer {
 
     fn stop(&self) {
         self.0.stop();
+    }
+
+    fn set_volume(&self, volume: f32) {
+        self.0.set_volume(volume);
     }
 }
 
@@ -110,6 +116,8 @@ pub struct MusicManager {
     queued_names: Arc<RwLock<VecDeque<String>>>,
     playing: Arc<RwLock<bool>>,
     cursor: Arc<RwLock<PlaylistCursor>>,
+    /// Ducking factor 0..1 from the sound manager, times `config.volume` (1.0 = not ducked).
+    duck: Arc<RwLock<f32>>,
 }
 
 impl MusicManager {
@@ -123,6 +131,16 @@ impl MusicManager {
             queued_names: Arc::new(RwLock::new(VecDeque::new())),
             playing: Arc::new(RwLock::new(false)),
             cursor: Arc::new(RwLock::new(PlaylistCursor::default())),
+            duck: Arc::new(RwLock::new(1.0)),
+        }
+    }
+
+    /// Duck the music under a sound cue: `factor` 1.0 restores the configured volume.
+    pub async fn set_duck(&self, factor: f32) {
+        let factor = factor.clamp(0.0, 1.0);
+        *self.duck.write().await = factor;
+        if let Some(sink) = self.sink.read().await.as_ref() {
+            sink.set_volume(self.config.volume * factor);
         }
     }
 
@@ -195,7 +213,7 @@ impl MusicManager {
             })
             .context("Failed to create audio output")?;
         let player = Player::connect_new(device_sink.mixer());
-        player.set_volume(self.config.volume);
+        player.set_volume(self.config.volume * *self.duck.read().await);
 
         // Leak the device_sink to keep the audio stream alive
         Box::leak(Box::new(device_sink));
@@ -379,6 +397,7 @@ mod tests {
     struct FakePlayer {
         queue: Mutex<Vec<PathBuf>>,
         fail: Mutex<Vec<PathBuf>>,
+        volume: Mutex<f32>,
     }
 
     impl AudioPlayer for Arc<FakePlayer> {
@@ -394,6 +413,9 @@ mod tests {
         }
         fn stop(&self) {
             self.queue.lock().unwrap().clear();
+        }
+        fn set_volume(&self, volume: f32) {
+            *self.volume.lock().unwrap() = volume;
         }
     }
 
@@ -423,6 +445,17 @@ mod tests {
         *m.current_track.write().await = Some(track_name(Path::new(tracks[0])));
         *m.playing.write().await = true;
         (m, fake)
+    }
+
+    #[tokio::test]
+    async fn set_duck_scales_configured_volume_and_restores() {
+        let (m, fake) = manager(&["a.mp3"]).await;
+        m.set_duck(0.25).await;
+        assert_eq!(*fake.volume.lock().unwrap(), 0.25);
+        m.set_duck(1.0).await;
+        assert_eq!(*fake.volume.lock().unwrap(), 1.0);
+        m.set_duck(7.0).await; // clamped
+        assert_eq!(*fake.volume.lock().unwrap(), 1.0);
     }
 
     #[tokio::test]

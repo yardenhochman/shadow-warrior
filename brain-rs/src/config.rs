@@ -22,6 +22,8 @@ pub struct Config {
     pub ble_status: BleStatusConfig,
     #[serde(default)]
     pub speaker: SpeakerConfig,
+    #[serde(default)]
+    pub sound: SoundConfig,
 }
 
 /// Keeps one paired+trusted Bluetooth speaker connected (services/speaker_manager.rs).
@@ -43,6 +45,64 @@ pub struct SpeakerConfig {
 impl Default for SpeakerConfig {
     fn default() -> Self {
         Self { address: None, adapter: None, check_interval_sec: 10, max_backoff_sec: 60 }
+    }
+}
+
+/// Event-triggered sound effects and voice lines (services/sound_manager.rs).
+/// Off unless `enabled`; see docs/SOUND.md.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(default)]
+pub struct SoundConfig {
+    pub enabled: bool,
+    /// Cue files are looked up under this directory.
+    pub dir: PathBuf,
+    /// Master gain for all cues (linear).
+    pub volume: f32,
+    /// Music level while a cue plays, in dB (negative = quieter).
+    pub music_duck_db: f32,
+    /// Music stays ducked this long after the last cue ends.
+    pub duck_ms: u64,
+    /// Cues playing at once; further triggers are dropped.
+    pub max_concurrent: usize,
+    /// Punch power below this is a jab; from `heavy_from` up is a heavy; between is a hook.
+    pub hook_from: f32,
+    pub heavy_from: f32,
+    /// Cue name -> files. Names: `session_started`, `energy_full`, `fight_started`,
+    /// `fight_ended` (fallback) / `fight_ended_time_elapsed` / `fight_ended_inactivity` /
+    /// `fight_ended_manual`, `punch_jab`, `punch_hook`, `punch_heavy`.
+    pub cues: std::collections::BTreeMap<String, CueConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(default)]
+pub struct CueConfig {
+    /// Files under `sound.dir`; one is picked at random, never the same one twice in a row.
+    pub files: Vec<String>,
+    /// Linear gain on top of `sound.volume`.
+    pub gain: f32,
+    /// Triggers closer than this to the last play of the same cue are dropped.
+    pub min_interval_ms: u64,
+}
+
+impl Default for CueConfig {
+    fn default() -> Self {
+        Self { files: Vec::new(), gain: 1.0, min_interval_ms: 0 }
+    }
+}
+
+impl Default for SoundConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            dir: PathBuf::from("./sounds"),
+            volume: 1.0,
+            music_duck_db: -9.0,
+            duck_ms: 300,
+            max_concurrent: 4,
+            hook_from: 45.0,
+            heavy_from: 75.0,
+            cues: Default::default(),
+        }
     }
 }
 
@@ -534,6 +594,7 @@ impl Default for Config {
             presence: PresenceConfig::default(),
             ble_status: BleStatusConfig::default(),
             speaker: SpeakerConfig::default(),
+            sound: SoundConfig::default(),
         }
     }
 }
