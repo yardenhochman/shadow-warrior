@@ -73,7 +73,13 @@ All colours and timings live in style structs (`EnergyBarStyle`, `ShoutGlowStyle
 
 ## Status
 
-- Built and tested: compositor, `EnergyBar`, `ShoutGlow`.
-- Not yet wired: `wled_manager`'s realtime loop still draws the old rainbow (warming) and
-  pulsing red (fight) frames. Tracked in beads (`shadow-warrior-19b`).
+- Built and tested: compositor, `EnergyBar`, `ShoutGlow`, `LiveInputs` (event smoothing).
+- **Warming is wired**: `wled_manager`'s realtime loop renders `led::scenes::warming(len)` per
+  controller (rebuilt when the device reports a different LED count) at `udp_fps`, using real
+  `dt`. Inputs come from the event bus: `EnergyChanged` -> `energy / max_energy` clamped to 0..1;
+  `ShoutDetected` -> `shout = max(shout, intensity)`, decaying with tau 0.35 s per frame.
+  Frames are sent every tick even when nothing changes (WLED realtime timeout is 2 s).
+  Verified only by tests and the filmstrip preview; not yet seen on a strip.
+- Not yet wired: fight still draws the old pulsing red (`Scene::Fight` in `wled_manager.rs` is
+  the seam for the new scene). Tracked in beads (`shadow-warrior-19b`).
 - Controller power limit (`maxpwr` 1000 mA) is unchanged until the strip's PSU rating is known.

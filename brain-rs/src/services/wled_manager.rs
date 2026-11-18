@@ -3,15 +3,17 @@ use reqwest::Client;
 use serde_json::json;
 use std::net::UdpSocket;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use tokio::sync::broadcast::error::TryRecvError;
 use tokio::sync::RwLock;
 use tokio::time::interval;
 use tracing::{debug, error, info, warn};
 
-use crate::config::{WledConfig, WledEffect, WledController};
+use crate::config::{WledConfig, WledController, WledEffect};
 use crate::core::{ArenaState, Event, SharedEventBus};
-use crate::services::database_manager::SharedDatabaseManager;
+use crate::led::{scenes, Compositor, Inputs, LiveInputs};
 use crate::models::WledStatus;
+use crate::services::database_manager::SharedDatabaseManager;
 
 mod health;
 mod protocol;
@@ -19,7 +21,9 @@ use health::LinkHealth;
 
 /// Idle liveness poll period; well under `server.health_stale_sec`.
 const HEALTH_POLL_INTERVAL: Duration = Duration::from_secs(30);
-use protocol::{build_effect_payload, fetch_name_list, post_state, resolve_effect_id, resolve_palette_id};
+use protocol::{
+    build_effect_payload, fetch_name_list, post_state, resolve_effect_id, resolve_palette_id,
+};
 
 pub struct WledManager {
     config: WledConfig,
@@ -63,14 +67,17 @@ impl WledManager {
     pub(crate) async fn set_controllers_for_test(&self, ips: &[&str]) {
         *self.controllers.write().await = ips
             .iter()
-            .map(|ip| WledController { ip: ip.to_string(), num_leds: 10 })
+            .map(|ip| WledController {
+                ip: ip.to_string(),
+                num_leds: 10,
+            })
             .collect();
     }
 
     /// Initialize UDP sockets for realtime control
     pub async fn start(&self) -> Result<()> {
         let mut loaded_controllers = self.config.controllers.clone();
-        
+
         // Add controllers from database
         if let Ok(db_devices) = self.db.get_devices().await {
             for dev in db_devices {
@@ -85,9 +92,12 @@ impl WledManager {
                 }
             }
         }
-        
-        info!("Starting WLED manager with {} controllers", loaded_controllers.len());
-        
+
+        info!(
+            "Starting WLED manager with {} controllers",
+            loaded_controllers.len()
+        );
+
         *self.controllers.write().await = loaded_controllers.clone();
 
         // Offline-tolerant: an unreachable/unresolvable controller is skipped
@@ -117,7 +127,10 @@ impl WledManager {
             if controllers.iter().any(|c| c.ip == ip) {
                 return Ok(());
             }
-            controllers.push(WledController { ip: ip.clone(), num_leds: 150 });
+            controllers.push(WledController {
+                ip: ip.clone(),
+                num_leds: 150,
+            });
         }
         self.rebuild_sockets().await?;
 
@@ -127,7 +140,13 @@ impl WledManager {
             "seg": [{ "id": 0, "fx": 0, "col": [[0, 255, 0]] }]
         });
         let url = format!("http://{}/json/state", ip);
-        if let Err(e) = self.http_client.post(&url).json(&green_payload).send().await {
+        if let Err(e) = self
+            .http_client
+            .post(&url)
+            .json(&green_payload)
+            .send()
+            .await
+        {
             self.link.fail(&ip, &e);
             warn!("Green flash failed for {}: {}", ip, e);
         } else {
@@ -166,8 +185,14 @@ impl WledManager {
 
             if effect.effect != "realtime" {
                 let effect_id: u8 = match effect.effect.to_lowercase().as_str() {
-                    "solid" => 0, "blink" => 1, "breathe" => 2, "wipe" => 3,
-                    "scan" => 5, "rainbow" => 8, "twinkle" => 15, "fire" | "fireworks" => 16,
+                    "solid" => 0,
+                    "blink" => 1,
+                    "breathe" => 2,
+                    "wipe" => 3,
+                    "scan" => 5,
+                    "rainbow" => 8,
+                    "twinkle" => 15,
+                    "fire" | "fireworks" => 16,
                     _ => 0,
                 };
                 let payload = serde_json::json!({
@@ -308,7 +333,13 @@ impl WledManager {
     }
 
     async fn fetch_names(&self, path: &str, cache: &RwLock<Vec<String>>) -> Result<Vec<String>> {
-        let ips: Vec<String> = self.controllers.read().await.iter().map(|c| c.ip.clone()).collect();
+        let ips: Vec<String> = self
+            .controllers
+            .read()
+            .await
+            .iter()
+            .map(|c| c.ip.clone())
+            .collect();
         for ip in &ips {
             match fetch_name_list(&self.http_client, ip, path).await {
                 Ok(list) => {
@@ -338,10 +369,19 @@ impl WledManager {
             None => Vec::new(),
         };
         let effect_id = resolve_effect_id(&effect.effect, &effects);
-        let palette_id = effect.palette.as_deref().map(|p| resolve_palette_id(p, &palettes));
+        let palette_id = effect
+            .palette
+            .as_deref()
+            .map(|p| resolve_palette_id(p, &palettes));
         let payload = build_effect_payload(effect, effect_id, palette_id);
 
-        let ips: Vec<String> = self.controllers.read().await.iter().map(|c| c.ip.clone()).collect();
+        let ips: Vec<String> = self
+            .controllers
+            .read()
+            .await
+            .iter()
+            .map(|c| c.ip.clone())
+            .collect();
         let mut ok = 0;
         for ip in &ips {
             match post_state(&self.http_client, ip, &payload).await {
@@ -369,10 +409,15 @@ impl WledManager {
             match self.http_client.post(&url).json(&payload).send().await {
                 Ok(resp) if resp.status().is_success() => {
                     self.link.ok(&controller.ip);
-                    info!("Set power {} on {}", if on { "on" } else { "off" }, controller.ip);
+                    info!(
+                        "Set power {} on {}",
+                        if on { "on" } else { "off" },
+                        controller.ip
+                    );
                 }
                 Ok(resp) => {
-                    self.link.fail(&controller.ip, format!("status {}", resp.status()));
+                    self.link
+                        .fail(&controller.ip, format!("status {}", resp.status()));
                     error!("Set power on {} returned {}", controller.ip, resp.status());
                 }
                 Err(e) => {
@@ -394,27 +439,40 @@ impl WledManager {
 
         let sockets = self.udp_sockets.clone();
         let link = self.link.clone();
-        let fps = self.config.udp_fps;
-        
+        let fps = self.config.udp_fps.max(1);
+        // Only the warming scene reads events; subscribe before spawning so none are missed.
+        let mut events = (state == ArenaState::Warming).then(|| self.event_bus.subscribe());
+
         let handle = tokio::spawn(async move {
             let mut ticker = interval(Duration::from_millis(1000 / fps as u64));
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            let mut scene = Scene::new(state);
+            let mut last_frame = Instant::now();
             // UDP send errors are reported at most once per second per controller.
             let mut last_report: std::collections::HashMap<std::net::IpAddr, std::time::Instant> =
                 std::collections::HashMap::new();
 
             loop {
                 ticker.tick().await;
+                let now = Instant::now();
+                // Real elapsed time, capped so a stall does not make animations jump.
+                let dt = now.duration_since(last_frame).as_secs_f32().min(0.25);
+                last_frame = now;
+                if let Some(rx) = events.as_mut() {
+                    scene.drain_events(rx);
+                }
+                let inputs = scene.begin_frame(dt);
 
                 // Send to all controllers, each frame sized to that controller's strip
                 let sockets_guard = sockets.read().await;
-                for (socket, num_leds) in sockets_guard.iter() {
-                    let rgb = match state {
-                        ArenaState::Warming => Self::generate_warming_frame(*num_leds),
-                        ArenaState::Fight => Self::generate_fight_frame(*num_leds),
-                        _ => vec![0u8; num_leds * 3], // Black for others
-                    };
+                for (idx, (socket, num_leds)) in sockets_guard.iter().enumerate() {
+                    // Frames go out every tick even when nothing changed: WLED leaves
+                    // realtime mode REALTIME_TIMEOUT_SEC after the last packet.
+                    let rgb = scene.render(idx, *num_leds, &inputs, dt);
                     for frame in encode_realtime_frames(&rgb, REALTIME_TIMEOUT_SEC) {
-                        let Err(e) = socket.send(&frame) else { continue };
+                        let Err(e) = socket.send(&frame) else {
+                            continue;
+                        };
                         if e.kind() == std::io::ErrorKind::WouldBlock {
                             continue;
                         }
@@ -447,25 +505,6 @@ impl WledManager {
         }
     }
 
-    /// Generate warming effect pixels, `r,g,b` per LED (rainbow chase that speeds up with energy)
-    fn generate_warming_frame(num_leds: usize) -> Vec<u8> {
-        let mut frame = Vec::with_capacity(num_leds * 3);
-
-        // Simple rainbow effect
-        let time = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as f32;
-
-        for i in 0..num_leds {
-            let hue = (i as f32 / num_leds as f32 * 360.0 + time * 0.1) % 360.0;
-            let (r, g, b) = hsv_to_rgb(hue, 1.0, 1.0);
-            frame.extend_from_slice(&[r, g, b]);
-        }
-
-        frame
-    }
-
     /// Generate fight effect pixels, `r,g,b` per LED (reactive pulses)
     fn generate_fight_frame(num_leds: usize) -> Vec<u8> {
         let mut frame = Vec::with_capacity(num_leds * 3);
@@ -489,10 +528,22 @@ impl WledManager {
     /// health tracker. WLED has no push channel, so without this an idle
     /// controller (no effect changes) would only ever look stale.
     pub async fn poll_health_once(&self) {
-        let ips: Vec<String> = self.controllers.read().await.iter().map(|c| c.ip.clone()).collect();
+        let ips: Vec<String> = self
+            .controllers
+            .read()
+            .await
+            .iter()
+            .map(|c| c.ip.clone())
+            .collect();
         for ip in ips {
             let url = format!("http://{ip}/json/info");
-            match self.http_client.get(&url).send().await.and_then(|r| r.error_for_status()) {
+            match self
+                .http_client
+                .get(&url)
+                .send()
+                .await
+                .and_then(|r| r.error_for_status())
+            {
                 Ok(resp) => {
                     self.link.ok(&ip);
                     // The device knows its real strip length; config/discovery only guess.
@@ -598,6 +649,76 @@ fn realtime_addr(ip: &str) -> String {
     format!("{host}:{REALTIME_PORT}")
 }
 
+/// What the realtime loop draws for one arena state. The seam for new scenes: add a variant,
+/// feed it in `drain_events`/`begin_frame`, draw it in `render`.
+enum Scene {
+    /// Energy bar + shout glow, one compositor per controller (they may differ in LED count).
+    Warming {
+        inputs: LiveInputs,
+        comps: Vec<Option<Compositor>>,
+    },
+    /// Still the old pulsing red; fight layers are a separate task (shadow-warrior-19b).
+    Fight,
+    Dark,
+}
+
+impl Scene {
+    fn new(state: ArenaState) -> Self {
+        match state {
+            ArenaState::Warming => Scene::Warming {
+                inputs: LiveInputs::default(),
+                comps: Vec::new(),
+            },
+            ArenaState::Fight => Scene::Fight,
+            _ => Scene::Dark,
+        }
+    }
+
+    /// Fold queued bus events into the scene's inputs without blocking.
+    fn drain_events(&mut self, rx: &mut tokio::sync::broadcast::Receiver<Event>) {
+        let Scene::Warming { inputs, .. } = self else {
+            return;
+        };
+        loop {
+            match rx.try_recv() {
+                Ok(Event::EnergyChanged { energy, max_energy }) => {
+                    inputs.on_energy(energy, max_energy)
+                }
+                Ok(Event::ShoutDetected { intensity, .. }) => inputs.on_shout(intensity),
+                Ok(_) | Err(TryRecvError::Lagged(_)) => {}
+                Err(TryRecvError::Empty | TryRecvError::Closed) => break,
+            }
+        }
+    }
+
+    /// Advance shared input state by `dt` and return this frame's inputs.
+    fn begin_frame(&mut self, dt: f32) -> Inputs {
+        match self {
+            Scene::Warming { inputs, .. } => inputs.frame(dt),
+            _ => Inputs::default(),
+        }
+    }
+
+    /// RGB bytes for controller `idx` with `len` LEDs. A changed `len` (the device reported
+    /// its real strip length) rebuilds that controller's compositor.
+    fn render(&mut self, idx: usize, len: usize, inputs: &Inputs, dt: f32) -> Vec<u8> {
+        match self {
+            Scene::Warming { comps, .. } => {
+                if comps.len() <= idx {
+                    comps.resize_with(idx + 1, || None);
+                }
+                let comp = match &mut comps[idx] {
+                    Some(c) if c.len() == len => c,
+                    slot => slot.insert(scenes::warming(len)),
+                };
+                comp.render(dt, inputs).to_vec()
+            }
+            Scene::Fight => WledManager::generate_fight_frame(len),
+            Scene::Dark => vec![0u8; len * 3],
+        }
+    }
+}
+
 /// Seconds WLED stays in realtime mode after the last frame before it resumes its own effect.
 const REALTIME_TIMEOUT_SEC: u8 = 2;
 /// DRGB carries at most 490 LEDs per packet; DNRGB at most 489 per packet.
@@ -629,33 +750,6 @@ fn encode_realtime_frames(rgb: &[u8], timeout_sec: u8) -> Vec<Vec<u8>> {
         .collect()
 }
 
-/// Convert HSV to RGB
-fn hsv_to_rgb(h: f32, s: f32, v: f32) -> (u8, u8, u8) {
-    let c = v * s;
-    let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
-    let m = v - c;
-
-    let (r, g, b) = if h < 60.0 {
-        (c, x, 0.0)
-    } else if h < 120.0 {
-        (x, c, 0.0)
-    } else if h < 180.0 {
-        (0.0, c, x)
-    } else if h < 240.0 {
-        (0.0, x, c)
-    } else if h < 300.0 {
-        (x, 0.0, c)
-    } else {
-        (c, 0.0, x)
-    };
-
-    (
-        ((r + m) * 255.0) as u8,
-        ((g + m) * 255.0) as u8,
-        ((b + m) * 255.0) as u8,
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -667,7 +761,12 @@ mod tests {
 
     async fn wait_connected(reg: &StatusRegistry, addr: &str, want: bool) -> bool {
         for _ in 0..100 {
-            if reg.snapshot().wled.get(addr).is_some_and(|d| d.connected == want) {
+            if reg
+                .snapshot()
+                .wled
+                .get(addr)
+                .is_some_and(|d| d.connected == want)
+            {
                 return true;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -687,9 +786,13 @@ mod tests {
         tokio::task::yield_now().await;
         let wled = WledManager::new(config.wled.clone(), db, bus.clone());
 
-        let (addr, routes, _) = mock_http(&[("*", 200, "{}"), ("GET /json/effects", 200, r#"["Solid"]"#)]).await;
+        let (addr, routes, _) =
+            mock_http(&[("*", 200, "{}"), ("GET /json/effects", 200, r#"["Solid"]"#)]).await;
         wled.set_controllers_for_test(&[&addr]).await;
-        let fx = WledEffect { effect: "solid".into(), ..Default::default() };
+        let fx = WledEffect {
+            effect: "solid".into(),
+            ..Default::default()
+        };
 
         assert_eq!(wled.apply_effect(&fx).await.unwrap(), 1);
         assert!(wait_connected(&reg, &addr, true).await);
@@ -723,7 +826,10 @@ mod tests {
         let wled = WledManager::new(config.wled.clone(), db, bus);
         let dead = dead_addr().await;
         wled.set_controllers_for_test(&[&dead]).await;
-        let fx = WledEffect { effect: "solid".into(), ..Default::default() };
+        let fx = WledEffect {
+            effect: "solid".into(),
+            ..Default::default()
+        };
         for _ in 0..health::FAIL_THRESHOLD {
             assert_eq!(wled.apply_effect(&fx).await.unwrap(), 0);
         }
@@ -751,13 +857,19 @@ mod tests {
         wled.poll_health_once().await;
         assert!(wait_connected(&reg, &addr, true).await);
 
-        routes.lock().await.insert("GET /json/info".into(), (500, "{}".into()));
+        routes
+            .lock()
+            .await
+            .insert("GET /json/info".into(), (500, "{}".into()));
         for _ in 0..health::FAIL_THRESHOLD {
             wled.poll_health_once().await;
         }
         assert!(wait_connected(&reg, &addr, false).await);
 
-        routes.lock().await.insert("GET /json/info".into(), (200, "{}".into()));
+        routes
+            .lock()
+            .await
+            .insert("GET /json/info".into(), (200, "{}".into()));
         wled.poll_health_once().await;
         assert!(wait_connected(&reg, &addr, true).await);
     }
@@ -833,8 +945,14 @@ mod tests {
         let bus: SharedEventBus = Arc::new(EventBus::new(100));
         let wled = WledManager::new(config.wled.clone(), db, bus);
         *wled.controllers.write().await = vec![
-            WledController { ip: "127.0.0.2".into(), num_leds: 30 },
-            WledController { ip: "127.0.0.3".into(), num_leds: 200 },
+            WledController {
+                ip: "127.0.0.2".into(),
+                num_leds: 30,
+            },
+            WledController {
+                ip: "127.0.0.3".into(),
+                num_leds: 200,
+            },
         ];
         wled.rebuild_sockets().await.unwrap();
         wled.start_realtime_mode(ArenaState::Fight).await.unwrap();
@@ -844,6 +962,105 @@ mod tests {
         let (n, _) = b.recv_from(&mut buf).unwrap();
         assert_eq!((buf[0], n), (2, 2 + 200 * 3));
         wled.stop_realtime_mode().await;
+    }
+
+    /// Read `n` consecutive packets and return the last RGB payload (after the 2 byte header).
+    fn last_of(rx: &std::net::UdpSocket, n: usize) -> Vec<u8> {
+        let mut buf = [0u8; 2048];
+        let mut last = Vec::new();
+        for _ in 0..n {
+            let (len, _) = rx.recv_from(&mut buf).expect("frames keep arriving");
+            assert_eq!(buf[0], 2, "DRGB");
+            last = buf[2..len].to_vec();
+        }
+        last
+    }
+
+    fn lit(rgb: &[u8]) -> usize {
+        rgb.chunks(3).filter(|p| p[0] > 20).count()
+    }
+
+    fn total(rgb: &[u8]) -> u32 {
+        rgb.iter().map(|&b| b as u32).sum()
+    }
+
+    /// WARMING over the real event path: StateChanged starts the scene, EnergyChanged sets the
+    /// bar length, ShoutDetected adds a glow that fades, and frames never stop. Uses
+    /// 127.0.0.1:21324, which no other test binds.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn warming_draws_energy_bar_and_shout_glow() {
+        let rx = std::net::UdpSocket::bind("127.0.0.1:21324").unwrap();
+        rx.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let mut config = Config::default();
+        config.wled.effects.warming.effect = "realtime".into();
+        let db = Arc::new(DatabaseManager::new("sqlite::memory:").await.unwrap());
+        let bus: SharedEventBus = Arc::new(EventBus::new(100));
+        let wled = Arc::new(WledManager::new(config.wled.clone(), db, bus.clone()));
+        *wled.controllers.write().await = vec![WledController {
+            ip: "127.0.0.1".into(),
+            num_leds: 60,
+        }];
+        wled.rebuild_sockets().await.unwrap();
+        wled.clone().start_event_loop();
+        bus.publish(Event::state_changed("IDLE", "WARMING"));
+
+        let empty = last_of(&rx, 5);
+        assert_eq!(empty.len(), 60 * 3);
+        assert_eq!(lit(&empty), 0, "no energy, no bar");
+
+        bus.publish(Event::energy_changed(50.0, 100.0));
+        let half = last_of(&rx, 30);
+        let half_lit = lit(&half);
+        assert!(
+            (25..=35).contains(&half_lit),
+            "half bar of 60 LEDs, got {half_lit}"
+        );
+        assert!(half[..3].iter().any(|&b| b > 100), "bar starts at LED 0");
+
+        bus.publish(Event::energy_changed(30.0, 60.0)); // same ratio, tuned threshold
+        assert_eq!(lit(&last_of(&rx, 30)), half_lit);
+
+        bus.publish(Event::energy_changed(90.0, 100.0));
+        let big = last_of(&rx, 30);
+        assert!(
+            lit(&big) > half_lit + 15,
+            "bar grows with energy: {half_lit} -> {}",
+            lit(&big)
+        );
+
+        let quiet = total(&big);
+        bus.publish(Event::shout_detected(1.0, 0.5, -20.0));
+        let glow = (0..6).map(|_| total(&last_of(&rx, 1))).max().unwrap();
+        assert!(glow > quiet, "shout adds light: {quiet} -> {glow}");
+        let after = total(&last_of(&rx, 60));
+        assert!(
+            after < glow && after <= quiet + 30,
+            "glow fades: {glow} -> {after} (was {quiet})"
+        );
+
+        // leaving warming stops the packets
+        wled.stop_realtime_mode().await;
+        rx.set_read_timeout(Some(Duration::from_millis(300)))
+            .unwrap();
+        let mut buf = [0u8; 2048];
+        while rx.recv_from(&mut buf).is_ok() {}
+        assert!(rx.recv_from(&mut buf).is_err(), "no frames after stop");
+    }
+
+    /// A controller that reports a different LED count gets a bar of the new length.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn warming_rebuilds_the_compositor_when_the_led_count_changes() {
+        let mut scene = Scene::new(ArenaState::Warming);
+        let inputs = Inputs {
+            energy: 1.0,
+            ..Default::default()
+        };
+        let a = scene.render(0, 30, &inputs, 0.033);
+        assert_eq!(a.len(), 90);
+        let b = scene.render(0, 120, &inputs, 0.033);
+        assert_eq!(b.len(), 360);
+        let c = scene.render(1, 10, &inputs, 0.033);
+        assert_eq!(c.len(), 30, "second controller is independent");
     }
 
     #[test]
@@ -863,7 +1080,10 @@ mod tests {
         let db = Arc::new(DatabaseManager::new("sqlite::memory:").await.unwrap());
         let bus: SharedEventBus = Arc::new(EventBus::new(100));
         let wled = WledManager::new(config.wled.clone(), db, bus);
-        *wled.controllers.write().await = vec![WledController { ip: "127.0.0.4:8090".into(), num_leds: 12 }];
+        *wled.controllers.write().await = vec![WledController {
+            ip: "127.0.0.4:8090".into(),
+            num_leds: 12,
+        }];
         wled.rebuild_sockets().await.unwrap();
         assert!(wled.get_status().await[0].connected);
         wled.start_realtime_mode(ArenaState::Fight).await.unwrap();
@@ -881,15 +1101,23 @@ mod tests {
         let db = Arc::new(DatabaseManager::new("sqlite::memory:").await.unwrap());
         let bus: SharedEventBus = Arc::new(EventBus::new(100));
         let wled = WledManager::new(config.wled.clone(), db, bus);
-        let (addr, routes, _) = mock_http(&[("GET /json/info", 200, r#"{"leds":{"count":180}}"#)]).await;
+        let (addr, routes, _) =
+            mock_http(&[("GET /json/info", 200, r#"{"leds":{"count":180}}"#)]).await;
         wled.set_controllers_for_test(&[&addr]).await;
         assert_eq!(wled.controllers.read().await[0].num_leds, 10);
 
         wled.poll_health_once().await;
         assert_eq!(wled.controllers.read().await[0].num_leds, 180);
 
-        routes.lock().await.insert("GET /json/info".into(), (200, "{}".into()));
+        routes
+            .lock()
+            .await
+            .insert("GET /json/info".into(), (200, "{}".into()));
         wled.poll_health_once().await;
-        assert_eq!(wled.controllers.read().await[0].num_leds, 180, "missing count keeps the known one");
+        assert_eq!(
+            wled.controllers.read().await[0].num_leds,
+            180,
+            "missing count keeps the known one"
+        );
     }
 }
