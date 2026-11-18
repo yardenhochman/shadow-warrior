@@ -211,6 +211,8 @@ impl ArenaManager {
         let current_state = self.state_machine.current_state().await;
 
         if current_state == ArenaState::Warming {
+            // A shout is activity: restart the WARMING timeout clock.
+            *self.last_activity_at.write().await = Utc::now();
             // Add energy to energy bar
             if let Some(energy_bar) = self.energy_bar.read().await.as_ref() {
                 energy_bar.add_energy(intensity).await;
@@ -275,6 +277,20 @@ impl ArenaManager {
                 ticker.tick().await;
 
                 let current_state = self.state_machine.current_state().await;
+                if current_state == ArenaState::Warming {
+                    // WARMING gives up after `warming_timeout_sec` without a shout (timer starts on
+                    // entry and is reset by each shout). The player may still be standing there:
+                    // PresenceDetected fires only on change and only COOLDOWN->IDLE re-arms
+                    // WARMING, so the arena stays in IDLE until presence flips (leave and return)
+                    // instead of bouncing IDLE -> WARMING -> IDLE forever.
+                    let timeout = self.config.read().await.warming_timeout_sec;
+                    let last = *self.last_activity_at.read().await;
+                    if timeout > 0 && (Utc::now() - last).num_seconds() >= timeout as i64 {
+                        info!("Warming timeout ({}s without a shout), back to IDLE", timeout);
+                        let _ = self.state_machine.transition(ArenaState::Idle).await;
+                    }
+                    continue;
+                }
                 if current_state == ArenaState::Fight {
                     let fight_started = self.fight_started_at.read().await;
 
@@ -393,6 +409,7 @@ impl ArenaManager {
             warming_energy_threshold: config.warming_energy_threshold,
             shout_energy_multiplier: config.shout_energy_multiplier,
             energy_decay_rate: config.energy_decay_rate,
+            warming_timeout_sec: config.warming_timeout_sec,
             fight_duration_sec: config.fight_duration_sec,
             fight_inactivity_timeout_sec: config.fight_inactivity_timeout_sec,
             cooldown_duration_sec: config.cooldown_duration_sec,
@@ -417,6 +434,7 @@ impl ArenaManager {
         config.warming_energy_threshold = tunables.warming_energy_threshold;
         config.shout_energy_multiplier = tunables.shout_energy_multiplier;
         config.energy_decay_rate = tunables.energy_decay_rate;
+        config.warming_timeout_sec = tunables.warming_timeout_sec;
         config.fight_duration_sec = tunables.fight_duration_sec;
         config.fight_inactivity_timeout_sec = tunables.fight_inactivity_timeout_sec;
         config.cooldown_duration_sec = tunables.cooldown_duration_sec;
@@ -481,6 +499,8 @@ impl StateHook for ArenaStateHook {
                     self.event_bus.clone(),
                 );
                 *self.energy_bar.write().await = Some(energy_bar);
+                // WARMING timeout clock starts on entry (shared with the fight inactivity clock).
+                *self.last_activity_at.write().await = Utc::now();
             }
             ArenaState::Fight => {
                 let now = Utc::now();
@@ -583,5 +603,60 @@ mod tests {
 
         bus.publish(Event::PresenceDetected { detected: false });
         assert!(wait_state(&sm, ArenaState::Suspended).await);
+    }
+
+    /// WARMING times out to IDLE without shouts, and a present player is not bounced
+    /// straight back into WARMING.
+    #[tokio::test]
+    async fn warming_times_out_to_idle_and_stays_there() {
+        let mut config = Config::default();
+        config.arena.warming_timeout_sec = 1;
+        let bus: SharedEventBus = Arc::new(EventBus::new(100));
+        let sm = Arc::new(StateMachine::new(bus.clone()));
+        let audio = Arc::new(AudioManager::new(config.audio.clone(), bus.clone()));
+        let ble = Arc::new(BleManager::new(config.ble.clone(), bus.clone()));
+        let arena = Arc::new(ArenaManager::new(config, sm.clone(), bus.clone(), audio, ble));
+        let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        arena.clone().start(rx).await.unwrap();
+
+        bus.publish(Event::PresenceDetected { detected: true });
+        assert!(wait_state(&sm, ArenaState::Warming).await);
+        assert!(wait_state_for(&sm, ArenaState::Idle, 4000).await, "times out to IDLE");
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        assert_eq!(sm.current_state().await, ArenaState::Idle, "present player does not loop back");
+
+        // Presence flipping re-arms it.
+        bus.publish(Event::PresenceDetected { detected: false });
+        assert!(wait_state(&sm, ArenaState::Suspended).await);
+        bus.publish(Event::PresenceDetected { detected: true });
+        assert!(wait_state(&sm, ArenaState::Warming).await);
+    }
+
+    /// 0 disables the timeout.
+    #[tokio::test]
+    async fn warming_timeout_zero_is_off() {
+        let mut config = Config::default();
+        config.arena.warming_timeout_sec = 0;
+        let bus: SharedEventBus = Arc::new(EventBus::new(100));
+        let sm = Arc::new(StateMachine::new(bus.clone()));
+        let audio = Arc::new(AudioManager::new(config.audio.clone(), bus.clone()));
+        let ble = Arc::new(BleManager::new(config.ble.clone(), bus.clone()));
+        let arena = Arc::new(ArenaManager::new(config, sm.clone(), bus.clone(), audio, ble));
+        let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        arena.clone().start(rx).await.unwrap();
+        bus.publish(Event::PresenceDetected { detected: true });
+        assert!(wait_state(&sm, ArenaState::Warming).await);
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        assert_eq!(sm.current_state().await, ArenaState::Warming);
+    }
+
+    async fn wait_state_for(sm: &StateMachine, want: ArenaState, ms: u64) -> bool {
+        for _ in 0..ms / 20 {
+            if sm.current_state().await == want {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        false
     }
 }

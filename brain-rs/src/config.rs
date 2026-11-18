@@ -57,6 +57,10 @@ pub struct ServerConfig {
     pub health_stale_sec: u64,
 }
 
+pub(crate) fn default_warming_timeout_sec() -> u64 {
+    120
+}
+
 fn default_health_stale_sec() -> u64 {
     300
 }
@@ -64,6 +68,9 @@ fn default_health_stale_sec() -> u64 {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ArenaConfig {
     // Timing configuration
+    /// WARMING -> IDLE after this many seconds without a shout (0 = never).
+    #[serde(default = "default_warming_timeout_sec")]
+    pub warming_timeout_sec: u64,
     pub warming_energy_threshold: f32,
     pub fight_duration_sec: u64,
     pub fight_inactivity_timeout_sec: u64,
@@ -432,6 +439,7 @@ impl Default for Config {
                 health_stale_sec: default_health_stale_sec(),
             },
             arena: ArenaConfig {
+                warming_timeout_sec: default_warming_timeout_sec(),
                 warming_energy_threshold: 100.0,
                 fight_duration_sec: 180,
                 fight_inactivity_timeout_sec: 30,

@@ -150,6 +150,8 @@ pub struct GameTunables {
     pub warming_energy_threshold: f32,
     pub shout_energy_multiplier: f32,
     pub energy_decay_rate: f32,
+    #[serde(default = "crate::config::default_warming_timeout_sec")]
+    pub warming_timeout_sec: u64,
     pub fight_duration_sec: u64,
     pub fight_inactivity_timeout_sec: u64,
     pub cooldown_duration_sec: u64,

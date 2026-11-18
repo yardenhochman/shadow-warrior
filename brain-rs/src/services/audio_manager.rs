@@ -517,6 +517,7 @@ mod tests {
             warming_energy_threshold: 100.0,
             shout_energy_multiplier: 10.0,
             energy_decay_rate: 0.5,
+            warming_timeout_sec: 120,
             fight_duration_sec: 180,
             fight_inactivity_timeout_sec: 30,
             cooldown_duration_sec: 60,

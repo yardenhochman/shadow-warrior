@@ -6,6 +6,7 @@ server:
 arena:
   # Timing configuration
   warming_energy_threshold: 100.0  # Energy points to trigger FIGHT
+  warming_timeout_sec: 120         # WARMING -> IDLE after this long without a shout (0 = never)
   fight_duration_sec: 180          # 3 minutes default
   fight_inactivity_timeout_sec: 30 # End fight if no activity
   cooldown_duration_sec: 60
