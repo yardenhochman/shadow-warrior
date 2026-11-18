@@ -115,6 +115,11 @@ music:
   volume: 0.8
 
 wled:
+  # The arena strip is one WLED controller: 3 m x 60 LEDs/m = 180 LEDs (4 columns x 45; the
+  # simulator uses the same). The brain adopts the count the controller reports.
+  # controllers:
+  #   - ip: "10.0.0.55"
+  #     num_leds: 180
   controllers: []
 
   udp_fps: 30
