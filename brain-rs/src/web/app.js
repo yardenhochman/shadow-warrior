@@ -634,6 +634,7 @@ async function loadConfig() {
 function populateConfigForm(tunables) {
     document.getElementById('confEnergyThreshold').value = tunables.warming_energy_threshold;
     document.getElementById('confEnergyDecay').value = tunables.energy_decay_rate;
+    document.getElementById('confWarmingTimeout').value = tunables.warming_timeout_sec;
     document.getElementById('confFightDuration').value = tunables.fight_duration_sec;
     document.getElementById('confInactivityTimeout').value = tunables.fight_inactivity_timeout_sec;
     document.getElementById('confCooldownDuration').value = tunables.cooldown_duration_sec;
@@ -657,6 +658,7 @@ async function saveConfig() {
         warming_energy_threshold: parseFloat(document.getElementById('confEnergyThreshold').value),
         shout_energy_multiplier: parseFloat(document.getElementById('confShoutEnergyMultiplier').value),
         energy_decay_rate: parseFloat(document.getElementById('confEnergyDecay').value),
+        warming_timeout_sec: parseInt(document.getElementById('confWarmingTimeout').value),
         fight_duration_sec: parseInt(document.getElementById('confFightDuration').value),
         fight_inactivity_timeout_sec: parseInt(document.getElementById('confInactivityTimeout').value),
         cooldown_duration_sec: parseInt(document.getElementById('confCooldownDuration').value),
