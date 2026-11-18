@@ -237,6 +237,16 @@ async fn shutdown_signal() {
 
 // Serve index.html at root
 
+/// Music ends with the session (COOLDOWN entry) and on any other way out of FIGHT
+/// (FIGHT -> IDLE / SUSPENDED), otherwise it keeps playing with `playback_active` raised.
+fn stops_music(event: &core::Event) -> bool {
+    match event {
+        core::Event::SessionEnded { .. } => true,
+        core::Event::StateChanged { from, .. } => from == &core::ArenaState::Fight.to_string(),
+        _ => false,
+    }
+}
+
 /// Handle music playback via events (kept out of the managers to avoid non-Send issues).
 fn spawn_music_event_loop(
     music_manager: Arc<MusicManager>,
@@ -256,9 +266,7 @@ fn spawn_music_event_loop(
                     }
                     core::Event::MusicStarted { .. } => audio_manager.set_playback_active(true),
                     core::Event::MusicStopped => audio_manager.set_playback_active(false),
-                    core::Event::SessionEnded { .. } => {
-                        music_manager.stop().await;
-                    }
+                    ev if stops_music(&ev) => music_manager.stop().await,
                     _ => {}
                 }
             }
@@ -427,3 +435,24 @@ impl std::io::Write for BroadcastWriter {
     }
 }
 
+
+#[cfg(test)]
+mod music_stop_tests {
+    use super::*;
+    use chrono::Utc;
+
+    fn changed(from: &str, to: &str) -> core::Event {
+        core::Event::StateChanged { from: from.into(), to: to.into(), timestamp: Utc::now() }
+    }
+
+    #[test]
+    fn music_stops_on_every_exit_from_fight() {
+        assert!(stops_music(&core::Event::SessionEnded { timestamp: Utc::now() }));
+        for to in ["COOLDOWN", "IDLE", "SUSPENDED"] {
+            assert!(stops_music(&changed("FIGHT", to)), "FIGHT -> {to}");
+        }
+        assert!(!stops_music(&changed("WARMING", "FIGHT")));
+        assert!(!stops_music(&changed("IDLE", "WARMING")));
+        assert!(!stops_music(&core::Event::EnergyFull));
+    }
+}
