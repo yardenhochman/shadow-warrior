@@ -39,6 +39,8 @@ pub struct WledManager {
     palette_cache: RwLock<Vec<String>>,
     /// Publishes disconnect/error/reconnect events from call outcomes.
     link: Arc<LinkHealth>,
+    /// UDP realtime port; WLED's own 21324 except in tests, which pick a free port.
+    realtime_port: u16,
 }
 
 impl WledManager {
@@ -60,7 +62,16 @@ impl WledManager {
             effect_cache: RwLock::new(Vec::new()),
             palette_cache: RwLock::new(Vec::new()),
             link: Arc::new(LinkHealth::new(event_bus.clone())),
+            realtime_port: REALTIME_PORT,
         }
+    }
+
+    /// Send realtime frames to `port` instead of 21324, so tests can listen on a free port
+    /// of 127.0.0.1 (macOS has no 127.0.0.2..).
+    #[cfg(test)]
+    pub(crate) fn with_realtime_port(mut self, port: u16) -> Self {
+        self.realtime_port = port;
+        self
     }
 
     #[cfg(test)]
@@ -203,7 +214,7 @@ impl WledManager {
                         warn!("UDP socket for {} not usable: {}", controller.ip, e);
                         continue;
                     }
-                    let addr = realtime_addr(&controller.ip);
+                    let addr = realtime_addr(&controller.ip, self.realtime_port);
                     match socket.connect(&addr) {
                         Ok(()) => {
                             info!("UDP socket connected to {}", addr);
@@ -611,12 +622,12 @@ const REALTIME_PORT: u16 = 21324;
 /// UDP realtime target for a controller address. `ip` may carry an HTTP port
 /// (`"192.168.1.5:8090"`, e.g. the browser simulator's bridge standing in for WLED);
 /// the HTTP calls use it as given and realtime goes to that host's port 21324.
-fn realtime_addr(ip: &str) -> String {
+fn realtime_addr(ip: &str, port: u16) -> String {
     let host = match ip.rsplit_once(':') {
         Some((host, port)) if !host.contains(':') && port.parse::<u16>().is_ok() => host,
         _ => ip,
     };
-    format!("{host}:{REALTIME_PORT}")
+    format!("{host}:{port}")
 }
 
 /// What the realtime loop draws for one arena state. The seam for new scenes: add a variant,
@@ -929,32 +940,38 @@ mod tests {
     /// Multi-threaded: the blocking `recv_from` must not starve the sender task.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn realtime_sends_per_controller_led_counts() {
-        let a = std::net::UdpSocket::bind("127.0.0.2:21324").unwrap();
-        let b = std::net::UdpSocket::bind("127.0.0.3:21324").unwrap();
-        for s in [&a, &b] {
-            s.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-        }
+        // Both controllers are 127.0.0.1 (the only loopback address on macOS), so one
+        // socket hears both; the frame sizes tell them apart.
+        let rx = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        rx.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let port = rx.local_addr().unwrap().port();
         let config = Config::default();
         let db = Arc::new(DatabaseManager::new("sqlite::memory:").await.unwrap());
         let bus: SharedEventBus = Arc::new(EventBus::new(100));
-        let wled = WledManager::new(config.wled.clone(), db, bus);
+        let wled = WledManager::new(config.wled.clone(), db, bus).with_realtime_port(port);
         *wled.controllers.write().await = vec![
             WledController {
-                ip: "127.0.0.2".into(),
+                ip: "127.0.0.1".into(),
                 num_leds: 30,
             },
             WledController {
-                ip: "127.0.0.3".into(),
+                ip: "127.0.0.1".into(),
                 num_leds: 200,
             },
         ];
         wled.rebuild_sockets().await.unwrap();
         wled.start_realtime_mode(ArenaState::Fight).await.unwrap();
         let mut buf = [0u8; 2048];
-        let (n, _) = a.recv_from(&mut buf).unwrap();
-        assert_eq!((buf[0], n), (2, 2 + 30 * 3));
-        let (n, _) = b.recv_from(&mut buf).unwrap();
-        assert_eq!((buf[0], n), (2, 2 + 200 * 3));
+        let mut sizes = std::collections::BTreeSet::new();
+        for _ in 0..20 {
+            let (n, _) = rx.recv_from(&mut buf).unwrap();
+            assert_eq!(buf[0], 2, "DRGB");
+            sizes.insert(n);
+            if sizes.len() == 2 {
+                break;
+            }
+        }
+        assert_eq!(sizes, [2 + 30 * 3, 2 + 200 * 3].into_iter().collect());
         wled.stop_realtime_mode().await;
     }
 
@@ -980,16 +997,17 @@ mod tests {
 
     /// WARMING over the real event path: StateChanged starts the scene, EnergyChanged sets the
     /// bar length, ShoutDetected adds a glow that fades, and frames never stop. Uses
-    /// 127.0.0.1:21324, which no other test binds.
+    /// a free port on 127.0.0.1.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn warming_draws_energy_bar_and_shout_glow() {
-        let rx = std::net::UdpSocket::bind("127.0.0.1:21324").unwrap();
+        let rx = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
         rx.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let port = rx.local_addr().unwrap().port();
         let mut config = Config::default();
         config.wled.effects.warming.effect = "realtime".into();
         let db = Arc::new(DatabaseManager::new("sqlite::memory:").await.unwrap());
         let bus: SharedEventBus = Arc::new(EventBus::new(100));
-        let wled = Arc::new(WledManager::new(config.wled.clone(), db, bus.clone()));
+        let wled = Arc::new(WledManager::new(config.wled.clone(), db, bus.clone()).with_realtime_port(port));
         *wled.controllers.write().await = vec![WledController {
             ip: "127.0.0.1".into(),
             num_leds: 60,
@@ -1059,23 +1077,25 @@ mod tests {
 
     #[test]
     fn realtime_addr_strips_an_http_port() {
-        assert_eq!(realtime_addr("192.168.1.203"), "192.168.1.203:21324");
-        assert_eq!(realtime_addr("wled.local"), "wled.local:21324");
-        assert_eq!(realtime_addr("127.0.0.1:8090"), "127.0.0.1:21324");
-        assert_eq!(realtime_addr("pi.local:8090"), "pi.local:21324");
+        assert_eq!(realtime_addr("192.168.1.203", REALTIME_PORT), "192.168.1.203:21324");
+        assert_eq!(realtime_addr("wled.local", REALTIME_PORT), "wled.local:21324");
+        assert_eq!(realtime_addr("127.0.0.1:8090", REALTIME_PORT), "127.0.0.1:21324");
+        assert_eq!(realtime_addr("pi.local:8090", REALTIME_PORT), "pi.local:21324");
     }
 
-    /// A controller given as host:port (HTTP port) still gets realtime on host:21324.
+    /// A controller given as host:port (HTTP port) gets realtime on the realtime port of that
+    /// host, not on its HTTP port.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn realtime_goes_to_port_21324_of_a_host_port_controller() {
-        let rx = std::net::UdpSocket::bind("127.0.0.4:21324").unwrap();
+    async fn realtime_goes_to_the_realtime_port_of_a_host_port_controller() {
+        let rx = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
         rx.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let port = rx.local_addr().unwrap().port();
         let config = Config::default();
         let db = Arc::new(DatabaseManager::new("sqlite::memory:").await.unwrap());
         let bus: SharedEventBus = Arc::new(EventBus::new(100));
-        let wled = WledManager::new(config.wled.clone(), db, bus);
+        let wled = WledManager::new(config.wled.clone(), db, bus).with_realtime_port(port);
         *wled.controllers.write().await = vec![WledController {
-            ip: "127.0.0.4:8090".into(),
+            ip: "127.0.0.1:8090".into(),
             num_leds: 12,
         }];
         wled.rebuild_sockets().await.unwrap();
