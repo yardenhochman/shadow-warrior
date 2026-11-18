@@ -558,4 +558,28 @@ mod tests {
         assert_eq!(e.tick(t + Duration::from_millis(800)), Some(1.0));
         assert_eq!(e.on_event(&punch(10.0), t + Duration::from_millis(900)), None, "dropped by min interval");
     }
+
+    /// The async shell: a bus event reaches the output and nothing panics without a device.
+    #[tokio::test]
+    async fn manager_plays_cue_for_bus_event() {
+        let mut cfg = SoundConfig { enabled: true, ..Default::default() };
+        cfg.cues.insert("fight_started".into(), cue(&["f.wav"]));
+        let bus: SharedEventBus = Arc::new(crate::core::EventBus::new(16));
+        let music = Arc::new(MusicManager::new(
+            crate::config::Config::default().music,
+            bus.clone(),
+        ));
+        let fake = Arc::new(Fake::default());
+        let mgr = Arc::new(SoundManager::with_output(cfg, bus.clone(), music, Box::new(FakeOut(fake.clone()))));
+        mgr.start();
+        tokio::task::yield_now().await;
+        bus.publish(Event::FightStarted { timestamp: Utc::now() });
+        for _ in 0..50 {
+            if !fake.files().is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(fake.files(), ["f.wav"]);
+    }
 }
