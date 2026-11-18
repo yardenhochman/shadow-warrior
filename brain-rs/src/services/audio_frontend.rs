@@ -294,14 +294,20 @@ pub fn spectral_features(frame: &[f32]) -> (f32, f32, f32) {
     (centroid, num / den, flatness)
 }
 
-/// Autocorrelation pitch estimate over 70..500 Hz. Returns (f0_hz, confidence 0..1).
+/// Upper edge of the pitch search. Above `shout_f0_max_hz` (default 700) so the detector's own
+/// range check decides; high screams (500-700 Hz) must not fall outside the search.
+pub const PITCH_MAX_HZ: u32 = 1000;
+/// Lower edge of the pitch search.
+pub const PITCH_MIN_HZ: u32 = 70;
+
+/// Autocorrelation pitch estimate over 70..1000 Hz. Returns (f0_hz, confidence 0..1).
 pub fn pitch_autocorr(frame: &[f32]) -> (f32, f32) {
     let r0: f32 = frame.iter().map(|s| s * s).sum();
     if r0 < 1e-9 {
         return (0.0, 0.0);
     }
-    let min_lag = TARGET_RATE as usize / 500;
-    let max_lag = (TARGET_RATE as usize / 70).min(frame.len() - 1);
+    let min_lag = TARGET_RATE as usize / PITCH_MAX_HZ as usize;
+    let max_lag = (TARGET_RATE as usize / PITCH_MIN_HZ as usize).min(frame.len() - 1);
     let mut nrs = Vec::with_capacity(max_lag - min_lag + 1);
     for lag in min_lag..=max_lag {
         let (a, b) = (&frame[..frame.len() - lag], &frame[lag..]);
@@ -557,6 +563,16 @@ mod tests {
         assert!((loud.spectral_centroid_hz - 440.0).abs() < 100.0);
         assert!(loud.spectral_flatness < 0.1);
         assert!(loud.vad_prob > 0.8 && loud.playback_active);
+    }
+
+    #[test]
+    fn pitch_covers_high_screams_up_to_700_hz() {
+        for f in [150.0f32, 300.0, 520.0, 600.0, 700.0] {
+            let frame = sine(f, 16000, FRAME_SIZE as f32 / 16000.0, 0.3);
+            let (hz, conf) = pitch_autocorr(&frame);
+            assert!((hz - f).abs() / f < 0.08, "{f} Hz read as {hz} (conf {conf})");
+            assert!(conf > 0.8, "{f} Hz conf {conf}");
+        }
     }
 
     #[test]
