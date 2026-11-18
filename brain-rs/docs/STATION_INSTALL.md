@@ -127,8 +127,26 @@ the log says `a2dp-sink profile connect failed: Protocol not available`.
   "successfully" without a mic, but PipeWire links that capture stream to the speaker's
   *output monitor* (`wpctl status` shows `input_FL < BOOM 4:monitor_FL`). Shout detection and
   presence would then react to the playlist, and the health page shows audio as connected.
-  A real microphone must be the default source (see `shadow-warrior-abr`, `-c6y`); tracked in
-  the beads issue about the monitor capture.
+  A real microphone must be the default source (see `shadow-warrior-abr`, `-c6y`).
+  - [ ] Check after every audio change: `XDG_RUNTIME_DIR=/run/user/<uid> wpctl status`. Under
+        Audio > Streams the brain's capture stream must be linked to the microphone, never to
+        `<speaker>:monitor_*`. Under Audio > Sources the microphone must be the default (`*`);
+        if it is not, `wpctl set-default <id>` (the id is in `wpctl status`).
+  - [ ] **Untested candidate** (not run on the board yet; verify with the check above, and
+        remove it if it changes nothing): stop PipeWire from capturing a sink monitor for
+        applications that did not ask for one, in
+        `~/.config/pipewire/pipewire-pulse.conf.d/10-no-monitor-capture.conf` and
+        `~/.config/pipewire/client.conf.d/10-no-monitor-capture.conf`:
+        ```
+        stream.properties = {
+          stream.capture.sink = false
+        }
+        ```
+        then `systemctl --user restart pipewire pipewire-pulse wireplumber`. With no
+        microphone present the capture stream should then stay unlinked instead of falling
+        back to the monitor.
+  - The brain itself cannot yet tell a real microphone from a monitor; that guard is code
+    work, tracked in `shadow-warrior-25j`.
 
 ## 3c. Music
 
