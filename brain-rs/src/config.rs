@@ -395,12 +395,30 @@ pub struct ScheduleWindow {
 impl Config {
     /// Load configuration from config.yaml and environment variables
     pub fn load() -> Result<Self, Box<figment::Error>> {
-        Figment::new()
+        Self::from_sources(Figment::from(Yaml::file("config.yaml")).merge(Env::prefixed("BRAIN_")))
+    }
+
+    /// Defaults overlaid with `user` (YAML + env). A WLED effect the user configures replaces
+    /// the default effect as a whole: merging key by key leaked defaults the user left out
+    /// (e.g. the default idle `palette: ocean` under an idle effect with no palette).
+    fn from_sources(user: Figment) -> Result<Self, Box<figment::Error>> {
+        let mut cfg: Config = Figment::new()
             .merge(Serialized::defaults(Self::default()))
-            .merge(Yaml::file("config.yaml"))
-            .merge(Env::prefixed("BRAIN_"))
+            .merge(user.clone())
             .extract()
-            .map_err(Box::new)
+            .map_err(Box::new)?;
+        for (key, slot) in [
+            ("idle", &mut cfg.wled.effects.idle),
+            ("warming", &mut cfg.wled.effects.warming),
+            ("fight", &mut cfg.wled.effects.fight),
+            ("cooldown", &mut cfg.wled.effects.cooldown),
+        ] {
+            let path = format!("wled.effects.{key}");
+            if user.find_value(&path).is_ok() {
+                *slot = user.extract_inner(&path).map_err(Box::new)?;
+            }
+        }
+        Ok(cfg)
     }
 }
 
@@ -509,5 +527,24 @@ impl Default for Config {
             ble_status: BleStatusConfig::default(),
             speaker: SpeakerConfig::default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod load_tests {
+    use super::*;
+
+    const REAL_YAML: &str = include_str!("../config.yaml");
+
+    #[test]
+    fn configured_effect_replaces_default_not_merges() {
+        let cfg = Config::from_sources(Figment::from(Yaml::string(REAL_YAML))).unwrap();
+        let idle = &cfg.wled.effects.idle;
+        assert_eq!(idle.effect, "Fade");
+        assert_eq!(idle.palette, None, "default ocean palette must not leak");
+        // an effect absent from the YAML keeps its default
+        let cfg = Config::from_sources(Figment::from(Yaml::string("wled:\n  effects:\n    idle:\n      effect: Fade\n"))).unwrap();
+        assert_eq!(cfg.wled.effects.cooldown, Config::default().wled.effects.cooldown);
+        assert_eq!(cfg.wled.effects.idle.palette, None);
     }
 }
