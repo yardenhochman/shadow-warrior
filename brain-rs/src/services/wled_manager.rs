@@ -121,7 +121,7 @@ impl WledManager {
     }
 
     /// Add a newly discovered controller, flash green for 2s, then apply current state effect.
-    pub async fn add_controller(&self, ip: String) -> Result<()> {
+    pub async fn add_controller(self: &Arc<Self>, ip: String) -> Result<()> {
         {
             let mut controllers = self.controllers.write().await;
             if controllers.iter().any(|c| c.ip == ip) {
@@ -154,64 +154,34 @@ impl WledManager {
             info!("Flashed green on new controller {}", ip);
         }
 
-        // After 2s, apply current arena state effect to all controllers
-        let http_client = self.http_client.clone();
-        let controllers = self.controllers.clone();
-        let config = self.config.clone();
-        let current_state = self.current_state.clone();
-        let udp_sockets = self.udp_sockets.clone();
-        let realtime_task_handle = self.realtime_task_handle.clone();
-        let event_bus = self.event_bus.clone();
-
+        // After 2s, put the current arena state's effect back on all controllers.
+        let this = Arc::clone(self);
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs(2)).await;
-            // Re-apply state effect (rebuild a minimal WledManager-like context)
-            let current = *current_state.read().await;
-            let effect = match current {
-                ArenaState::Suspended => {
-                    let payload = serde_json::json!({ "on": false });
-                    let ctls = controllers.read().await;
-                    for c in ctls.iter() {
-                        let url = format!("http://{}/json/state", c.ip);
-                        let _ = http_client.post(&url).json(&payload).send().await;
-                    }
-                    return;
-                }
-                ArenaState::Idle => &config.effects.idle as &WledEffect,
-                ArenaState::Warming => &config.effects.warming,
-                ArenaState::Fight => &config.effects.fight,
-                ArenaState::Cooldown => &config.effects.cooldown,
-            };
-
-            if effect.effect != "realtime" {
-                let effect_id: u8 = match effect.effect.to_lowercase().as_str() {
-                    "solid" => 0,
-                    "blink" => 1,
-                    "breathe" => 2,
-                    "wipe" => 3,
-                    "scan" => 5,
-                    "rainbow" => 8,
-                    "twinkle" => 15,
-                    "fire" | "fireworks" => 16,
-                    _ => 0,
-                };
-                let payload = serde_json::json!({
-                    "on": true, "bri": 255, "transition": 7,
-                    "seg": [{ "id": 0, "fx": effect_id, "sx": effect.speed.unwrap_or(128), "ix": 128 }]
-                });
-                let ctls = controllers.read().await;
-                for c in ctls.iter() {
-                    let url = format!("http://{}/json/state", c.ip);
-                    let _ = http_client.post(&url).json(&payload).send().await;
-                }
-            }
-            // realtime mode: existing task already sends frames to all sockets incl. new one
-            drop(udp_sockets);
-            drop(realtime_task_handle);
-            drop(event_bus);
+            this.reapply_state_effect().await;
         });
 
         Ok(())
+    }
+
+    /// Re-send the current arena state's effect to all controllers, through the same
+    /// name resolution as every other effect change. Realtime states are left alone: the
+    /// running realtime task already feeds every socket, including a new one.
+    async fn reapply_state_effect(&self) {
+        let state = *self.current_state.read().await;
+        let is_realtime = match state {
+            ArenaState::Suspended => false,
+            ArenaState::Idle => self.config.effects.idle.effect == "realtime",
+            ArenaState::Warming => self.config.effects.warming.effect == "realtime",
+            ArenaState::Fight => self.config.effects.fight.effect == "realtime",
+            ArenaState::Cooldown => self.config.effects.cooldown.effect == "realtime",
+        };
+        if is_realtime {
+            return;
+        }
+        if let Err(e) = self.set_state_effect(state).await {
+            warn!("WLED re-apply of {state} effect failed: {e}");
+        }
     }
 
     /// Remove a controller by IP from the runtime list and rebuild UDP sockets.
@@ -815,6 +785,30 @@ mod tests {
         wled.apply_effect(&fx).await.unwrap();
         assert!(wait_connected(&reg, &addr, true).await);
         assert!(reg.snapshot().wled[&addr].disconnect_reason.is_none());
+    }
+
+    /// A controller adopted at runtime gets the current state's effect resolved like any
+    /// other (device list, then protocol table), not through a stale private id table.
+    #[tokio::test]
+    async fn reapply_after_add_resolves_effect_by_device_list() {
+        let mut config = Config::default();
+        config.wled.effects.cooldown = WledEffect { effect: "Fire 2012".into(), ..Default::default() };
+        let db = Arc::new(DatabaseManager::new("sqlite::memory:").await.unwrap());
+        let bus: SharedEventBus = Arc::new(EventBus::new(100));
+        let wled = WledManager::new(config.wled.clone(), db, bus);
+        let (addr, _routes, seen) = mock_http(&[
+            ("*", 200, "{}"),
+            ("GET /json/effects", 200, r#"["Solid","Blink","Fire 2012"]"#),
+        ])
+        .await;
+        wled.set_controllers_for_test(&[&addr]).await;
+        *wled.current_state.write().await = ArenaState::Cooldown;
+
+        wled.reapply_state_effect().await;
+
+        let seen = seen.lock().await;
+        let post = seen.iter().find(|r| r.starts_with("POST /json/state")).expect("state posted");
+        assert!(post.contains(r#""fx":2"#), "fx must be the device index of Fire 2012: {post}");
     }
 
     #[tokio::test]
