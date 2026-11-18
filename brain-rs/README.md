@@ -83,6 +83,9 @@ music:
   volume: 0.8
 ```
 
+LED modes per arena state (idle/cooldown built-in effects, warming/fight UDP realtime): see
+[docs/LEDS.md](docs/LEDS.md).
+
 A WLED controller `ip` may carry an HTTP port (`"192.168.1.5:8090"`); realtime UDP still goes
 to that host's port 21324. The browser simulator's bridge uses this to stand in for WLED
 (see `simulator/web/README.md`, "Brain mode"). Any key can be overridden from the environment

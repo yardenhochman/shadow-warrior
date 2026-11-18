@@ -128,12 +128,13 @@ wled:
       speed: 40
       brightness: 180
       colors: [[255, 25, 0], [0, 0, 0]]
+    # Only idle and cooldown use built-in WLED effects. Warming and fight are always UDP
+    # realtime, rendered by the brain (docs/LEDS.md). Set them to anything else and the
+    # layered scenes are lost.
     warming:
-      effect: "rainbow"
-      palette: "rainbow"
-      speed: 200
+      effect: "realtime"  # energy bar + shout glow (docs/LEDS.md)
     fight:
-      effect: "realtime"  # UDP realtime
+      effect: "realtime"  # punches, shouts, music, optional energy bar
     cooldown:
       effect: "Fire 2012"   # exact device name; bare "fire" used to resolve to Saw
       palette: "Lava"
