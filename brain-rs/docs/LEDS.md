@@ -66,6 +66,9 @@ strips (flipping `reverse` ones) into the controller's frame. Scenes get the str
 4 columns: 1, 1/3, 1/3, 1), so punch shockwaves can travel inner columns first. Warming is the
 same on every column for now.
 
+The browser simulator's live bridge can show this layout (one UDP listener per controller, strips
+cut into columns): see `simulator/web/README.md`, "Layout: several controllers and strips".
+
 LED-count adoption (`/json/info` `leds.count`) resizes a single-strip controller; for a
 multi-strip controller a different count only logs a warning and the configured layout stays.
 

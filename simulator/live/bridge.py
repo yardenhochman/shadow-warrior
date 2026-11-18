@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["aiohttp>=3.9", "bleak>=1.1.0"]
+# dependencies = ["aiohttp>=3.9", "bleak>=1.1.0", "pyyaml>=6"]
 # ///
 """Live-hardware bridge for the browser simulator.
 
@@ -27,6 +27,12 @@ UDP realtime on 21324, forwards every packet unchanged to the real strip and sho
 in the page; outside realtime the page shows WLED's own live view. /brain/* is proxied to the
 brain API (same origin, so no CORS). The bag belongs to the brain (no BLE here).
 
+Layout (--layout FILE|JSON, brain mode): the brain-rs `wled:` shape (controllers with ip /
+num_leds / strips[{column, leds, reverse}], columns); a brain config.yaml works as is. One UDP
+listener per controller (its ip, port 21324, or its `bind`), each controller's pixel array is cut
+into strips and written into columns; the page gets four columns bottom-first, serpentine off.
+See simulator/web/README.md. Without --layout one controller is split into 4 equal columns.
+
 Stop the brain (sim mode) first: BLE allows one central and two writers fight over the strip.
 """
 import argparse
@@ -38,9 +44,13 @@ import os
 import signal
 import socket
 import struct
+import sys
 import time
 import urllib.request
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from layout import Layout, LayoutError, apply_packet  # noqa: E402
 
 import aiohttp
 from aiohttp import WSMsgType, web
@@ -276,11 +286,16 @@ class BrainLink:
     here when there is none). Outside realtime the page gets WLED's own live view (/ws lv).
     """
 
-    def __init__(self, hub, url, wled):
+    def __init__(self, hub, url, wled, layout=None):
         self.hub, self.url, self.wled = hub, url.rstrip("/"), wled
+        self.layout = layout
         self.session = None
-        n = wled.count or wled.default_count
+        n = layout.count if layout else (wled.count or wled.default_count)
         self.frame = bytearray(n * 3)
+        self.forwarders = {}  # layout: controller ip -> Wled (UDP forward only)
+        if layout:
+            for c in layout.controllers:
+                self.forwarders[c.ip] = Wled(c.forward, 1.0, 1.0)
         self.seq = 0
         self.recent = collections.deque(maxlen=120)  # (seq, tag, rgb) sent to pages, for tests
         self.udp_packets = 0
@@ -299,43 +314,56 @@ class BrainLink:
 
     # ---- UDP realtime from the brain
     def realtime(self):
+        if self.layout:
+            now = time.monotonic()
+            return any(now - c.last_udp < c.rt_timeout for c in self.layout.controllers)
         return time.monotonic() - self.last_udp < self.rt_timeout
 
-    def on_udp(self, data: bytes, addr):
+    def on_udp(self, data: bytes, addr, ctrl=None):
+        if self.layout:
+            return self.on_udp_layout(data, addr, ctrl)
         if len(data) < 2:
             return
         self.wled.forward(data)
-        proto, t = data[0], data[1]
-        n = len(self.frame) // 3
-        if proto == 2:  # DRGB
-            px, start = data[2:], 0
-        elif proto == 4 and len(data) >= 4:  # DNRGB
-            px, start = data[4:], (data[2] << 8) | data[3]
-        elif proto == 3:  # DRGBW: drop white
-            w = data[2:]
-            px, start = b"".join(w[i:i + 3] for i in range(0, len(w) - 3, 4)), 0
-        elif proto == 1:  # WARLS: index, r, g, b
-            for i in range(2, len(data) - 3, 4):
-                k = data[i]
-                if k < n:
-                    self.frame[k * 3:k * 3 + 3] = data[i + 1:i + 4]
-            px, start = b"", None
-        else:
+        res = apply_packet(self.frame, data)
+        if res is None:
             return
-        if start is not None:
-            m = min(len(px) // 3, max(0, n - start))
-            self.frame[start * 3:(start + m) * 3] = px[:m * 3]
+        t, complete = res
         self.rt_timeout = 3600.0 if t == 255 else max(t, 1)
         self.udp_packets += 1
         self.udp_from = addr[0]
         now = time.monotonic()
         self.last_udp = now
         # A frame is complete when a packet reaches the strip end (DNRGB chunks) or for DRGB/WARLS.
-        if start is None or proto != 4 or start + len(px) // 3 >= n:
-            self._fps_n += 1
-            if now - self._fps_t0 >= 1.0:
-                self.udp_fps = self._fps_n / (now - self._fps_t0)
-                self._fps_t0, self._fps_n = now, 0
+        if complete:
+            self._count_frame(now)
+            self.push(FRAME_BRAIN, self.frame)
+
+    def _count_frame(self, now):
+        self._fps_n += 1
+        if now - self._fps_t0 >= 1.0:
+            self.udp_fps = self._fps_n / (now - self._fps_t0)
+            self._fps_t0, self._fps_n = now, 0
+
+    def on_udp_layout(self, data: bytes, addr, ctrl):
+        """One controller's realtime packet: update its pixel array, cut it into its strips,
+        push the composed four-column frame (columns without data stay dark)."""
+        fwd = self.forwarders[ctrl.ip]
+        fwd.forward(data)
+        res = apply_packet(ctrl.pixels, data)
+        if res is None:
+            return
+        t, complete = res
+        ctrl.rt_timeout = 3600.0 if t == 255 else max(t, 1)
+        ctrl.packets += 1
+        self.udp_packets += 1
+        self.udp_from = addr[0]
+        now = time.monotonic()
+        ctrl.last_udp = self.last_udp = now
+        if complete:
+            self.layout.write(ctrl)
+            self._count_frame(now)
+            self.frame[:] = self.layout.frame(now)
             self.push(FRAME_BRAIN, self.frame)
 
     def push(self, tag, rgb):
@@ -348,7 +376,7 @@ class BrainLink:
 
     # ---- WLED live view (what the strip shows during its own effects)
     async def live_view(self):
-        if not self.wled.host:
+        if not self.wled.host or self.layout:  # a layout has no single strip to mirror
             return
         backoff = 2
         while True:
@@ -404,10 +432,17 @@ class BrainLink:
 
     def status(self):
         rt = self.realtime()
-        return {"url": self.url, "reachable": self.reachable, "state": self.brain_state,
+        st = {"url": self.url, "reachable": self.reachable, "state": self.brain_state,
                 "realtime": rt, "udp_fps": round(self.udp_fps, 1) if rt else 0, "udp_packets": self.udp_packets,
                 "udp_from": self.udp_from, "effect": self.effect_name(), "live_view": self.live_state,
                 "live_frames": self.live_frames, "seq": self.seq, "posted": self.last_post}
+        if self.layout:
+            st["controllers"] = [{"ip": c.ip, "bind": f"{c.bind[0]}:{c.bind[1]}", "leds": c.num_leds, "packets": c.packets,
+                                  "streaming": time.monotonic() - c.last_udp < c.rt_timeout,
+                                  "strips": [[s.column, s.leds, s.reverse] for s in c.strips],
+                                  "forward": c.forward} for c in self.layout.controllers]
+            st["columns"] = self.layout.columns
+        return st
 
     # ---- stand-in WLED JSON API (brain -> bridge -> real WLED)
     async def wled_json(self, req):
@@ -434,9 +469,14 @@ class BrainLink:
                 return web.json_response({"error": f"WLED {self.wled.host}: {e}"}, status=502)
         # No real strip: answer like a minimal WLED.
         n = len(self.frame) // 3
+        ctrl = None
+        if self.layout:  # /json/info answers per controller (by the Host the brain used), else total LEDs
+            ctrl = self.layout.controller_for_host(req.host.rpartition(":")[0] if ":" in req.host else req.host)
+            n = ctrl.num_leds if ctrl else sum(c.num_leds for c in self.layout.controllers)
         if path == "info":
+            rt = (time.monotonic() - ctrl.last_udp < ctrl.rt_timeout) if ctrl else self.realtime()
             return web.json_response({"ver": "sim-bridge", "name": "simulator bridge", "leds": {"count": n},
-                                      "live": self.realtime(), "lm": "UDP" if self.realtime() else ""})
+                                      "live": rt, "lm": "UDP" if rt else ""})
         if path in ("effects", "palettes", "eff", "pal"):
             return web.json_response([])
         if req.method == "POST":
@@ -467,18 +507,18 @@ class BrainLink:
 
 
 class UdpIn(asyncio.DatagramProtocol):
-    def __init__(self, brain):
-        self.brain = brain
+    def __init__(self, brain, ctrl=None):
+        self.brain, self.ctrl = brain, ctrl
 
     def datagram_received(self, data, addr):
-        self.brain.on_udp(data, addr)
+        self.brain.on_udp(data, addr, self.ctrl)
 
 
 class Hub:
-    def __init__(self, wled, use_ble, brain_url=None):
+    def __init__(self, wled, use_ble, brain_url=None, layout=None):
         self.wled = wled
         self.clients = set()
-        self.brain = BrainLink(self, brain_url, wled) if brain_url else None
+        self.brain = BrainLink(self, brain_url, wled, layout) if brain_url else None
         self.owner = None  # the newest page drives the strip; frames from older tabs are dropped
         self.bag = Bag(self, *use_ble) if use_ble else None
 
@@ -488,7 +528,9 @@ class Hub:
               "bag": self.bag.status() if self.bag else off, "clients": len(self.clients)}
         if self.brain:
             st["brain"] = self.brain.status()
-            st["wled"]["streaming"] = self.brain.realtime() and bool(self.wled.host)
+            st["wled"]["streaming"] = self.brain.realtime() and bool(self.wled.host or self.brain.layout)
+            if self.brain.layout:
+                st["wled"]["leds"] = self.brain.layout.count
             st["wled"]["fps"] = st["brain"]["udp_fps"]
         return st
 
@@ -632,6 +674,8 @@ async def main():
                     help="real WLED host or IP (default $WLED_HOST; none: no strip, page only)")
     ap.add_argument("--brain", metavar="URL", help="brain mode: brain-rs API, e.g. http://127.0.0.1:8000 or http://<pi>:8000")
     ap.add_argument("--udp-port", type=int, default=WLED_UDP_PORT, help="brain mode: realtime UDP listen port (default %(default)s)")
+    ap.add_argument("--layout", metavar="FILE|JSON", help="brain mode: column/strip layout, the brain-rs `wled:` shape (YAML/JSON file, "
+                    "e.g. ../../brain-rs/config.yaml, or inline JSON); one UDP listener per controller ip")
     ap.add_argument("--leds", type=int, default=180, help="LED count when WLED is not reachable (default %(default)s)")
     ap.add_argument("--port", type=int, default=8090)
     ap.add_argument("--host", default="127.0.0.1", help="bind address (0.0.0.0 to open it from a phone)")
@@ -645,20 +689,47 @@ async def main():
         a.wled = None
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
 
+    layout = None
+    if a.layout:
+        if not a.brain:
+            ap.error("--layout needs --brain")
+        try:
+            layout = Layout.load(a.layout, a.udp_port)
+        except (LayoutError, OSError, KeyError, TypeError, ValueError) as e:
+            ap.error(f"--layout: {e!r}")
+        if a.wled:
+            ap.error("--layout with --wled: give a controller a `forward` host instead")
     wled = Wled(a.wled, a.brightness, a.gamma, leds=a.leds)
     wled.probe()
     brain_mode = bool(a.brain)
     # Brain mode: the brain is the bag's BLE central (one central only).
-    hub = Hub(wled, None if (a.no_ble or brain_mode) else (a.threshold, a.alpha), a.brain)
+    hub = Hub(wled, None if (a.no_ble or brain_mode) else (a.threshold, a.alpha), a.brain, layout)
     loop = asyncio.get_running_loop()
     tasks = []
     if hub.brain:
         hub.brain.session = aiohttp.ClientSession()
-        await loop.create_datagram_endpoint(lambda: UdpIn(hub.brain), local_addr=(a.host, a.udp_port))
+        if layout:
+            for c in layout.controllers:
+                try:
+                    await loop.create_datagram_endpoint(lambda c=c: UdpIn(hub.brain, c), local_addr=c.bind)
+                except OSError as e:
+                    sys.exit(f"cannot listen on UDP {c.bind[0]}:{c.bind[1]} for controller {c.ip}: {e}. On macOS add a loopback "
+                             f"alias first: sudo ifconfig lo0 alias {c.bind[0]} up")
+                log.info("controller %s: UDP %s:%d, strips %s", c.ip, c.bind[0], c.bind[1],
+                         [(s.column, s.leds, "rev" if s.reverse else "up") for s in c.strips])
+        else:
+            await loop.create_datagram_endpoint(lambda: UdpIn(hub.brain), local_addr=(a.host, a.udp_port))
         tasks += [asyncio.create_task(hub.brain.live_view()), asyncio.create_task(hub.brain.poll())]
     runner = web.AppRunner(make_app(hub), access_log=None)
     await runner.setup()
     await web.TCPSite(runner, a.host, a.port, shutdown_timeout=2).start()
+    if layout:  # the brain also calls /json on each controller's ip (same HTTP port as the bridge)
+        extra = {c.http_host for c in layout.controllers} - {a.host, "0.0.0.0"} if a.host != "0.0.0.0" else set()
+        for h in sorted(extra):
+            try:
+                await web.TCPSite(runner, h, a.port, shutdown_timeout=2).start()
+            except OSError as e:
+                log.warning("HTTP on %s:%d unavailable (%s): the brain's /json calls to that controller will fail", h, a.port, e)
     if hub.brain:
         log.info("brain mode: brain %s; point its wled.controllers at <this host>:%d (UDP %d on %s); strip %s",
                  a.brain, a.port, a.udp_port, a.host, a.wled or "none")

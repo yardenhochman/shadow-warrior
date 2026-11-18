@@ -83,6 +83,56 @@ that `wled.controllers` point at the bridge (`BRAIN_WLED` env override; nothing 
   through, e.g. `BRAIN_BLE='{auto_connect=false}'`, `BRAIN_PORT=8001` (brain API port).
 - Endpoints: `GET /live/frame?seq=N` (a frame sent to the pages, for tests), `/json/*` (stand-in WLED).
 
+#### Layout: several controllers and strips
+
+The real install is 4-5 columns, each one 3 m strip of 180 LEDs, normally one WLED controller per
+column; some controllers host 2-4 strips (their pixel array is the strips concatenated, one UDP
+frame covers all). Without `--layout` the bridge keeps the old behaviour (one controller split
+into 4 equal columns, Serpentine checkbox). With `--layout` it emulates WLED's LED **output
+mapping** (strip order, length, reverse), not WLED segments (realtime UDP ignores segments).
+
+`--layout FILE|JSON` takes the brain-rs `wled:` shape (`brain-rs/docs/LEDS.md`): a YAML/JSON file
+(a brain `config.yaml` works, its `wled:` section is used) or inline JSON:
+
+```yaml
+columns: 4                          # optional; default = highest column + 1
+controllers:
+  - {ip: "127.0.0.1", num_leds: 180}   # one strip = column 0 (column = list index)
+  - {ip: "127.0.0.2", num_leds: 180}   # column 1
+  - ip: "127.0.0.3"                    # two strips on one controller: columns 2 and 3
+    strips:                            # consecutive in LED order, num_leds optional (sum)
+      - {column: 2, leds: 180}
+      - {column: 3, leds: 180, reverse: true}   # LED 0 at the top
+```
+
+```sh
+simulator/live/live.sh start --brain http://127.0.0.1:8000 --wled none --layout my-layout.yaml
+```
+
+- One UDP listener per controller on `<ip host>:21324` (the brain sends to each controller's ip,
+  port 21324, even if the ip has `:httpport`). DRGB, DNRGB (start offsets), DRGBW and WARLS are
+  decoded into the controller's global pixel array, cut into its strips, `reverse` flipped, and
+  written into the strip's column. The page gets the canonical frame (columns in order, each
+  bottom-first, serpentine off); leave **Serpentine** unticked. A column with no data yet, or
+  whose controller's realtime timeout has passed (at the next frame from any controller), is dark.
+- The page shows exactly four columns: columns >= 4 are not shown, missing ones are dark; a
+  strip shorter than the longest is padded dark at the top. All strips are 180 LEDs normally.
+- macOS only has `127.0.0.1`; add aliases (`sudo ifconfig lo0 alias 127.0.0.2 up`, same for
+  .3 and .4; they vanish at reboot) and use them as controller ips, with the brain's
+  `BRAIN_WLED='{controllers=[{ip="127.0.0.1"},...]}'` pointing at the same ips. Linux routes all of
+  `127.0.0.0/8` already. Extras ignored by brain-rs, for local testing: `bind: "host:port"` (UDP
+  listen address instead of `<ip host>:21324`; for senders you control, the brain always uses
+  21324) and `forward: "<host>"`.
+- Real strips: only a controller with `forward: "<real WLED host>"` gets its packets forwarded
+  (unchanged, to that host's 21324). `--wled` cannot be combined with `--layout`. WLED's own live
+  view is not mirrored (idle/cooldown effects are not shown; the page keeps the last frame).
+- HTTP: the bridge also listens on each controller's ip host (same port as the bridge) and
+  answers `/json/info` with that controller's `num_leds` (the first controller with that host
+  when several share one), other hosts get the total. State/effects are the shared stand-in.
+  `/live/status` lists controllers (packets, streaming, strips).
+- Test: `uv run simulator/live/test_layout.py` (hardware-free: mapping unit tests plus UDP ->
+  `/live/frame` for four single-strip controllers and one two-strip controller with `reverse`).
+
 #### At home (Pi or laptop)
 
 Same machine for brain and bridge (Pi or laptop): run the brain-mode command above there with
