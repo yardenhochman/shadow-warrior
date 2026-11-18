@@ -145,6 +145,16 @@ async fn main() -> Result<()> {
     tasmota_manager.clone().start_event_loop();
     music_manager.load_playlist().await?;
     music_manager.clone().start_advance_loop();
+    if config.sound.enabled {
+        // Cue files are optional: a missing one is logged once and skipped (docs/SOUND.md).
+        Arc::new(services::SoundManager::new(
+            config.sound.clone(),
+            event_bus.clone(),
+            music_manager.clone(),
+        ))
+        .start();
+        info!("Sound cues enabled (dir {:?})", config.sound.dir);
+    }
 
     spawn_music_event_loop(music_manager.clone(), audio_manager.clone(), &event_bus);
 

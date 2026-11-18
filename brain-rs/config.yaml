@@ -114,6 +114,25 @@ music:
   shuffle: true
   volume: 0.8
 
+# Event-triggered sound effects and voice lines from files (docs/SOUND.md). Off by default.
+# Cue names: session_started, energy_full, fight_started, fight_ended (or the per-reason
+# fight_ended_time_elapsed / fight_ended_inactivity / fight_ended_manual),
+# punch_jab / punch_hook / punch_heavy. Several files per cue = random pick, never the
+# same twice in a row. Missing files are logged once and skipped.
+sound:
+  enabled: false
+  # dir: "./sounds"
+  # volume: 1.0
+  # music_duck_db: -9      # music level while a cue plays
+  # duck_ms: 300           # music stays ducked this long after the last cue
+  # max_concurrent: 4
+  # hook_from: 45          # punch power: jab below, hook from here,
+  # heavy_from: 75         # heavy from here
+  # cues:
+  #   fight_started: { files: [fight1.wav, fight2.wav], gain: 1.0 }
+  #   punch_heavy:   { files: [heavy1.wav, heavy2.wav, heavy3.wav], min_interval_ms: 150 }
+  #   punch_jab:     { files: [jab.wav], gain: 0.7, min_interval_ms: 100 }
+
 wled:
   # The arena strip is one WLED controller: 3 m x 60 LEDs/m = 180 LEDs (4 columns x 45; the
   # simulator uses the same). The brain adopts the count the controller reports.
