@@ -9,9 +9,10 @@ use tokio::sync::RwLock;
 use tokio::time::interval;
 use tracing::{debug, error, info, warn};
 
-use crate::config::{WledConfig, WledController, WledEffect};
+use crate::config::{columns_total, WledConfig, WledController, WledEffect};
 use crate::core::{ArenaState, Event, SharedEventBus};
-use crate::led::{scenes, Compositor, Inputs, LiveInputs};
+use crate::led::layout::{append_strip, controller_strips};
+use crate::led::{scenes, ColumnLayout, Compositor, Inputs, LiveInputs};
 use crate::models::WledStatus;
 use crate::services::database_manager::SharedDatabaseManager;
 
@@ -25,14 +26,18 @@ use protocol::{
     build_effect_payload, fetch_name_list, post_state, resolve_effect_id, resolve_palette_id,
 };
 
+/// A controller's connected socket and the strips its frame covers.
+type ControllerSocket = (UdpSocket, Vec<ColumnLayout>);
+
 pub struct WledManager {
     config: WledConfig,
     db: SharedDatabaseManager,
     event_bus: SharedEventBus,
     http_client: Client,
     controllers: Arc<RwLock<Vec<WledController>>>,
-    /// One connected socket per reachable controller, with that controller's LED count.
-    udp_sockets: Arc<RwLock<Vec<(UdpSocket, usize)>>>,
+    /// One connected socket per reachable controller, with the strips (columns) its LED
+    /// range holds, in order. One frame per controller covers all of them.
+    udp_sockets: Arc<RwLock<Vec<ControllerSocket>>>,
     realtime_task_handle: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
     current_state: Arc<RwLock<ArenaState>>,
     effect_cache: RwLock<Vec<String>>,
@@ -81,6 +86,7 @@ impl WledManager {
             .map(|ip| WledController {
                 ip: ip.to_string(),
                 num_leds: 10,
+                ..Default::default()
             })
             .collect();
     }
@@ -98,6 +104,7 @@ impl WledManager {
                         loaded_controllers.push(WledController {
                             ip: dev.host.clone(),
                             num_leds: 150, // Default
+                ..Default::default()
                         });
                     }
                 }
@@ -141,6 +148,7 @@ impl WledManager {
             controllers.push(WledController {
                 ip: ip.clone(),
                 num_leds: 150,
+                ..Default::default()
             });
         }
         self.rebuild_sockets().await?;
@@ -206,8 +214,9 @@ impl WledManager {
 
     async fn rebuild_sockets(&self) -> Result<()> {
         let controllers = self.controllers.read().await;
+        let columns = columns_total(&controllers, self.config.columns);
         let mut sockets = Vec::new();
-        for controller in controllers.iter() {
+        for (index, controller) in controllers.iter().enumerate() {
             match std::net::UdpSocket::bind("0.0.0.0:0") {
                 Ok(socket) => {
                     if let Err(e) = socket.set_nonblocking(true) {
@@ -218,7 +227,7 @@ impl WledManager {
                     match socket.connect(&addr) {
                         Ok(()) => {
                             info!("UDP socket connected to {}", addr);
-                            sockets.push((socket, controller.num_leds));
+                            sockets.push((socket, controller_strips(controller, index, columns)));
                         }
                         Err(e) => warn!("UDP connect to {} failed (offline?): {}", addr, e),
                     }
@@ -444,12 +453,12 @@ impl WledManager {
                 }
                 let inputs = scene.begin_frame(dt);
 
-                // Send to all controllers, each frame sized to that controller's strip
+                // Send to all controllers, each frame covering that controller's strips
                 let sockets_guard = sockets.read().await;
-                for (idx, (socket, num_leds)) in sockets_guard.iter().enumerate() {
+                for (idx, (socket, strips)) in sockets_guard.iter().enumerate() {
                     // Frames go out every tick even when nothing changed: WLED leaves
                     // realtime mode REALTIME_TIMEOUT_SEC after the last packet.
-                    let rgb = scene.render(idx, *num_leds, &inputs, dt);
+                    let rgb = scene.render(idx, strips, &inputs, dt);
                     for frame in encode_realtime_frames(&rgb, REALTIME_TIMEOUT_SEC) {
                         let Err(e) = socket.send(&frame) else {
                             continue;
@@ -548,9 +557,21 @@ impl WledManager {
         let changed = {
             let mut controllers = self.controllers.write().await;
             match controllers.iter_mut().find(|c| c.ip == ip) {
+                Some(c) if c.num_leds != count && c.strips.len() > 1 => {
+                    // Several strips: cannot tell which one is off, keep the configured layout.
+                    warn!(
+                        "WLED {ip} reports {count} LEDs but {} strips are configured ({}); keeping the configuration",
+                        c.strips.len(),
+                        c.num_leds
+                    );
+                    false
+                }
                 Some(c) if c.num_leds != count => {
                     info!("WLED {ip} reports {count} LEDs (was {})", c.num_leds);
                     c.num_leds = count;
+                    if let Some(s) = c.strips.first_mut() {
+                        s.leds = count;
+                    }
                     true
                 }
                 _ => false,
@@ -633,10 +654,11 @@ fn realtime_addr(ip: &str, port: u16) -> String {
 /// What the realtime loop draws for one arena state. The seam for new scenes: add a variant,
 /// feed it in `drain_events`/`begin_frame`, draw it in `render`.
 enum Scene {
-    /// Energy bar + shout glow, one compositor per controller (they may differ in LED count).
+    /// Energy bar + shout glow, one compositor per strip, keyed by (controller, strip) index
+    /// (strips may differ in LED count).
     Warming {
         inputs: LiveInputs,
-        comps: Vec<Option<Compositor>>,
+        comps: std::collections::HashMap<(usize, usize), Compositor>,
     },
     /// Still the old pulsing red; fight layers are a separate task (shadow-warrior-19b).
     Fight,
@@ -648,7 +670,7 @@ impl Scene {
         match state {
             ArenaState::Warming => Scene::Warming {
                 inputs: LiveInputs::default(),
-                comps: Vec::new(),
+                comps: Default::default(),
             },
             ArenaState::Fight => Scene::Fight,
             _ => Scene::Dark,
@@ -680,22 +702,52 @@ impl Scene {
         }
     }
 
-    /// RGB bytes for controller `idx` with `len` LEDs. A changed `len` (the device reported
-    /// its real strip length) rebuilds that controller's compositor.
-    fn render(&mut self, idx: usize, len: usize, inputs: &Inputs, dt: f32) -> Vec<u8> {
+    /// RGB bytes of controller `idx`: each of its `strips` rendered on its own, then
+    /// concatenated in LED order (flipped for `reverse` strips). A changed strip length (the
+    /// device reported its real count) rebuilds that strip's compositor.
+    fn render(
+        &mut self,
+        idx: usize,
+        strips: &[ColumnLayout],
+        inputs: &Inputs,
+        dt: f32,
+    ) -> Vec<u8> {
+        let mut frame = Vec::with_capacity(strips.iter().map(|s| s.leds * 3).sum());
+        for (j, strip) in strips.iter().enumerate() {
+            let rgb = self.render_strip(idx, j, strip, inputs, dt);
+            append_strip(&mut frame, &rgb, strip.reverse);
+        }
+        frame
+    }
+
+    /// One strip, bottom LED first. The seam for per-column scenes: `layout` says which
+    /// column this is and how far from the bag (the fight scene will use it).
+    fn render_strip(
+        &mut self,
+        idx: usize,
+        j: usize,
+        layout: &ColumnLayout,
+        inputs: &Inputs,
+        dt: f32,
+    ) -> Vec<u8> {
         match self {
             Scene::Warming { comps, .. } => {
-                if comps.len() <= idx {
-                    comps.resize_with(idx + 1, || None);
-                }
-                let comp = match &mut comps[idx] {
-                    Some(c) if c.len() == len => c,
-                    slot => slot.insert(scenes::warming(len)),
+                let comp = match comps.entry((idx, j)) {
+                    std::collections::hash_map::Entry::Occupied(e) if e.get().len() == layout.leds => {
+                        e.into_mut()
+                    }
+                    std::collections::hash_map::Entry::Occupied(mut e) => {
+                        e.insert(scenes::warming(layout.leds));
+                        e.into_mut()
+                    }
+                    std::collections::hash_map::Entry::Vacant(e) => {
+                        e.insert(scenes::warming(layout.leds))
+                    }
                 };
                 comp.render(dt, inputs).to_vec()
             }
-            Scene::Fight => WledManager::generate_fight_frame(len),
-            Scene::Dark => vec![0u8; len * 3],
+            Scene::Fight => WledManager::generate_fight_frame(layout.leds),
+            Scene::Dark => vec![0u8; layout.leds * 3],
         }
     }
 }
@@ -886,6 +938,7 @@ mod tests {
         config.wled.controllers = vec![crate::config::WledController {
             ip: "no-such-host.invalid".into(),
             num_leds: 10,
+            ..Default::default()
         }];
         let db = Arc::new(DatabaseManager::new("sqlite::memory:").await.unwrap());
         let bus: SharedEventBus = Arc::new(EventBus::new(100));
@@ -953,10 +1006,12 @@ mod tests {
             WledController {
                 ip: "127.0.0.1".into(),
                 num_leds: 30,
+                ..Default::default()
             },
             WledController {
                 ip: "127.0.0.1".into(),
                 num_leds: 200,
+                ..Default::default()
             },
         ];
         wled.rebuild_sockets().await.unwrap();
@@ -1011,6 +1066,7 @@ mod tests {
         *wled.controllers.write().await = vec![WledController {
             ip: "127.0.0.1".into(),
             num_leds: 60,
+            ..Default::default()
         }];
         wled.rebuild_sockets().await.unwrap();
         wled.clone().start_event_loop();
@@ -1067,12 +1123,102 @@ mod tests {
             energy: 1.0,
             ..Default::default()
         };
-        let a = scene.render(0, 30, &inputs, 0.033);
+        let a = scene.render(0, &[ColumnLayout::single(30)], &inputs, 0.033);
         assert_eq!(a.len(), 90);
-        let b = scene.render(0, 120, &inputs, 0.033);
+        let b = scene.render(0, &[ColumnLayout::single(120)], &inputs, 0.033);
         assert_eq!(b.len(), 360);
-        let c = scene.render(1, 10, &inputs, 0.033);
+        let c = scene.render(1, &[ColumnLayout::single(10)], &inputs, 0.033);
         assert_eq!(c.len(), 30, "second controller is independent");
+    }
+
+    /// A controller hosting two strips: one frame, each half is its own bar rising from its
+    /// own bottom; a `reverse` strip is flipped.
+    #[test]
+    fn multi_strip_frame_has_an_independent_bar_per_strip() {
+        let mut scene = Scene::new(ArenaState::Warming);
+        let inputs = Inputs {
+            energy: 0.5,
+            ..Default::default()
+        };
+        let strips = [
+            ColumnLayout::new(0, 4, 60, false),
+            ColumnLayout::new(1, 4, 60, true),
+        ];
+        let mut frame = Vec::new();
+        for _ in 0..30 {
+            frame = scene.render(0, &strips, &inputs, 0.033);
+        }
+        assert_eq!(frame.len(), 120 * 3);
+        let (a, b) = frame.split_at(60 * 3);
+        assert!((25..=35).contains(&lit(a)), "first strip half lit: {}", lit(a));
+        assert!((25..=35).contains(&lit(b)), "second strip half lit: {}", lit(b));
+        assert!(a[..3].iter().any(|&v| v > 100), "forward strip: bar starts at its first LED");
+        assert!(a[59 * 3..].iter().all(|&v| v < 20));
+        assert!(b[59 * 3..].iter().any(|&v| v > 100), "reversed strip: bar starts at its last LED");
+        assert!(b[..3].iter().all(|&v| v < 20));
+    }
+
+    /// Over UDP: the controller's one DRGB frame covers both strips; the single-strip
+    /// controller next to it is unchanged. Uses 127.0.0.1 only.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn realtime_sends_one_frame_for_a_multi_strip_controller() {
+        use crate::config::StripConfig;
+        let rx = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        rx.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let port = rx.local_addr().unwrap().port();
+        let config = Config::default();
+        let db = Arc::new(DatabaseManager::new("sqlite::memory:").await.unwrap());
+        let bus: SharedEventBus = Arc::new(EventBus::new(100));
+        let wled = Arc::new(WledManager::new(config.wled.clone(), db, bus.clone()).with_realtime_port(port));
+        *wled.controllers.write().await = vec![WledController {
+            ip: "127.0.0.1".into(),
+            num_leds: 120,
+            strips: vec![
+                StripConfig { column: 0, leds: 60, reverse: false },
+                StripConfig { column: 1, leds: 60, reverse: true },
+            ],
+        }];
+        wled.rebuild_sockets().await.unwrap();
+        {
+            let socks = wled.udp_sockets.read().await;
+            let strips = &socks[0].1;
+            assert_eq!(strips.len(), 2);
+            assert_eq!(strips[0].columns_total, 2);
+        }
+        wled.start_realtime_mode(ArenaState::Warming).await.unwrap();
+        bus.publish(Event::energy_changed(50.0, 100.0));
+        let frame = last_of(&rx, 40);
+        assert_eq!(frame.len(), 120 * 3);
+        let (a, b) = frame.split_at(60 * 3);
+        assert!((25..=35).contains(&lit(a)) && (25..=35).contains(&lit(b)), "{} {}", lit(a), lit(b));
+        assert!(a[..3].iter().any(|&v| v > 100));
+        assert!(b[59 * 3..].iter().any(|&v| v > 100), "second strip is reversed");
+        wled.stop_realtime_mode().await;
+    }
+
+    /// A device reporting another count resizes a single-strip controller but not a
+    /// multi-strip one (which strip would be off?).
+    #[tokio::test]
+    async fn led_count_adoption_scales_single_strip_only() {
+        use crate::config::StripConfig;
+        let config = Config::default();
+        let db = Arc::new(DatabaseManager::new("sqlite::memory:").await.unwrap());
+        let bus: SharedEventBus = Arc::new(EventBus::new(100));
+        let wled = WledManager::new(config.wled.clone(), db, bus);
+        *wled.controllers.write().await = vec![
+            WledController { ip: "a".into(), num_leds: 120, strips: vec![
+                StripConfig { column: 0, leds: 60, reverse: false },
+                StripConfig { column: 1, leds: 60, reverse: false },
+            ] },
+            WledController { ip: "b".into(), num_leds: 180, strips: vec![
+                StripConfig { column: 2, leds: 180, reverse: false },
+            ] },
+        ];
+        wled.update_led_count("a", 90).await;
+        wled.update_led_count("b", 150).await;
+        let cs = wled.controllers.read().await;
+        assert_eq!(cs[0].num_leds, 120, "multi-strip keeps its configuration");
+        assert_eq!((cs[1].num_leds, cs[1].strips[0].leds), (150, 150));
     }
 
     #[test]
@@ -1097,6 +1243,7 @@ mod tests {
         *wled.controllers.write().await = vec![WledController {
             ip: "127.0.0.1:8090".into(),
             num_leds: 12,
+            ..Default::default()
         }];
         wled.rebuild_sockets().await.unwrap();
         assert!(wled.get_status().await[0].connected);

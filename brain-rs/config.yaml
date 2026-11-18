@@ -138,8 +138,13 @@ wled:
   # controller per column; a controller hosting several strips has num_leds = 180 x strips.
   # The brain adopts the count the controller reports.
   # controllers:
-  #   - ip: "10.0.0.55"
+  #   - ip: "10.0.0.55"          # one strip = column 0 (column = list index)
   #     num_leds: 180
+  #   - ip: "10.0.0.56"          # a controller hosting columns 1 and 2 (num_leds = 360)
+  #     strips:
+  #       - {column: 1, leds: 180}
+  #       - {column: 2, leds: 180, reverse: true}   # reverse: wired top-down
+  # columns: 4                   # optional; default = highest column + 1
   controllers: []
 
   udp_fps: 30

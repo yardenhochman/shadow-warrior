@@ -71,6 +71,8 @@ wled:
   controllers:
     - ip: "192.168.1.100"
       num_leds: 180   # one column: 3 m x 60 LEDs/m (one controller per column)
+    # A controller hosting several columns lists them: strips: [{column: 1, leds: 180}, ...]
+    # (see docs/LEDS.md, "Layout")
 
 tasmota:
   plugs:

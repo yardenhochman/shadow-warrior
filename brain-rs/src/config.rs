@@ -329,14 +329,95 @@ pub struct MusicConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct WledConfig {
     pub controllers: Vec<WledController>,
+    /// Number of columns in the arena (4-5). Default: highest configured column + 1.
+    #[serde(default)]
+    pub columns: Option<usize>,
     pub udp_fps: u32,
     pub effects: WledEffects,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+/// One WLED controller. Without `strips` it drives one strip of `num_leds` that is column
+/// number "this controller's index". With `strips` (a controller hosting several columns)
+/// the strips are laid out consecutively in the controller's LED order and `num_leds` may be
+/// omitted (it is then the sum).
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct WledController {
     pub ip: String,
+    #[serde(default)]
     pub num_leds: usize,
+    #[serde(default)]
+    pub strips: Vec<StripConfig>,
+}
+
+/// One column's strip on a controller.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct StripConfig {
+    /// Column number, 0-based, left to right.
+    pub column: usize,
+    pub leds: usize,
+    /// The strip is wired top-down (serpentine): LED 0 is at the top of the column.
+    #[serde(default)]
+    pub reverse: bool,
+}
+
+impl WledController {
+    /// The strips this controller drives, in LED order. `index` is the controller's position
+    /// in the list, the column of the implicit single strip.
+    pub fn strip_specs(&self, index: usize) -> Vec<StripConfig> {
+        if self.strips.is_empty() {
+            vec![StripConfig { column: index, leds: self.num_leds, reverse: false }]
+        } else {
+            self.strips.clone()
+        }
+    }
+}
+
+impl WledConfig {
+    /// Fill in `num_leds` of multi-strip controllers and reject layouts that cannot work.
+    pub fn normalize(&mut self) -> Result<(), String> {
+        let mut seen = std::collections::BTreeSet::new();
+        for (i, c) in self.controllers.iter_mut().enumerate() {
+            if !c.strips.is_empty() {
+                if let Some(s) = c.strips.iter().find(|s| s.leds == 0) {
+                    return Err(format!("wled controller {}: strip of column {} has 0 leds", c.ip, s.column));
+                }
+                let sum: usize = c.strips.iter().map(|s| s.leds).sum();
+                if c.num_leds == 0 {
+                    c.num_leds = sum;
+                } else if c.num_leds != sum {
+                    return Err(format!(
+                        "wled controller {}: num_leds {} != sum of its strips ({sum})",
+                        c.ip, c.num_leds
+                    ));
+                }
+            } else if c.num_leds == 0 {
+                return Err(format!("wled controller {}: num_leds (or strips) is required", c.ip));
+            }
+            for s in c.strip_specs(i) {
+                if !seen.insert(s.column) {
+                    return Err(format!("wled: column {} is driven by more than one strip", s.column));
+                }
+            }
+        }
+        if let (Some(n), Some(&max)) = (self.columns, seen.iter().next_back()) {
+            if max >= n {
+                return Err(format!("wled: column {max} but columns is {n}"));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Columns in the arena for `controllers`: `configured` or the highest column + 1.
+pub fn columns_total(controllers: &[WledController], configured: Option<usize>) -> usize {
+    let used = controllers
+        .iter()
+        .enumerate()
+        .flat_map(|(i, c)| c.strip_specs(i))
+        .map(|s| s.column + 1)
+        .max()
+        .unwrap_or(0);
+    used.max(configured.unwrap_or(0))
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -485,6 +566,9 @@ impl Config {
                 *slot = user.extract_inner(&path).map_err(Box::new)?;
             }
         }
+        cfg.wled
+            .normalize()
+            .map_err(|e| Box::new(figment::Error::from(e)))?;
         Ok(cfg)
     }
 }
@@ -561,6 +645,7 @@ impl Default for Config {
             },
             wled: WledConfig {
                 controllers: vec![],
+                columns: None,
                 udp_fps: 30,
                 effects: WledEffects {
                     idle: WledEffect {
@@ -615,5 +700,41 @@ mod load_tests {
         let cfg = Config::from_sources(Figment::from(Yaml::string("wled:\n  effects:\n    idle:\n      effect: Fade\n"))).unwrap();
         assert_eq!(cfg.wled.effects.cooldown, Config::default().wled.effects.cooldown);
         assert_eq!(cfg.wled.effects.idle.palette, None);
+    }
+
+    fn load(yaml: &str) -> Result<Config, Box<figment::Error>> {
+        Config::from_sources(Figment::from(Yaml::string(yaml)))
+    }
+
+    #[test]
+    fn legacy_controller_is_one_strip_in_its_own_column() {
+        let cfg = load("wled:\n  controllers:\n    - {ip: a, num_leds: 180}\n    - {ip: b, num_leds: 90}\n").unwrap();
+        let strip = StripConfig { column: 1, leds: 90, reverse: false };
+        assert_eq!(cfg.wled.controllers[1].strip_specs(1), vec![strip]);
+        assert_eq!(columns_total(&cfg.wled.controllers, cfg.wled.columns), 2);
+    }
+
+    #[test]
+    fn multi_strip_controller_derives_num_leds_and_columns() {
+        let cfg = load("wled:\n  controllers:\n    - ip: a\n      strips: [{column: 0, leds: 180}, {column: 1, leds: 180, reverse: true}]\n    - {ip: b, num_leds: 180}\n");
+        // controller b is implicitly column 1, which a already drives
+        assert!(cfg.unwrap_err().to_string().contains("column 1"));
+        let cfg = load("wled:\n  controllers:\n    - ip: a\n      strips: [{column: 0, leds: 180}, {column: 1, leds: 180, reverse: true}]\n    - ip: b\n      strips: [{column: 2, leds: 180}]\n").unwrap();
+        assert_eq!(cfg.wled.controllers[0].num_leds, 360);
+        assert!(cfg.wled.controllers[0].strips[1].reverse);
+        assert_eq!(columns_total(&cfg.wled.controllers, cfg.wled.columns), 3);
+    }
+
+    #[test]
+    fn invalid_strip_layouts_are_rejected() {
+        let sum = load("wled:\n  controllers:\n    - {ip: a, num_leds: 100, strips: [{column: 0, leds: 60}, {column: 1, leds: 60}]}\n");
+        assert!(sum.unwrap_err().to_string().contains("sum of its strips"));
+        let dup = load("wled:\n  controllers:\n    - {ip: a, strips: [{column: 0, leds: 60}, {column: 0, leds: 60}]}\n");
+        assert!(dup.unwrap_err().to_string().contains("column 0"));
+        let beyond = load("wled:\n  columns: 4\n  controllers:\n    - {ip: a, strips: [{column: 4, leds: 60}]}\n");
+        assert!(beyond.is_err());
+        assert!(load("wled:\n  controllers:\n    - {ip: a}\n").is_err());
+        let five = load("wled:\n  columns: 5\n  controllers:\n    - {ip: a, num_leds: 180}\n").unwrap();
+        assert_eq!(columns_total(&five.wled.controllers, five.wled.columns), 5);
     }
 }

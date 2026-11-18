@@ -40,6 +40,35 @@ The effect ids and palette ids differ between WLED builds. The brain resolves na
 controller (`GET /json/eff`, `/json/pal`) and falls back to a table pinned to WLED 0.15.4
 (`wled_manager/protocol.rs`). Prefer exact device names in the config.
 
+## Layout: columns, strips, controllers
+
+The arena has 4-5 columns around the punching bag, which hangs in the **centre**. Each column
+is one 3 m strip, 60 LEDs/m = 180 LEDs. Normally one WLED controller drives one column.
+A controller may host 2-4 strips; its LED range is then the strips concatenated in order
+(`num_leds` = 180 x strips) and ONE UDP DRGB/DNRGB frame covers all of them.
+
+```yaml
+wled:
+  columns: 4                      # optional; default = highest column + 1
+  controllers:
+    - {ip: "10.0.0.55", num_leds: 180}          # one strip, column = list index (0)
+    - ip: "10.0.0.56"                           # two strips, columns 1 and 2
+      strips:                                   # consecutive in LED order; num_leds optional (sum)
+        - {column: 1, leds: 180}
+        - {column: 2, leds: 180, reverse: true} # wired top-down (LED 0 at the top)
+```
+
+Validation at load: the strips' LEDs must sum to `num_leds` if given, no column twice, no
+column >= `columns`. The brain renders **one compositor per strip** and concatenates the
+strips (flipping `reverse` ones) into the controller's frame. Scenes get the strip's
+`led::ColumnLayout` (`column`, `columns_total`, `bag_distance`, `leds`, `reverse`).
+`bag_distance` is 0 at the bag and 1 at the outermost column (5 columns: 1, .5, 0, .5, 1;
+4 columns: 1, 1/3, 1/3, 1), so punch shockwaves can travel inner columns first. Warming is the
+same on every column for now.
+
+LED-count adoption (`/json/info` `leds.count`) resizes a single-strip controller; for a
+multi-strip controller a different count only logs a warning and the configured layout stays.
+
 ## Warming and fight: the `led` module (`src/led/`)
 
 A small compositor renders into one RGB buffer per controller and the realtime loop sends it
@@ -75,7 +104,7 @@ All colours and timings live in style structs (`EnergyBarStyle`, `ShoutGlowStyle
 
 - Built and tested: compositor, `EnergyBar`, `ShoutGlow`, `LiveInputs` (event smoothing).
 - **Warming is wired**: `wled_manager`'s realtime loop renders `led::scenes::warming(len)` per
-  controller (rebuilt when the device reports a different LED count) at `udp_fps`, using real
+  strip (rebuilt when the device reports a different LED count) at `udp_fps`, using real
   `dt`. Inputs come from the event bus: `EnergyChanged` -> `energy / max_energy` clamped to 0..1;
   `ShoutDetected` -> `shout = max(shout, intensity)`, decaying with tau 0.35 s per frame.
   Frames are sent every tick even when nothing changes (WLED realtime timeout is 2 s).
