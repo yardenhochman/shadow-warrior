@@ -42,7 +42,7 @@ Stop the brain first: BLE allows one central, and two writers fight over the str
 
 - **Strip**: each rendered frame (the same colours as the LED columns panel) goes over a
   WebSocket at ~30 fps. The four columns are laid end to end on the strip (column 1 first,
-  each base first, resampled by area averaging: the sim draws 4 x 45 LEDs by default, the same as the real strip (3 m x 60 LEDs/m = 180 LEDs, 45 per column), so nothing is resampled; raise "LEDs per column" for a finer preview, which is area-averaged down; the LED count
+  each base first, resampled by area averaging: the sim draws 180 LEDs per column by default, like a real column (one 3 m strip, 60 LEDs/m). NOTE: the bridge still lays the 4 columns end to end on ONE strip; the real installation is one WLED controller per column (4-5 columns), see brain-rs/docs/LEDS.md; the LED count
   comes from WLED at startup). Tick **Serpentine** when every other column runs top-down.
   The bridge applies `--brightness 0.7` and `--gamma 2.2` (screen colours to LED duty) and
   sends WLED UDP realtime DNRGB to port 21324 with a 2 s timeout. When the page closes,
@@ -194,7 +194,7 @@ synthesised drum loop in its place.
     THUNDERCLAP, HAIL.
   - *Neon dojo*: thin neon outlines on black, a tick-marked meter with chasers, more and faster
     chasers with rage; hits KATANA, OVERDRIVE, NEON BURST.
-  - *Retro arcade*: chunky blocks (about 4 strip LEDs each) with gaps, a power-up meter whose colour
+  - *Retro arcade*: chunky blocks (about 15 strip LEDs each) with gaps, a power-up meter whose colour
     steps green to red per stage with a level-up blink, equalizer bars; hits K.O. FLASH, PIXEL
     BLAST, FIREBALL.
 

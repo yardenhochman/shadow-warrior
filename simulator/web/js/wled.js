@@ -328,7 +328,7 @@ export class LedRig {
     if (this.hueM) rgb = rot(this.hueM, rgb[0], rgb[1], rgb[2]);
     a[i * 3] += Math.max(0, rgb[0]) * k; a[i * 3 + 1] += Math.max(0, rgb[1]) * k; a[i * 3 + 2] += Math.max(0, rgb[2]) * k;
   }
-  /** soft dot centred at xc (0..1 of the column), w ~ half-width in column heights (>= 1 strip LED at 45); w scales with Size */
+  /** soft dot centred at xc (0..1 of the column), w ~ half-width in column heights (>= 1 strip LED at 180); w scales with Size */
   blob(c, xc, w, rgb, k) {
     w *= this.sizeK;
     const n = this.n, lo = Math.max(0, Math.floor((xc - 2.2 * w) * n)), hi = Math.min(n - 1, Math.ceil((xc + 2.2 * w) * n));

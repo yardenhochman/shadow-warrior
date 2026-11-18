@@ -70,7 +70,7 @@ ble:
 wled:
   controllers:
     - ip: "192.168.1.100"
-      num_leds: 180   # the arena strip: 3 m x 60 LEDs/m
+      num_leds: 180   # one column: 3 m x 60 LEDs/m (one controller per column)
 
 tasmota:
   plugs:

@@ -142,8 +142,8 @@ export const TUNABLES = [
   { section: 'sim', key: 'hit_fx_intensity', def: 1, min: 0.3, max: 1.5, step: 0.05, name: 'Punch effect strength', unit: 'x',
     help: 'How bright the punch effects are on the LED columns and how strong the screen flashes and shake are.',
     more: 'Scales the punch signatures on the LEDs and the matching screen moments. The whole LED frame stays under the strip brightness cap (mean level 0.72) whatever this is set to, so above 1 the effects get bolder but never a white wall. Screen shake is off for anyone with "reduce motion" set in their system. Sim proposal, not exported.' },
-  { section: 'sim', key: 'leds_per_column', def: 45, min: 10, max: 300, step: 5, int: true, name: 'LEDs per column', unit: 'LEDs',
-    help: 'How many LEDs the simulator draws in each of the four columns. Default 45: the real strip is 3 m at 60 LEDs/m = 180 LEDs, 45 per column.',
+  { section: 'sim', key: 'leds_per_column', def: 180, min: 10, max: 300, step: 5, int: true, name: 'LEDs per column', unit: 'LEDs',
+    help: 'How many LEDs the simulator draws in each of the four columns. Default 180: each real column is one 3 m strip at 60 LEDs/m = 180 LEDs.',
     more: 'Only changes the on-screen LED preview. When the bridge drives a real strip it resamples the picture to the strip length, so this does not change the hardware.' },
 ];
 

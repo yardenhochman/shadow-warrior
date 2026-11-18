@@ -134,8 +134,9 @@ sound:
   #   punch_jab:     { files: [jab.wav], gain: 0.7, min_interval_ms: 100 }
 
 wled:
-  # The arena strip is one WLED controller: 3 m x 60 LEDs/m = 180 LEDs (4 columns x 45; the
-  # simulator uses the same). The brain adopts the count the controller reports.
+  # The arena has 4-5 columns, each a 3 m strip of 180 LEDs (60/m), normally one WLED
+  # controller per column; a controller hosting several strips has num_leds = 180 x strips.
+  # The brain adopts the count the controller reports.
   # controllers:
   #   - ip: "10.0.0.55"
   #     num_leds: 180

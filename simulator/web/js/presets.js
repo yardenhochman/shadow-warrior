@@ -50,7 +50,7 @@ export const FX_PARAMS = [
     more: 'Scales the effect\'s own clock. For hits, the opening and the victory it also scales the duration (a 1.2 s heavy at speed 2 is over in 0.6 s). For the idle, warming and fight ambients it speeds up breathing, rain, chasers and flames. The game timers do not change.' },
   { key: 'size', name: 'Size', unit: 'x', def: 1, min: 0.4, max: 2.5, step: 0.05,
     help: 'Width of the sparks, dots and bands; in the ambients the height of flames, waves or rain trails.',
-    more: 'Multiplies the width of every soft dot an effect draws, and the length of bands, flames and trails where the effect has one. Small values give crisp single-LED accents (the real strip has 45 LEDs per column, so 1 LED is about 0.02 of a column); large values give fat, soft blobs.' },
+    more: 'Multiplies the width of every soft dot an effect draws, and the length of bands, flames and trails where the effect has one. Small values give crisp single-LED accents (a real column has 180 LEDs, so 1 LED is about 0.006 of a column); large values give fat, soft blobs.' },
   { key: 'gain', name: 'Intensity', unit: 'x', def: 1, min: 0, max: 1.6, step: 0.05,
     help: 'Brightness of this stage\'s effect. 0 switches it off.',
     more: 'Multiplies the effect\'s light. For hits it stacks with "Punch effect strength" in the tunables. Whatever the value, the whole frame stays under the strip cap (mean level 0.72), so above 1 effects get bolder but the strip never turns into a white wall.' },
@@ -82,7 +82,7 @@ const fill = (L, fn) => { for (let c = 0; c < 4; c++) for (let i = 0; i < L.n; i
 /** Stateless particles: k-th particle of column c with phase 0..1 at time t (rate per second). */
 const phase = (t, c, k, rate) => fract(t * rate * (0.7 + 0.6 * hash(c + 3, k)) + hash(k, c));
 
-// Retro: chunky blocks (12 per column, ~4 strip LEDs each) with a dark gap.
+// Retro: chunky blocks (12 per column, ~15 strip LEDs each at 180) with a dark gap.
 const NB = 12;
 function block(L, c, b, rgb, k) { if (b < 0 || b >= NB) return; L.band(c, b / NB + 0.012, (b + 1) / NB - 0.012, rgb, k, 0.002); }
 function fillBlocks(L, fn) {

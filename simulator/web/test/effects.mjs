@@ -56,7 +56,9 @@ results.push(`victory sound peak: ${peak.toFixed(2)} dBFS`);
 if (!(peak < 0)) problems.push(`victory sound peaks at ${peak.toFixed(2)} dBFS`);
 
 // 3. Levels and LED snapshots per preset x stage.
-await page.evaluate(() => { window.sim.cfg.leds_per_column = 90; });
+// The sim must draw what a real column has: one 3 m strip at 60 LEDs/m = 180 LEDs.
+const ledsPerColumn = await page.evaluate(() => window.sim.rig.n);
+if (ledsPerColumn !== 180) problems.push(`LEDs per column: ${ledsPerColumn}, want 180 (3 m x 60/m)`);
 const presets = await page.evaluate(async () => (await import('./js/presets.js')).PRESET_IDS);
 const kindsOf = (id) => page.evaluate(async (p) => { const { PRESETS } = await import('./js/presets.js'); const o = {}; for (const t of ['jab', 'hook', 'heavy']) o[t] = PRESETS[p][t].kinds ? Object.keys(PRESETS[p][t].kinds) : []; return o; }, id);
 /** Fire a preview and sample every frame: mean / peak level and snapshots at the given ages. */
@@ -142,7 +144,7 @@ const drawSheet = async (data, file, title, colW = 5, ledH = 2) => {
   await p2.close();
   results.push(`sheet: ${OUT}/${file}`);
 };
-await drawSheet(sheet, 'sheet-presets.png', 'LED columns per preset x stage (bottom LED at the bottom; 4 columns, 90 sim LEDs each)');
+await drawSheet(sheet, 'sheet-presets.png', `LED columns per preset x stage (bottom LED at the bottom; 4 columns, ${ledsPerColumn} sim LEDs each)`);
 await drawSheet(vicSheet, 'sheet-victory-leds.png', 'Victory finale on the LEDs per preset (age in s; climax at 2.4 s)', 7, 3);
 
 // 5. Arena: overlays minimal vs full (FIGHT shout and a heavy), then a real KO -> victory -> round 2.
