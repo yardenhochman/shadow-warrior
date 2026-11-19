@@ -9,7 +9,7 @@ use tokio::sync::RwLock;
 use tokio::time::interval;
 use tracing::{debug, error, info, warn};
 
-use crate::config::{columns_total, WledConfig, WledController, WledEffect};
+use crate::config::{columns_total, next_free_column, StripConfig, WledConfig, WledController, WledEffect};
 use crate::core::{ArenaState, Event, SharedEventBus};
 use crate::led::layout::{append_strip, controller_strips};
 use crate::led::scenes::FightScene;
@@ -144,12 +144,23 @@ impl WledManager {
         {
             let mut controllers = self.controllers.write().await;
             if controllers.iter().any(|c| c.ip == ip) {
+                debug!("WLED controller {ip} is already configured, not adding it again");
                 return Ok(());
             }
+            // Never reuse a column: the list position is only the column of controllers
+            // without explicit strips, so take the lowest column nobody drives.
+            let Some(column) = next_free_column(&controllers, self.config.columns) else {
+                warn!(
+                    "WLED controller {ip} discovered but all {} columns are taken; not adding it",
+                    self.config.columns.unwrap_or(0)
+                );
+                return Ok(());
+            };
+            info!("WLED controller {ip} added on column {column}");
             controllers.push(WledController {
                 ip: ip.clone(),
                 num_leds: 150,
-                ..Default::default()
+                strips: vec![StripConfig { column, leds: 150, reverse: false }],
             });
         }
         self.rebuild_sockets().await?;
@@ -1361,5 +1372,46 @@ mod tests {
             180,
             "missing count keeps the known one"
         );
+    }
+
+    fn ctrl(ip: &str, strips: Vec<StripConfig>) -> WledController {
+        WledController { ip: ip.into(), num_leds: 180, strips }
+    }
+
+    #[test]
+    fn next_free_column_skips_taken_and_respects_limit() {
+        let strip = |column| StripConfig { column, leds: 180, reverse: false };
+        // implicit controller 0 drives column 0; an explicit strip drives column 2
+        let cs = vec![ctrl("a", vec![]), ctrl("b", vec![strip(2)])];
+        assert_eq!(next_free_column(&cs, None), Some(1));
+        assert_eq!(next_free_column(&cs, Some(4)), Some(1));
+        let full = vec![ctrl("a", vec![]), ctrl("b", vec![strip(1)])];
+        assert_eq!(next_free_column(&full, Some(2)), None, "all configured columns taken");
+        assert_eq!(next_free_column(&full, None), Some(2), "unconfigured arena grows");
+        assert_eq!(next_free_column(&[], Some(4)), Some(0));
+    }
+
+    #[tokio::test]
+    async fn add_controller_takes_free_column_and_rejects_dupes_and_full() {
+        let mut config = Config::default().wled;
+        config.columns = Some(3);
+        let db = Arc::new(DatabaseManager::new("sqlite::memory:").await.unwrap());
+        let bus: SharedEventBus = Arc::new(EventBus::new(100));
+        let wled = Arc::new(WledManager::new(config, db, bus));
+        let strip = |column| StripConfig { column, leds: 180, reverse: false };
+        // configured: implicit column 0 and a two-column-gap layout (column 1 taken explicitly)
+        *wled.controllers.write().await = vec![ctrl("127.0.0.1:1", vec![]), ctrl("127.0.0.1:2", vec![strip(1)])];
+
+        let a = dead_addr().await;
+        wled.add_controller(a.clone()).await.unwrap();
+        wled.add_controller(a.clone()).await.unwrap(); // duplicate address: ignored
+        let b = dead_addr().await;
+        wled.add_controller(b.clone()).await.unwrap(); // columns full: rejected
+
+        let cs = wled.controllers.read().await;
+        assert_eq!(cs.len(), 3);
+        assert_eq!(cs[2].ip, a);
+        assert_eq!(cs[2].strip_specs(2)[0].column, 2);
+        assert!(!cs.iter().any(|c| c.ip == b));
     }
 }

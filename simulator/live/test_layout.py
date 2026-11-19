@@ -48,6 +48,13 @@ class Unit(unittest.TestCase):
         self.assertEqual(lay.controllers[1].bind, ("10.0.0.2", 21324))
         self.assertEqual(lay.controllers[1].strips[1].offset, 180)
 
+    def test_page_limit_warning(self):
+        ctl = lambda i: {"ip": f"127.0.0.{i + 1}", "num_leds": 180}  # noqa: E731
+        self.assertEqual(Layout.from_spec({"wled": {"controllers": [ctl(i) for i in range(4)]}}).warnings, [])
+        w = Layout.from_spec({"wled": {"controllers": [ctl(i) for i in range(5)]}}).warnings
+        self.assertEqual(len(w), 1)
+        self.assertIn("column(s) 4", w[0])
+
     def test_errors(self):
         for spec in ({"controllers": []},
                      {"controllers": [{"ip": "a", "num_leds": 10}, {"ip": "a", "num_leds": 10}]},  # same UDP address

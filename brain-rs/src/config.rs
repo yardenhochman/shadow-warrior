@@ -408,6 +408,22 @@ impl WledConfig {
     }
 }
 
+/// Lowest column no strip of `controllers` drives, or `None` when `configured` columns are all taken.
+/// Without `configured` the arena can grow, so there is always a free column.
+pub fn next_free_column(controllers: &[WledController], configured: Option<usize>) -> Option<usize> {
+    let used: std::collections::BTreeSet<usize> = controllers
+        .iter()
+        .enumerate()
+        .flat_map(|(i, c)| c.strip_specs(i))
+        .map(|s| s.column)
+        .collect();
+    let free = (0..).find(|c| !used.contains(c))?;
+    match configured {
+        Some(n) if free >= n => None,
+        _ => Some(free),
+    }
+}
+
 /// Columns in the arena for `controllers`: `configured` or the highest column + 1.
 pub fn columns_total(controllers: &[WledController], configured: Option<usize>) -> usize {
     let used = controllers

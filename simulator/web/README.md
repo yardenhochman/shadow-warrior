@@ -124,6 +124,8 @@ needed, so it is the easy macOS setup.
   bottom-first, serpentine off); leave **Serpentine** unticked. A column with no data yet, or
   whose controller's realtime timeout has passed (at the next frame from any controller), is dark.
 - The page shows exactly four columns: columns >= 4 are not shown, missing ones are dark; a
+  layout with more than four columns makes the bridge log a warning at start and list it in
+  `layout_warnings` of `/live/status`; a
   strip shorter than the longest is padded dark at the top. All strips are 180 LEDs normally.
 - macOS only has `127.0.0.1`; add aliases (`sudo ifconfig lo0 alias 127.0.0.2 up`, same for
   .3 and .4; they vanish at reboot) and use them as controller ips, with the brain's

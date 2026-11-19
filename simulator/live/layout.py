@@ -79,6 +79,15 @@ class Layout:
         self.cols = [bytearray(self.per * 3) for _ in range(columns)]
 
     @property
+    def warnings(self):
+        """Limits of the page this layout runs into (empty when it fits)."""
+        if self.columns > PAGE_COLUMNS:
+            hidden = ", ".join(str(c) for c in range(PAGE_COLUMNS, self.columns))
+            return [f"layout has {self.columns} columns but the page shows only {PAGE_COLUMNS}: "
+                    f"column(s) {hidden} (0-based) are not shown"]
+        return []
+
+    @property
     def count(self):
         """LEDs in the canonical page frame."""
         return PAGE_COLUMNS * self.per

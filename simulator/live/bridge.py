@@ -442,6 +442,7 @@ class BrainLink:
                                   "strips": [[s.column, s.leds, s.reverse] for s in c.strips],
                                   "forward": c.forward} for c in self.layout.controllers]
             st["columns"] = self.layout.columns
+            st["layout_warnings"] = self.layout.warnings
         return st
 
     # ---- stand-in WLED JSON API (brain -> bridge -> real WLED)
@@ -703,6 +704,9 @@ async def main():
     wled.probe()
     brain_mode = bool(a.brain)
     # Brain mode: the brain is the bag's BLE central (one central only).
+    if layout:
+        for w in layout.warnings:
+            log.warning("%s", w)
     hub = Hub(wled, None if (a.no_ble or brain_mode) else (a.threshold, a.alpha), a.brain, layout)
     loop = asyncio.get_running_loop()
     tasks = []
