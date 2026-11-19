@@ -678,7 +678,7 @@ impl Default for Config {
                     idle: WledEffect {
                         effect: "Fade".to_string(),
                         palette: None,
-                        speed: Some(40),
+                        speed: Some(24), // Fade cycle 5.04 s
                         brightness: Some(180),
                         colors: Some(vec![[255, 25, 0], [0, 0, 0]]),
                         ..Default::default()

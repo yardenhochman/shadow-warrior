@@ -153,10 +153,10 @@ wled:
   # colors (up to 3 RGB triples, e.g. [[255,0,0],[0,0,255]]).
   effects:
     idle:
-      # Chosen on the strip 2026-11-17: ember red fading fully to black and back, ~4.4 s cycle (a triangle wave).
+      # Chosen on the strip 2026-11-17: ember red fading fully to black and back, ~5 s cycle (a triangle wave; set 2026-11-19).
       # WLED 0.15.4 Fade cycle = 65.536 s / ((speed >> 3) + 10); colour 2 (black) is the fade target.
       effect: "Fade"
-      speed: 40
+      speed: 24   # Fade cycle 5.04 s (speed 24-31 all give (sx>>3)=3)
       brightness: 180
       colors: [[255, 25, 0], [0, 0, 0]]
     # Only idle and cooldown use built-in WLED effects. Warming and fight are always UDP
