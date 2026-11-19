@@ -212,7 +212,7 @@ wled:
   with a clear error. A multi-strip controller keeps its configured layout even if WLED reports
   another LED count (warning in the log).
 - Put every controller in `config.yaml`. One found by discovery is added on the lowest free
-  column with 150 LEDs (never a taken column; ignored if all `columns` are taken), which is not
+  column with 180 LEDs (never a taken column; ignored if all `columns` are taken), which is not
   your real layout.
 - The idle/cooldown/warming/fight looks live under `wled.effects`. Defaults equal the chosen
   looks, so on a station with an old config **delete the whole `wled.effects` block** (or copy

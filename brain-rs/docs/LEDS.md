@@ -66,7 +66,7 @@ strips (flipping `reverse` ones) into the controller's frame. Scenes get the str
 4 columns: 1, 1/3, 1/3, 1), so punch shockwaves can travel inner columns first. Warming is the
 same on every column for now.
 
-Controllers found at runtime by discovery (mDNS) are added with one 150-LED strip on the lowest
+Controllers found at runtime by discovery (mDNS) are added with one 180-LED strip on the lowest
 column no strip drives yet (never a column already assigned). A discovered address that is already
 configured is ignored; when `columns` is set and all of them are taken it is logged and not added.
 Without `columns` the arena grows by one column. Configure controllers explicitly in

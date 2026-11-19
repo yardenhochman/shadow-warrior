@@ -349,6 +349,10 @@ pub struct WledController {
     pub strips: Vec<StripConfig>,
 }
 
+/// LEDs on a typical column: one 3 m strip at 60 LEDs/m. Used when nothing else is known
+/// (a controller found by discovery, before it reports its own count).
+pub const DEFAULT_STRIP_LEDS: usize = 180;
+
 /// One column's strip on a controller.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct StripConfig {

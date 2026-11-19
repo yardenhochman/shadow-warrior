@@ -9,7 +9,7 @@ use tokio::sync::RwLock;
 use tokio::time::interval;
 use tracing::{debug, error, info, warn};
 
-use crate::config::{columns_total, next_free_column, StripConfig, WledConfig, WledController, WledEffect};
+use crate::config::{columns_total, next_free_column, StripConfig, DEFAULT_STRIP_LEDS, WledConfig, WledController, WledEffect};
 use crate::core::{ArenaState, Event, SharedEventBus};
 use crate::led::layout::{append_strip, controller_strips};
 use crate::led::scenes::FightScene;
@@ -104,7 +104,7 @@ impl WledManager {
                     if !loaded_controllers.iter().any(|c| c.ip == dev.host) {
                         loaded_controllers.push(WledController {
                             ip: dev.host.clone(),
-                            num_leds: 150, // Default
+                            num_leds: DEFAULT_STRIP_LEDS, // until the device reports its own count
                 ..Default::default()
                         });
                     }
@@ -159,8 +159,8 @@ impl WledManager {
             info!("WLED controller {ip} added on column {column}");
             controllers.push(WledController {
                 ip: ip.clone(),
-                num_leds: 150,
-                strips: vec![StripConfig { column, leds: 150, reverse: false }],
+                num_leds: DEFAULT_STRIP_LEDS,
+                strips: vec![StripConfig { column, leds: DEFAULT_STRIP_LEDS, reverse: false }],
             });
         }
         self.rebuild_sockets().await?;
@@ -1346,7 +1346,7 @@ mod tests {
         wled.stop_realtime_mode().await;
     }
 
-    /// The device's own LED count replaces the 150 guess (discovery) and the
+    /// The device's own LED count replaces the 180 guess (discovery) and the
     /// frames are resized; a device that does not report one keeps its value.
     #[tokio::test]
     async fn health_poll_adopts_reported_led_count() {
