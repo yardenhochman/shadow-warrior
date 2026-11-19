@@ -153,8 +153,8 @@ wled:
   # colors (up to 3 RGB triples, e.g. [[255,0,0],[0,0,255]]).
   effects:
     idle:
-      # Chosen on the strip 2026-11-17: ember red fading fully to black and back, ~11 s cycle.
-      # Fade cycle = 65.5 s / (1 + speed/8); colour 2 (black) is the fade target.
+      # Chosen on the strip 2026-11-17: ember red fading fully to black and back, ~4.4 s cycle (a triangle wave).
+      # WLED 0.15.4 Fade cycle = 65.536 s / ((speed >> 3) + 10); colour 2 (black) is the fade target.
       effect: "Fade"
       speed: 40
       brightness: 180

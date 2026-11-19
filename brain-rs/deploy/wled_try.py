@@ -53,12 +53,12 @@ DEMOS = {
         ("E  Breathe, red ember, very slow (sx 25)", dict(fx="Breathe", pal="Default", sx=25, col=[[255, 25, 0]])),
         ("F  Breathe, deep blue, faster (sx 90)", dict(fx="Breathe", pal="Default", sx=90, col=[[0, 70, 255]])),
     ],
-    # Fade goes fully to colour 2 (black) in one triangle wave; cycle ~ 65.5 s / (1 + sx/8).
+    # Fade goes fully to colour 2 (black) in one triangle wave; cycle = 65.536 s / ((sx >> 3) + 10) on WLED 0.15.4.
     "idle2": [
         ("E1  Breathe, ember, slowest (sx 0): ~5 s breath then a long dim rest", dict(fx="Breathe", pal="Default", sx=0, col=[[255, 25, 0]])),
-        ("E2  Fade to black, ember, ~8 s cycle (sx 56)", dict(fx="Fade", pal="Default", sx=56, col=[[255, 25, 0], [0, 0, 0]])),
-        ("E3  Fade to black, ember, ~11 s cycle (sx 40)", dict(fx="Fade", pal="Default", sx=40, col=[[255, 25, 0], [0, 0, 0]])),
-        ("E4  Fade to black, ember, ~16 s cycle (sx 24)", dict(fx="Fade", pal="Default", sx=24, col=[[255, 25, 0], [0, 0, 0]])),
+        ("E2  Fade to black, ember, ~3.9 s cycle (sx 56)", dict(fx="Fade", pal="Default", sx=56, col=[[255, 25, 0], [0, 0, 0]])),
+        ("E3  Fade to black, ember, ~4.4 s cycle (sx 40)", dict(fx="Fade", pal="Default", sx=40, col=[[255, 25, 0], [0, 0, 0]])),
+        ("E4  Fade to black, ember, ~5.0 s cycle (sx 24)", dict(fx="Fade", pal="Default", sx=24, col=[[255, 25, 0], [0, 0, 0]])),
     ],
 }
 

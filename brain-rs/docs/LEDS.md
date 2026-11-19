@@ -5,7 +5,7 @@ Two ways to drive a WLED strip, one per arena state.
 | State | Mode | Who animates | Look |
 |-------|------|--------------|------|
 | Suspended | off | - | strip off |
-| Idle | **built-in WLED effect** (HTTP) | the controller | ember red fading to black, ~11 s cycle |
+| Idle | **built-in WLED effect** (HTTP) | the controller | ember red fading to black, ~4.4 s cycle (see below) |
 | Warming | **UDP realtime** | the brain, 30 fps | energy bar (persistent) + shout glow (live) |
 | Fight | **UDP realtime** | the brain, 30 fps | punch pulses, shout effects, music-driven effects, optional energy bar |
 | Cooldown | **built-in WLED effect** (HTTP) | the controller | "Fire 2012", Lava palette |
@@ -28,7 +28,7 @@ Two ways to drive a WLED strip, one per arena state.
 
 WLED effect `Fade`, speed 40, brightness 180, colours `[[255,25,0],[0,0,0]]` (config
 `wled.effects.idle`). It is a triangle wave between the two colours, cycle
-`65.5 s / (1 + speed/8)` = 10.9 s. Chosen on the real strip on 2026-11-17 ("E3").
+`65.536 s / ((speed >> 3) + 10)` (WLED 0.15.4 `mode_fade`: `lum = triwave16(now * ((sx>>3)+10)) >> 8`) = 4.4 s at speed 40; the range is 6.6 s (speed < 8) down to 2 s. Speed 40 was chosen on the real strip on 2026-11-17 ("E3"); an earlier version of this doc said 10.9 s, which was wrong (it used the pre-0.15 formula). The shape is a triangle.
 
 Preview without hardware:
 
