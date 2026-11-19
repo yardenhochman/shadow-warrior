@@ -270,6 +270,10 @@ pub struct AudioConfig {
     /// come only from `POST /api/arena/shout`.
     #[serde(default = "d_true")]
     pub input: bool,
+    /// Refuse a sink-monitor / loopback capture (the brain would hear its own playback):
+    /// audio health becomes an error ("no real microphone") and shout detection stays off.
+    #[serde(default = "d_true")]
+    pub reject_monitor: bool,
     /// Long-session recorder: seconds of raw audio per WAV chunk.
     #[serde(default = "d_record_chunk")]
     pub record_chunk_sec: f32,
@@ -652,6 +656,7 @@ impl Default for Config {
                 clip_cooldown_sec: default_clip_cooldown_sec(),
                 clip_raw: d_true(),
                 input: d_true(),
+                reject_monitor: d_true(),
                 record_chunk_sec: d_record_chunk(),
                 record_min_free_mb: d_record_min_free(),
                 record_max_session_sec: d_record_max(),

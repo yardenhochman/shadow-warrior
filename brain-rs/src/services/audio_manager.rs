@@ -9,6 +9,7 @@ use anyhow::{Context, Result};
 
 use earshot::Detector;
 
+use super::audio_source;
 use super::shout_detector::ShoutDetector;
 use super::session_recorder::{disk_free_bytes, sanitize_label, RecordStatus, SessionParams, SessionRecorder};
 use super::audio_frontend::{ClipOutput, ClipRecorder, FrameFeatures, FrontEnd, FrontEndConfig};
@@ -56,9 +57,32 @@ impl AudioManager {
         }
 
         let host = cpal::default_host();
-        let device = host
-            .default_input_device()
-            .context("No input device available")?;
+        let default_device = host.default_input_device().context("No input device available")?;
+        let default_name = default_device.description().map(|d| d.to_string()).unwrap_or_else(|_| "Unknown".to_string());
+        let reject_monitor = self.config.read().await.reject_monitor;
+        let device = if reject_monitor {
+            // Candidates: default first, then the other input devices.
+            let mut names = vec![default_name.clone()];
+            let mut devs = vec![default_device];
+            if let Ok(all) = host.input_devices() {
+                for d in all {
+                    let n = d.description().map(|x| x.to_string()).unwrap_or_default();
+                    if n != default_name {
+                        names.push(n);
+                        devs.push(d);
+                    }
+                }
+            }
+            let verdict = tokio::task::spawn_blocking(audio_source::pactl_default_source_is_monitor).await.ok().flatten();
+            match audio_source::decide(&names, 0, verdict, true) {
+                audio_source::Decision::Use(i) => devs.swap_remove(i),
+                // Not capturing, so no shout detection on our own playback. main.rs
+                // publishes this error: health shows audio down with this reason.
+                audio_source::Decision::Reject(reason) => anyhow::bail!("{reason}"),
+            }
+        } else {
+            default_device
+        };
 
         let device_name = device.description().map(|d| d.to_string()).unwrap_or_else(|_| "Unknown".to_string());
         info!("Using audio device: {}", device_name);

@@ -145,8 +145,18 @@ the log says `a2dp-sink profile connect failed: Protocol not available`.
         then `systemctl --user restart pipewire pipewire-pulse wireplumber`. With no
         microphone present the capture stream should then stay unlinked instead of falling
         back to the monitor.
-  - The brain itself cannot yet tell a real microphone from a monitor; that guard is code
-    work, tracked in `shadow-warrior-25j`.
+  - **Brain guard** (`audio.reject_monitor`, default `true`; `services/audio_source.rs`): at
+    start the brain refuses a capture whose device name looks like a monitor/loopback
+    ("monitor", "loopback", "stereo mix"), and for a generic alias (`default`, `pipewire`,
+    "Default Audio Device") it asks `pactl` (2 s timeout, skipped if `pactl` is missing)
+    whether the default source is a monitor. It then tries another named non-monitor input
+    device; if none exists it does not open the stream, so no shout detection runs, and
+    publishes an audio error: `hardware.audio` in `/api/state` shows not connected with
+    `last_error` "start: no real microphone: capture is a sink monitor (...)". The rest of
+    the brain keeps running. Recovery needs a restart of the service after plugging in a mic
+    (there is no capture retry loop). If `pactl` is unavailable and the name is a generic
+    alias, the guard cannot tell and capture starts, so keep the `wpctl` check above.
+    **Not verified on the Orange Pi yet** (`shadow-warrior-25j` follow-up).
 
 ## 3c. Music
 
