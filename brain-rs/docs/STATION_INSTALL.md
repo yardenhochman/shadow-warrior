@@ -36,7 +36,7 @@ list but have not been run on hardware yet. Track work in beads, not here.
 
 - [ ] Wire the board with ethernet to the arena access point and give it a DHCP
       reservation. WiFi on the board is optional and unneeded.
-- [ ] WLED controllers and Tasmota plugs get fixed addresses or reservations
+- [ ] WLED controllers (one per column, section 3d) and Tasmota plugs get fixed addresses or reservations
       (`config.yaml` refers to them by IP). Access point on a fixed 2.4 GHz channel
       1, 6 or 11. See "Networking and offline operation" in the README.
 - [ ] The dashboard and control API listen on `0.0.0.0:8000` with no authentication
@@ -171,6 +171,59 @@ The current playlist, the exact tracks and the rebuild steps are in [MUSIC.md](M
       The result is quieter overall than the raw tracks, so raise `music.volume` as needed.
 - [ ] Only use music you may play publicly.
 
+## 3d. LED strips (WLED)
+
+The arena has 4-5 columns, each one 3 m strip at 60 LEDs/m = **180 LEDs**, normally one WLED
+controller per column. A controller may host 2-4 strips (its LED outputs concatenated, so
+`num_leds = 180 x strips`). Design and rendering: [LEDS.md](LEDS.md). Only idle and cooldown use
+built-in WLED effects; warming and fight are UDP realtime from the brain.
+
+On each controller (WLED web UI):
+
+- [ ] Fixed address or DHCP reservation; note it for `config.yaml`.
+- [ ] LED preferences: strip type and colour order of your LEDs, **LED count 180 per strip**
+      (several outputs for a multi-strip controller, in the column order you will put in
+      `strips`), "Maximum current" matching the PSU (the one verified controller runs 1000 mA;
+      the strip's PSU rating is **unknown**, check it before raising the limit).
+- [ ] Sync / realtime: "Receive UDP realtime" on (default), port 21324. The brain sends a frame
+      every tick, so the 2 s realtime timeout never expires while it runs.
+- [ ] Version: effect and palette ids differ between WLED builds. The brain resolves names
+      against the controller (`/json/eff`, `/json/pal`) and the fallback table is for 0.15.4
+      (verified on an ESP32-C3). Use exact names in `config.yaml` (`"Fade"`, `"Fire 2012"`, `"Lava"`).
+- [ ] An ESP32-C3 rebooted under 4 Hz GET polling: do not poll it hard. The brain polls
+      `/json/info` every 1.5 s at most and only to read the LED count and detect reboots.
+
+In `/opt/shadow-brain/config.yaml` on the station:
+
+```yaml
+wled:
+  columns: 4                                       # optional, default = highest column + 1
+  controllers:
+    - {ip: "10.0.0.55", num_leds: 180}             # one strip = column 0 (column = list index)
+    - ip: "10.0.0.56"                              # one controller hosting columns 1 and 2
+      strips:                                      # consecutive in LED order; num_leds optional (= sum)
+        - {column: 1, leds: 180}
+        - {column: 2, leds: 180, reverse: true}    # wired top-down (LED 0 at the top)
+```
+
+- Column 0 is the outermost on one side; the bag hangs in the **centre**, so the middle columns
+  are nearest to it (punch shockwaves reach them first).
+- Invalid layouts (duplicate column, strips not summing to `num_leds`) stop the brain at start
+  with a clear error. A multi-strip controller keeps its configured layout even if WLED reports
+  another LED count (warning in the log).
+- The idle/cooldown/warming/fight looks live under `wled.effects`. Defaults equal the chosen
+  looks, so on a station with an old config **delete the whole `wled.effects` block** (or copy
+  it from the repo `config.yaml`) rather than keeping stale values. `deploy.py --config` would
+  overwrite everything else on the station too, so edit by hand.
+
+Check the strips before trusting the brain:
+
+- [ ] `uv run deploy/wled_try.py --wled http://<ip> --fx Fade --sx 40 --col 255,25,0 --col 0,0,0`
+      shows the idle breathing (stop the brain first; this tool never polls).
+- [ ] Without any hardware, `simulator/live/live.py brain --wled none --layout <file>` shows the
+      real brain's frames in the browser; `simulator/live/layouts/four-columns.yaml` is a ready
+      layout (see `simulator/web/README.md`, "Layout").
+
 ## 4. Deploy the brain
 
 On your build machine (podman machine running; `just image` once):
@@ -216,7 +269,13 @@ On your build machine (podman machine running; `just image` once):
       Set the state back to `Idle` afterwards.
 - [ ] **Reconnect test:** `sudo bluetoothctl disconnect <bag address>`; the brain reconnects
       in about 10-30 s and fight mode is restored. Punches must not double (verified).
-- [ ] WLED: effects change with the arena state (**untested**, `shadow-warrior-2`).
+- [ ] WLED, per state (**untested on the real strips**, `shadow-warrior-2`; the realtime scenes
+      were checked only in the browser simulator): Idle = slow ember breathing (built-in),
+      Warming = a bar rising from the bottom of every column as shouts add energy, with a
+      glow at its head, Fight = dim ember with a shockwave per punch (inner columns first),
+      Cooldown = fire (built-in), Suspended = off. Run
+      `uv run deploy/wled_walkthrough.py --brain http://<station>:8000 --wled http://<ip>` (single
+      controller) and watch every column; a reverse-wired strip must also grow upwards.
 - [ ] Microphone: shout detection and clip recording (**untested**, `shadow-warrior-abr`, `-c6y`).
 - [ ] Speakers: pairing and a PipeWire sink verified (section 3b); the playlist plays through the brain and the speaker reconnects after a drop or power-cycle (section 3b); A2DP + BLE contention on one radio is **untested** (`shadow-warrior-b2r`).
 
