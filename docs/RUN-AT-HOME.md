@@ -45,7 +45,7 @@ Without it the simulator plays a synth loop during FIGHT.
 ## 4. Sim mode: the browser game drives the strip and reads the bag
 
 ```sh
-simulator/live/live.sh start --wled <WLED IP>
+simulator/live/live.py start --wled <WLED IP>
 ```
 
 ![The simulator in sim mode during a fight](img/sim-mode-fight.png)
@@ -55,7 +55,7 @@ Open <http://localhost:8090/>. The top bar shows **LIVE**; the LED columns panel
 its own). Everything the LED columns show is on the strip.
 
 - Play from a phone: add `--host 0.0.0.0` and open `http://<laptop IP>:8090/`.
-- Stop: `simulator/live/live.sh stop` (the strip goes back to WLED's own effect). Also
+- Stop: `simulator/live/live.py stop` (the strip goes back to WLED's own effect). Also
   `status` and `log`.
 - Keep the simulator tab visible: browsers pause hidden tabs, and the strip falls back to WLED.
 - Strip wired so every other column runs top-down: tick **Serpentine** under the LED columns.
@@ -64,7 +64,7 @@ its own). Everything the LED columns show is on the strip.
 ## 5. Brain mode: the real brain-rs runs the game
 
 ```sh
-BRAIN_AUDIO='{input=false}' simulator/live/live.sh brain --wled <WLED IP>
+BRAIN_AUDIO='{input=false}' simulator/live/live.py brain --wled <WLED IP>
 ```
 
 The first run builds `brain-rs` (`cargo build --release`, a few minutes). Open
@@ -77,11 +77,11 @@ API. The brain connects to the bag itself.
 - `BRAIN_AUDIO='{input=false}'` keeps the brain off your microphone (its default input could be
   a headset, which Bluetooth then switches to call quality). Drop it to test real shouting with a
   dedicated USB mic.
-- Stop: `simulator/live/live.sh stop`.
+- Stop: `simulator/live/live.py stop`.
 
 ### Brain already running on a Pi
 
-1. On the laptop: `simulator/live/live.sh start --host 0.0.0.0 --wled <WLED IP> --brain http://<pi>:8000`
+1. On the laptop: `simulator/live/live.py start --host 0.0.0.0 --wled <WLED IP> --brain http://<pi>:8000`
 2. On the Pi, point the brain's WLED at the laptop (no `config.yaml` edit): add
    this line under `[Service]` with `sudo systemctl edit shadow-brain` (keep the single quotes,
    so systemd keeps the inner double quotes), then `sudo systemctl restart shadow-brain`:
@@ -91,7 +91,7 @@ API. The brain connects to the bag itself.
    UDP 21324 from the Pi must reach the laptop (allow it in the laptop's firewall).
 3. Open `http://<laptop IP>:8090/`.
 
-Back to normal: remove that `Environment=` line, restart the brain, `live.sh stop` on the laptop.
+Back to normal: remove that `Environment=` line, restart the brain, `live.py stop` on the laptop.
 
 ## From the website
 
@@ -104,7 +104,7 @@ hardware. **Connect to device** (top bar) opens the simulator served by a bridge
 | Symptom | Check |
 | --- | --- |
 | "Bag: not found" | The sensor has USB power and its LED is on; nothing else is connected to it (only one Bluetooth central: stop any running brain in sim mode); on macOS allow Bluetooth for your terminal app. |
-| Strip shows WLED's own effect, not the game | The simulator tab is hidden or closed, **Mirror to real strip** is off, or the bridge stopped (`live.sh status`). |
+| Strip shows WLED's own effect, not the game | The simulator tab is hidden or closed, **Mirror to real strip** is off, or the bridge stopped (`live.py status`). |
 | Strip partly lit or in the wrong order | WLED LED count (expects 180 = 4 columns x 45) and **Serpentine**. |
-| Nothing on `:8090` | `live.sh log`; another program may use the port: add `--port 8091`. |
+| Nothing on `:8090` | `live.py log`; another program may use the port: add `--port 8091`. |
 | Brain mode: page shows no LED frames in FIGHT | UDP 21324 is blocked between brain and bridge. |

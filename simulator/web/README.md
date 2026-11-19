@@ -19,23 +19,23 @@ Without a mic, the SHOUT button feeds synthetic frames through the same detector
 
 ## Live hardware (real strip and bag)
 
-The bridge (`simulator/live/bridge.py`, run by `live.sh`) serves this page and connects it to
+The bridge (`simulator/live/bridge.py`, run by `live.py`) serves this page and connects it to
 real hardware. It has two modes:
 
 | Mode | Who runs the game | Strip | Bag (BLE) |
 | --- | --- | --- | --- |
-| **sim** (`live.sh start`) | this page's JS port | page frames -> WLED | the bridge |
-| **brain** (`live.sh brain`) | the real `brain-rs` | brain frames -> WLED, shown in the page | the brain |
+| **sim** (`live.py start`) | this page's JS port | page frames -> WLED | the bridge |
+| **brain** (`live.py brain`) | the real `brain-rs` | brain frames -> WLED, shown in the page | the brain |
 
 Needs [uv](https://docs.astral.sh/uv/) (`curl -LsSf https://astral.sh/uv/install.sh | sh`);
 `uv` fetches `aiohttp` and `bleak` itself. Brain mode also needs Rust (`cargo`) the first time,
-to build `brain-rs`. Linux (BlueZ) or macOS. `live.sh stop | status | log`; PIDs and logs are in
+to build `brain-rs`. Linux (BlueZ) or macOS. `live.py stop | status | log`; PIDs and logs are in
 `~/.local/state/shadow-warrior-live/`.
 
 ### Sim mode
 
 ```sh
-simulator/live/live.sh start --wled <WLED IP>   # from the repo root; open http://localhost:8090/
+simulator/live/live.py start --wled <WLED IP>   # from the repo root; open http://localhost:8090/
 ```
 
 Stop the brain first: BLE allows one central, and two writers fight over the strip.
@@ -61,10 +61,10 @@ Stop the brain first: BLE allows one central, and two writers fight over the str
 ### Brain mode
 
 ```sh
-simulator/live/live.sh brain --wled <WLED IP>   # builds/starts brain-rs + bridge; open http://localhost:8090/
+simulator/live/live.py brain --wled <WLED IP>   # builds/starts brain-rs + bridge; open http://localhost:8090/
 ```
 
-The bridge stands in for WLED. `live.sh brain` starts `brain-rs/target/release/shadow-warrior-brain`
+The bridge stands in for WLED. `live.py brain` starts `brain-rs/target/release/shadow-warrior-brain`
 (built with `cargo build --release` if missing) in `brain-rs/` with its own `config.yaml`, except
 that `wled.controllers` point at the bridge (`BRAIN_WLED` env override; nothing in the file changes).
 
@@ -79,7 +79,7 @@ that `wled.controllers` point at the bridge (`BRAIN_WLED` env override; nothing 
   `/api/arena/{presence,shout,punch,state}`. The JS engine, its shout detector and tunables are
   hidden; the brain uses its own mic, music and config.
 - **Bag**: the brain connects it (the bridge holds no BLE in this mode).
-- No microphone: `BRAIN_AUDIO='{input=false}' live.sh brain ...`. Other `BRAIN_*` overrides pass
+- No microphone: `BRAIN_AUDIO='{input=false}' live.py brain ...`. Other `BRAIN_*` overrides pass
   through, e.g. `BRAIN_BLE='{auto_connect=false}'`, `BRAIN_PORT=8001` (brain API port).
 - Endpoints: `GET /live/frame?seq=N` (a frame sent to the pages, for tests), `/json/*` (stand-in WLED).
 
@@ -106,8 +106,14 @@ controllers:
 ```
 
 ```sh
-simulator/live/live.sh start --brain http://127.0.0.1:8000 --wled none --layout my-layout.yaml
+simulator/live/live.py brain --wled none --layout simulator/live/layouts/four-columns.yaml
 ```
+
+`live.py brain --layout` starts the bridge with the layout **and** the brain with matching
+`wled.controllers` (`BRAIN_WLED` is generated from the same file). To run against a brain that is
+already up, use `live.py start --brain http://127.0.0.1:8000 --wled none --layout FILE`.
+`layouts/four-columns.yaml` is one simulated controller hosting four strips: no loopback aliases
+needed, so it is the easy macOS setup.
 
 - One UDP listener per controller on `<ip host>:21324` (the brain sends to each controller's ip,
   port 21324, even if the ip has `:httpport`). DRGB, DNRGB (start offsets), DRGBW and WARLS are
@@ -140,7 +146,7 @@ your WLED's IP, then open `http://<that machine>:8090/` from a laptop or phone (
 
 Brain already running elsewhere (e.g. the Pi's systemd service):
 
-1. Bridge, on any machine in the LAN: `simulator/live/live.sh start --host 0.0.0.0 --wled <WLED IP> --brain http://<pi>:8000`.
+1. Bridge, on any machine in the LAN: `simulator/live/live.py start --host 0.0.0.0 --wled <WLED IP> --brain http://<pi>:8000`.
 2. Brain: point its WLED at the bridge, without editing `config.yaml`, with the environment
    variable `BRAIN_WLED='{controllers=[{ip="<bridge host>:8090",num_leds=180}]}'`
    (systemd: `systemctl edit shadow-brain`, `Environment=...`), or set
@@ -149,7 +155,7 @@ Brain already running elsewhere (e.g. the Pi's systemd service):
 3. Open `http://<bridge host>:8090/`.
 
 Back to the real WLED: remove `BRAIN_WLED` (or restore `wled.controllers` to the WLED IP) and
-restart the brain; stop the bridge with `live.sh stop`.
+restart the brain; stop the bridge with `live.py stop`.
 
 ### From GitHub Pages: Connect to device
 
