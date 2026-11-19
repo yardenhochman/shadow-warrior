@@ -378,6 +378,22 @@ impl WledController {
             self.strips.clone()
         }
     }
+
+    /// Make the implicit column explicit: a controller without `strips` gets one strip on
+    /// column `index`. After this its column no longer depends on its list position, so
+    /// removing an earlier controller cannot renumber it.
+    pub fn pin_column(&mut self, index: usize) {
+        if self.strips.is_empty() {
+            self.strips = self.strip_specs(index);
+        }
+    }
+}
+
+/// Pin the implicit columns of every controller (see [`WledController::pin_column`]).
+pub fn pin_columns(controllers: &mut [WledController]) {
+    for (i, c) in controllers.iter_mut().enumerate() {
+        c.pin_column(i);
+    }
 }
 
 impl WledConfig {
@@ -412,6 +428,8 @@ impl WledConfig {
                 return Err(format!("wled: column {max} but columns is {n}"));
             }
         }
+        // Resolve list-index columns once, here, so later removals cannot shift them.
+        pin_columns(&mut self.controllers);
         Ok(())
     }
 }
@@ -752,6 +770,14 @@ mod load_tests {
         assert_eq!(cfg.wled.controllers[0].num_leds, 360);
         assert!(cfg.wled.controllers[0].strips[1].reverse);
         assert_eq!(columns_total(&cfg.wled.controllers, cfg.wled.columns), 3);
+    }
+
+    #[test]
+    fn normalize_pins_implicit_columns() {
+        let cfg = load("wled:\n  controllers:\n    - {ip: a, num_leds: 90}\n    - {ip: b, num_leds: 180}\n").unwrap();
+        let strip = |column, leds| StripConfig { column, leds, reverse: false };
+        assert_eq!(cfg.wled.controllers[0].strips, vec![strip(0, 90)]);
+        assert_eq!(cfg.wled.controllers[1].strips, vec![strip(1, 180)]);
     }
 
     #[test]

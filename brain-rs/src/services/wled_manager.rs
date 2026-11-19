@@ -9,7 +9,7 @@ use tokio::sync::RwLock;
 use tokio::time::interval;
 use tracing::{debug, error, info, warn};
 
-use crate::config::{columns_total, next_free_column, StripConfig, DEFAULT_STRIP_LEDS, WledConfig, WledController, WledEffect};
+use crate::config::{columns_total, next_free_column, pin_columns, StripConfig, DEFAULT_STRIP_LEDS, WledConfig, WledController, WledEffect};
 use crate::core::{ArenaState, Event, SharedEventBus};
 use crate::led::layout::{append_strip, controller_strips};
 use crate::led::scenes::FightScene;
@@ -219,6 +219,9 @@ impl WledManager {
     pub async fn remove_controller(&self, ip: &str) -> Result<()> {
         {
             let mut controllers = self.controllers.write().await;
+            // Pin list-index columns first: removing an earlier controller must not
+            // renumber the ones after it.
+            pin_columns(&mut controllers);
             controllers.retain(|c| c.ip != ip);
         }
         self.rebuild_sockets().await
@@ -1389,6 +1392,32 @@ mod tests {
         assert_eq!(next_free_column(&full, Some(2)), None, "all configured columns taken");
         assert_eq!(next_free_column(&full, None), Some(2), "unconfigured arena grows");
         assert_eq!(next_free_column(&[], Some(4)), Some(0));
+    }
+
+    #[tokio::test]
+    async fn remove_controller_keeps_the_columns_of_the_others() {
+        let config = Config::default().wled;
+        let db = Arc::new(DatabaseManager::new("sqlite::memory:").await.unwrap());
+        let bus: SharedEventBus = Arc::new(EventBus::new(100));
+        let wled = Arc::new(WledManager::new(config, db, bus));
+        let strip = |column| StripConfig { column, leds: 180, reverse: false };
+        // implicit columns 0 and 1, then an explicit strip on column 2
+        *wled.controllers.write().await =
+            vec![ctrl("127.0.0.1:1", vec![]), ctrl("127.0.0.1:2", vec![]), ctrl("127.0.0.1:3", vec![strip(2)])];
+        wled.remove_controller("127.0.0.1:1").await.unwrap();
+        {
+            let cs = wled.controllers.read().await;
+            assert_eq!(cs.len(), 2);
+            assert_eq!(cs[0].ip, "127.0.0.1:2");
+            // would be column 0 by list index, and collide with nothing yet, but it was column 1
+            assert_eq!(cs[0].strip_specs(0)[0].column, 1);
+            assert_eq!(cs[1].strip_specs(1)[0].column, 2);
+        }
+        // the freed column is the next one a discovered controller takes
+        assert_eq!(next_free_column(&wled.controllers.read().await, Some(4)), Some(0));
+        let sockets = wled.udp_sockets.read().await;
+        let cols: Vec<usize> = sockets.iter().flat_map(|(_, l)| l.iter().map(|c| c.column)).collect();
+        assert_eq!(cols, vec![1, 2]);
     }
 
     #[tokio::test]
