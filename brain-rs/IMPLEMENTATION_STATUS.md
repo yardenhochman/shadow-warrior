@@ -38,7 +38,7 @@ are both clean). **"Tested" means synthetic signals and mock HTTP servers, not r
 | Presence | `services/presence.rs` | fused evidence (mic + punches, pluggable `PresenceSource`), enter/leave hysteresis; re-fires on schedule resume; manual API goes through fusion |
 | Schedule | `services/schedule_manager.rs` | daily windows (local time, optional days, overnight), persisted in SQLite |
 | Music | `services/music_manager.rs` | rodio playlist, gapless queue-ahead advance |
-| WLED | `services/wled_manager.rs` (+ `protocol`) | HTTP effects/palettes with device name resolution + cache, UDP realtime |
+| WLED | `services/wled_manager.rs` (+ `protocol`) | HTTP effects/palettes (idle, cooldown) with device name resolution + cache; UDP realtime (warming, fight) rendered by `src/led/` per column strip, multi-strip controllers; see `docs/LEDS.md` |
 | Tasmota | `services/tasmota_manager.rs` | per-state plug mapping (`on_states`), concurrent, retry once |
 | BLE status GATT service | `services/ble_status.rs`, `ble_status/bluez.rs` | Read-only, off by default (`ble_status.enabled`). Pure encoding unit-tested; BlueZ glue compiles for aarch64 Linux but is **unverified against real BlueZ/hardware** |
 | BLE punching bag | `services/ble_manager.rs` | Nordic UART via btleplug; optional `ble.adapter` to pick the BlueZ adapter |

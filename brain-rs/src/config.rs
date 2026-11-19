@@ -648,16 +648,20 @@ impl Default for Config {
                 columns: None,
                 udp_fps: 30,
                 effects: WledEffects {
+                    // Same looks as config.yaml (see docs/LEDS.md): idle and cooldown are
+                    // built-in WLED effects, warming and fight are UDP realtime.
                     idle: WledEffect {
-                        effect: "breathe".to_string(),
-                        palette: Some("ocean".to_string()),
-                        speed: Some(128),
+                        effect: "Fade".to_string(),
+                        palette: None,
+                        speed: Some(40),
+                        brightness: Some(180),
+                        colors: Some(vec![[255, 25, 0], [0, 0, 0]]),
                         ..Default::default()
                     },
                     warming: WledEffect {
-                        effect: "rainbow".to_string(),
-                        palette: Some("rainbow".to_string()),
-                        speed: Some(200),
+                        effect: "realtime".to_string(),
+                        palette: None,
+                        speed: None,
                         ..Default::default()
                     },
                     fight: WledEffect {
@@ -667,8 +671,8 @@ impl Default for Config {
                         ..Default::default()
                     },
                     cooldown: WledEffect {
-                        effect: "fire".to_string(),
-                        palette: Some("lava".to_string()),
+                        effect: "Fire 2012".to_string(),
+                        palette: Some("Lava".to_string()),
                         speed: Some(150),
                         ..Default::default()
                     },

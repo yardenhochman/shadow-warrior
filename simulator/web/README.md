@@ -42,8 +42,10 @@ Stop the brain first: BLE allows one central, and two writers fight over the str
 
 - **Strip**: each rendered frame (the same colours as the LED columns panel) goes over a
   WebSocket at ~30 fps. The four columns are laid end to end on the strip (column 1 first,
-  each base first, resampled by area averaging: the sim draws 180 LEDs per column by default, like a real column (one 3 m strip, 60 LEDs/m). NOTE: the bridge still lays the 4 columns end to end on ONE strip; the real installation is one WLED controller per column (4-5 columns), see brain-rs/docs/LEDS.md; the LED count
-  comes from WLED at startup). Tick **Serpentine** when every other column runs top-down.
+  each base first; the sim draws 180 LEDs per column by default, like a real column: one 3 m strip at
+  60 LEDs/m. A resampler area-averages when the strip length differs; the LED count comes from WLED
+  at startup). The real installation is one WLED controller per column (4-5 columns), or controllers
+  hosting several strips: see "Layout" below and brain-rs/docs/LEDS.md. Tick **Serpentine** when every other column runs top-down.
   The bridge applies `--brightness 0.7` and `--gamma 2.2` (screen colours to LED duty) and
   sends WLED UDP realtime DNRGB to port 21324 with a 2 s timeout. When the page closes,
   mirroring is switched off or the bridge stops, WLED goes back to its own effect.
@@ -194,7 +196,7 @@ the game clock so long fights and cooldowns go by quicker. The mic always runs i
 | `js/audio_frontend.js` | `src/services/audio_frontend.rs` | Faithful: 4th-order band-pass 250 Hz-4 kHz, linear resampler to 16 kHz, 256-sample frames, asymmetric noise floor, FFT centroid/tilt/flatness, autocorrelation pitch. **VAD is a proxy** (see below) |
 | `js/shout_detector.js` | `src/services/shout_detector.rs` | Faithful: VAD gate with hangover, margin (+ playback margin), 4 feature checks, score, gap tolerance, min duration, intensity |
 | `js/presence.js` | `src/services/presence.rs` | Faithful: `MicSource`, `PunchSource`, `PresenceFusion` (leaky accumulator, enter threshold, leave timeout, force) |
-| `js/wled.js` | `src/services/wled_manager.rs`, `config.yaml wled.effects` | "brain-rs" mode: approximations of WLED Breathe/Ocean, Rainbow, Fire 2012/Lava, plus the ported `generate_fight_frame` red pulse. "Sim proposal" mode is new |
+| `js/wled.js` | `src/services/wled_manager.rs`, `config.yaml wled.effects` | "brain-rs" mode: approximations of the OLD brain-rs looks (WLED Breathe/Ocean, Rainbow, Fire 2012/Lava, the red fight pulse). brain-rs has since moved: idle is Fade/ember, warming and fight are rendered by `src/led/` (see `brain-rs/docs/LEDS.md`); in brain mode the page shows the real frames. "Sim proposal" mode is new |
 | `js/config.js` | `config.yaml`, `src/config.rs` defaults | Faithful defaults; export uses config.yaml key names and sections |
 | `js/scene.js`, `js/sfx.js`, `js/hitfx.js`, `js/presets.js`, `js/feature_source.js`, `js/main.js` | - | Simulator only |
 
@@ -237,8 +239,8 @@ synthesised drum loop in its place.
 - **Effect presets** (`js/presets.js`, the dropdown above the LED columns): a preset gives every
   stage its look. Stages: idle/attract, WARMING bar (4 stages), fight start, FIGHT ambient
   (grows with rage), jab, hook and heavy hits, the FIGHT shout ripple and the victory. Presets:
-  - *brain-rs effects*: what brain-rs asks WLED for (Breathe/Ocean, Rainbow, the red realtime
-    pulse); no fight-start, hit, shout or victory effects, as on the device.
+  - *brain-rs effects*: what brain-rs used to ask WLED for (Breathe/Ocean, Rainbow, the red realtime
+    pulse; superseded, see LEDS.md); no fight-start, hit, shout or victory effects, as on the device.
   - *Sim proposal effects*: the original proposal (violet idle, 4-stage bar, fire, the six heavy
     signatures) plus its victory.
   - *Inferno*: lava-lamp idle, a heat gauge that gets embers, flames over the line and a white-hot
@@ -286,7 +288,7 @@ synthesised drum loop in its place.
 
 Turn off the matching toggles under "brain-rs fidelity" to reproduce brain-rs as written.
 
-1. **Fight ends within ~1 s (inactivity)**: `last_activity_at` is set only at construction
+1. *(fixed in brain-rs: FIGHT entry resets the activity clock)* **Fight ends within ~1 s (inactivity)**: `last_activity_at` is set only at construction
    and on punches (`arena_manager.rs:55`, `:224`). It is not reset on entering FIGHT
    (`on_enter` Fight, `arena_manager.rs:472-480`). If no punch landed in the last 30 s
    before the fight, the 1 s monitor (`:288-302`) ends the fight right away with
@@ -297,7 +299,7 @@ Turn off the matching toggles under "brain-rs fidelity" to reproduce brain-rs as
    second event never arrives while the player stays. A player still present after
    COOLDOWN→IDLE is also stuck. Once a player leaves (→SUSPENDED), every later player
    reaches only IDLE. Fix toggle: "re-arm WARMING when presence persists".
-3. **The cooldown "fire" effect is the wrong effect**: WLED has no effect named "fire" ("Fire 2012"
+3. *(fixed in brain-rs: ids read from the controller and pinned by tests to WLED 0.15.4; cooldown is "Fire 2012"/"Lava")* **The cooldown "fire" effect is the wrong effect**: WLED has no effect named "fire" ("Fire 2012"
    is id 66), so `resolve_effect_id` falls back to the static table, where `"fire" => 16`
    is "Saw" (`wled_manager/protocol.rs:20`). The same table has `"rainbow" => 8`
    (Colorloop, not Rainbow 9), `"scan" => 5` and `"twinkle" => 15`, and duplicates in
@@ -308,7 +310,7 @@ Turn off the matching toggles under "brain-rs fidelity" to reproduce brain-rs as
    (`audio_frontend.rs:303-304`), so `shout_f0_max_hz: 700` above 500 has no
    effect. High shouts (500-700 Hz, common for screaming) may count as unvoiced or as
    their sub-harmonic.
-5. **WARMING has no timeout or feedback**: the config uses HTTP `rainbow` for WARMING
+5. *(energy bar fixed: WARMING is now UDP realtime, `led::scenes::warming`, driven by energy and shout events; the missing timeout remains)* **WARMING has no timeout or feedback**: the config uses HTTP `rainbow` for WARMING
    (`config.yaml wled.effects.warming`), so the "energy bar" from AGENTS.md is never
    shown. `generate_warming_frame` (`wled_manager.rs:458`) says "speeds up with energy"
    but ignores energy and runs only in realtime mode. WARMING also has no timeout: it
@@ -318,7 +320,7 @@ Turn off the matching toggles under "brain-rs fidelity" to reproduce brain-rs as
    `playback_active` raised.
 7. Known and not replicated: punch detection counting gravity, and the WARLS UDP frame
    format (`generate_*_frame` omit the per-LED index; protocol 1 is limited to 255 LEDs).
-8. **IDLE runs on the Ocean palette** (found in brain mode): `config.yaml` sets `wled.effects.idle`
+8. *(fixed: a key an effect leaves out no longer inherits the default's; `Config::default` idle is now Fade/ember too)* **IDLE runs on the Ocean palette** (found in brain mode): `config.yaml` sets `wled.effects.idle`
    to Fade with ember-red colours and no `palette`, but the YAML is merged over
    `Config::default()`, whose idle effect has `palette: "ocean"`, so the key survives and the brain
    posts `pal: 9`: the strip fades in blue/teal. Same for any effect that leaves out a key the

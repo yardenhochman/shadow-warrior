@@ -37,7 +37,7 @@ The punching bag is a physical object that is used to play the game. It is equip
 
 ## The LED Strips
 
-Standard WLED controllers are used for the LED strips. They are connected to the brain via Wi-Fi and are used to display visual feedback to the user. Brain communicates with WLED controllers via HTTP API and UDP realtime API.
+Standard WLED controllers are used for the LED strips. They are connected to the brain via Wi-Fi and are used to display visual feedback to the user. Brain communicates with WLED controllers via HTTP API and UDP realtime API. Only idle and cooldown use built-in WLED effects (HTTP); warming and fight are always UDP realtime, rendered by the brain's `led` module. The arena has 4-5 columns, each a 180-LED strip (3 m, 60/m), usually one controller per column, some controllers host several strips. See `brain-rs/docs/LEDS.md`.
 
 ## The Smart Plugs
 
@@ -58,7 +58,7 @@ Standard Bluetooth speakers are used for the speakers. They are connected to the
   `BRAIN_AUDIO='{input=false}'` and send shouts through `POST /api/arena/shout`.
 - When another process owns the bag or the strip (e.g. a sim-mode bridge), add
   `BRAIN_BLE='{auto_connect=false}'` and point `wled.controllers` at a stand-in
-  (`simulator/live/bridge.py --brain ... --wled none`), not at the real WLED.
+  (`simulator/live/live.py brain --wled none --layout simulator/live/layouts/four-columns.yaml`, or `bridge.py --brain ... --wled none`), not at the real WLED.
 
 ## Task tracking and status docs
 

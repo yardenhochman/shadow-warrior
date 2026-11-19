@@ -130,11 +130,12 @@ All colours and timings live in style structs (`EnergyBarStyle`, `ShoutGlowStyle
   `dt`. Inputs come from the event bus: `EnergyChanged` -> `energy / max_energy` clamped to 0..1;
   `ShoutDetected` -> `shout = max(shout, intensity)`, decaying with tau 0.35 s per frame.
   Frames are sent every tick even when nothing changes (WLED realtime timeout is 2 s).
-  Verified only by tests and the filmstrip preview; not yet seen on a strip.
+  Verified by tests, the filmstrip and the browser simulator (brain mode); not yet seen on a strip.
 - **Fight is wired**: `Scene::Fight` in `wled_manager` renders one `FightScene` per strip,
   fed by the same event drain as warming plus `PunchDetected { power }` (0..100). Leaving
   FIGHT: the next state's effect is an HTTP effect, which stops the realtime task (cooldown's
   built-in Fire takes over). Verified by unit tests, a UDP integration test
-  (`fight_punch_pulse_reaches_the_inner_strip_first`) and the filmstrip; not yet seen on a
-  strip or in the simulator. Not done: music layer.
+  (`fight_punch_pulse_reaches_the_inner_strip_first`), the filmstrip, and by eye in the browser
+  simulator (brain mode, 4 columns x 180 LEDs, `simulator/live/live.py brain --layout ...`);
+  not yet seen on a strip. Not done: music layer.
 - Controller power limit (`maxpwr` 1000 mA) is unchanged until the strip's PSU rating is known.
