@@ -1,0 +1,11 @@
+# One simulated multi-strip controller hosting four 180-LED columns (3 m x 60 LEDs/m each).
+# Works on macOS without loopback aliases. For one controller per column use distinct
+# addresses (127.0.0.2.. need `sudo ifconfig lo0 alias`).
+columns: 4
+controllers:
+  - ip: "127.0.0.1"
+    strips:
+      - {column: 0, leds: 180}
+      - {column: 1, leds: 180}
+      - {column: 2, leds: 180}
+      - {column: 3, leds: 180}

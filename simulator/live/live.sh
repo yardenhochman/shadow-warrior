@@ -30,7 +30,7 @@ stop_pid() { # pidfile name
 }
 start_bridge() {
   if running; then echo "bridge already running (PID $(cat "$pidf")), log $logf"; return 0; fi
-  setsid nohup uv run "$here/bridge.py" "$@" >"$logf" 2>&1 </dev/null &
+  $(command -v setsid) nohup uv run "$here/bridge.py" "$@" >"$logf" 2>&1 </dev/null &
   echo $! >"$pidf"
   for _ in $(seq 60); do grep -q "simulator: http" "$logf" 2>/dev/null && break; running || break; sleep 0.5; done
   running || { echo "bridge failed to start:"; tail -20 "$logf"; exit 1; }
@@ -55,7 +55,7 @@ case "$cmd" in
     start_bridge --brain "http://127.0.0.1:$bp" "$@"
     # sh records its own PID, then execs the brain (setsid may fork, so $! is not the brain).
     (cd "$repo/brain-rs" || exit 1; BRAIN_WLED="{controllers=[{ip=\"127.0.0.1:$p\",num_leds=180}]}" \
-      setsid nohup sh -c 'echo $$ >"$0"; exec "$1"' "$bpidf" "$bin" >"$blogf" 2>&1 </dev/null &)
+      $(command -v setsid) nohup sh -c 'echo $$ >"$0"; exec "$1"' "$bpidf" "$bin" >"$blogf" 2>&1 </dev/null &)
     sleep 0.5
     for _ in $(seq 40); do grep -q "Starting server" "$blogf" 2>/dev/null && break; alive "$bpidf" || break; sleep 0.5; done
     alive "$bpidf" || { echo "brain failed to start:"; tail -20 "$blogf"; exit 1; }
