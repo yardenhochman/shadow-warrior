@@ -5,7 +5,7 @@ Two ways to drive a WLED strip, one per arena state.
 | State | Mode | Who animates | Look |
 |-------|------|--------------|------|
 | Suspended | off | - | strip off |
-| Idle | **built-in WLED effect** (HTTP) | the controller | ember red fading to black, ~5 s cycle, triangle (see below) |
+| Idle | **built-in WLED effect** (HTTP) | the controller | ember fading to black with a short rest, ~5 s cycle (Tri Fade, see below) |
 | Warming | **UDP realtime** | the brain, 30 fps | energy bar (persistent) + shout glow (live) |
 | Fight | **UDP realtime** | the brain, 30 fps | punch pulses, shout effects, music-driven effects, optional energy bar |
 | Cooldown | **built-in WLED effect** (HTTP) | the controller | "Fire 2012", Lava palette |
@@ -26,14 +26,28 @@ Two ways to drive a WLED strip, one per arena state.
 
 ## Idle: the breathing look
 
-WLED effect `Fade`, speed 24, brightness 180, colours `[[255,25,0],[0,0,0]]` (config
-`wled.effects.idle`). It is a triangle wave between the two colours, cycle
-`65.536 s / ((speed >> 3) + 10)` (WLED 0.15.4 `mode_fade`: `lum = triwave16(now * ((sx>>3)+10)) >> 8`) = 5.04 s at speed 24 to 31 (4.4 s at speed 40, the first choice); the range is 6.6 s (speed < 8) down to 2 s. Speed 40 (4.4 s, "E3") was chosen on the real strip on 2026-11-17; on 2026-11-19 it became speed 24 for a 5 s cycle; an earlier version of this doc said 10.9 s, which was wrong (it used the pre-0.15 formula). The shape is a triangle.
+WLED effect **`Tri Fade`** (id 56 on 0.15.4), speed 96, brightness 44, colours
+`[[255,25,0],[0,0,0],[0,0,0]]` (config `wled.effects.idle`). It fades colour 1 -> 2 -> 3 -> 1, a third
+of the cycle each: ember -> black, a dark rest, black -> ember. Cycle
+`65.536 s / ((speed >> 3) + 1)` (0.15.4 `mode_tricolor_fade`): 5.04 s at speed 96 to 103.
+Chosen on the real strip on 2026-11-19, after comparing Fade (a triangle) and Sine (a smoothed
+triangle). No built-in effect is a pure sine in time; revisit later (a brain-rendered idle
+could be, and could layer two effects, but then the brain must be up).
+
+**Brightness 44 is deliberate.** The controller's power limit (ABL, `maxpwr` 1000 mA) scales
+the whole frame down when the estimate is higher. Full ember on 180 LEDs at brightness 180 would
+be about 2.8 A, so the top of the wave was clipped flat for ~75% of the cycle (measured through
+`/json/info` `leds.pwr`). At 44 the wave stays under the limit (120-690 mA). A bigger idle needs
+a bigger PSU and a higher `maxpwr` (the PSU rating is unknown). Warming and fight frames are
+clipped the same way.
+
+Earlier versions of this doc said Fade was an 11 s cycle (wrong: pre-0.15 formula); on 0.15.4
+Fade is `65.536 s / ((speed >> 3) + 10)`, 4.4 s at speed 40, 5.04 s at speed 24.
 
 Preview without hardware:
 
 ```
-uv run deploy/render_idle.py out.mp4 --sx 24 --bri 180     # simulates Fade; not realtime
+uv run deploy/render_idle.py out.mp4 --sx 24 --bri 180     # simulates Fade (not Tri Fade); not realtime
 ```
 
 The effect ids and palette ids differ between WLED builds. The brain resolves names against the

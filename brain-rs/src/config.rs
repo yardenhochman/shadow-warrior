@@ -702,11 +702,11 @@ impl Default for Config {
                     // Same looks as config.yaml (see docs/LEDS.md): idle and cooldown are
                     // built-in WLED effects, warming and fight are UDP realtime.
                     idle: WledEffect {
-                        effect: "Fade".to_string(),
+                        effect: "Tri Fade".to_string(),
                         palette: None,
-                        speed: Some(24), // Fade cycle 5.04 s
-                        brightness: Some(180),
-                        colors: Some(vec![[255, 25, 0], [0, 0, 0]]),
+                        speed: Some(96), // cycle 5.04 s
+                        brightness: Some(44), // keeps the peak under the 1000 mA ABL limit
+                        colors: Some(vec![[255, 25, 0], [0, 0, 0], [0, 0, 0]]),
                         ..Default::default()
                     },
                     warming: WledEffect {
@@ -749,8 +749,10 @@ mod load_tests {
     fn configured_effect_replaces_default_not_merges() {
         let cfg = Config::from_sources(Figment::from(Yaml::string(REAL_YAML))).unwrap();
         let idle = &cfg.wled.effects.idle;
-        assert_eq!(idle.effect, "Fade");
+        assert_eq!(idle.effect, "Tri Fade");
         assert_eq!(idle.palette, None, "default ocean palette must not leak");
+        // config.yaml and the built-in defaults describe the same idle look
+        assert_eq!(*idle, Config::default().wled.effects.idle);
         // an effect absent from the YAML keeps its default
         let cfg = Config::from_sources(Figment::from(Yaml::string("wled:\n  effects:\n    idle:\n      effect: Fade\n"))).unwrap();
         assert_eq!(cfg.wled.effects.cooldown, Config::default().wled.effects.cooldown);

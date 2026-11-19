@@ -58,6 +58,7 @@ DEMOS = {
         ("E1  Breathe, ember, slowest (sx 0): ~5 s breath then a long dim rest", dict(fx="Breathe", pal="Default", sx=0, col=[[255, 25, 0]])),
         ("E2  Fade to black, ember, ~3.9 s cycle (sx 56)", dict(fx="Fade", pal="Default", sx=56, col=[[255, 25, 0], [0, 0, 0]])),
         ("E3  Fade to black, ember, ~4.4 s cycle (sx 40)", dict(fx="Fade", pal="Default", sx=40, col=[[255, 25, 0], [0, 0, 0]])),
+        ("T1  Tri Fade ember-black-black, ~5.0 s cycle (sx 96), pair with --bri 44", dict(fx="Tri Fade", pal="Default", sx=96, col=[[255, 25, 0], [0, 0, 0], [0, 0, 0]])),
         ("E4  Fade to black, ember, ~5.0 s cycle (sx 24)", dict(fx="Fade", pal="Default", sx=24, col=[[255, 25, 0], [0, 0, 0]])),
     ],
 }
