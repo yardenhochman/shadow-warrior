@@ -7,6 +7,8 @@ mod services;
 #[cfg(test)]
 mod integration_tests;
 #[cfg(test)]
+mod api_tests;
+#[cfg(test)]
 mod test_util;
 
 use anyhow::Result;
