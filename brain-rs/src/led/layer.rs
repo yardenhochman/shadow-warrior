@@ -4,8 +4,11 @@ use super::px::Px;
 /// A punch on the bag, normalised.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Punch {
-    /// 0..1 (the bag reports 0..100).
+    /// 0..100, as `PunchDetected.power` reports it (jab < 45, hook < 75, heavy above).
     pub power: f32,
+    /// Monotonically increasing per `LiveInputs`; a scene remembers the last id it spawned for,
+    /// so a punch is never drawn twice by the same strip.
+    pub id: u64,
 }
 
 /// Everything live that layers may react to, refreshed by the caller before each frame.
@@ -15,6 +18,8 @@ pub struct Inputs {
     pub energy: f32,
     /// Instantaneous shout level, 0..1 (layers smooth it themselves).
     pub shout: f32,
+    /// Recent punch activity, 0..1: a decaying average of punch power (drives the fire base).
+    pub rage: f32,
     /// Punches since the previous frame. The compositor owner spawns one-shot layers for these;
     /// layers may also read them directly.
     pub punches: Vec<Punch>,

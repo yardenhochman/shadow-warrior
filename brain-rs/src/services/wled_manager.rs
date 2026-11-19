@@ -12,6 +12,7 @@ use tracing::{debug, error, info, warn};
 use crate::config::{columns_total, WledConfig, WledController, WledEffect};
 use crate::core::{ArenaState, Event, SharedEventBus};
 use crate::led::layout::{append_strip, controller_strips};
+use crate::led::scenes::FightScene;
 use crate::led::{scenes, ColumnLayout, Compositor, Inputs, LiveInputs};
 use crate::models::WledStatus;
 use crate::services::database_manager::SharedDatabaseManager;
@@ -430,8 +431,9 @@ impl WledManager {
         let sockets = self.udp_sockets.clone();
         let link = self.link.clone();
         let fps = self.config.udp_fps.max(1);
-        // Only the warming scene reads events; subscribe before spawning so none are missed.
-        let mut events = (state == ArenaState::Warming).then(|| self.event_bus.subscribe());
+        // Warming and fight read events; subscribe before spawning so none are missed.
+        let mut events = matches!(state, ArenaState::Warming | ArenaState::Fight)
+            .then(|| self.event_bus.subscribe());
 
         let handle = tokio::spawn(async move {
             let mut ticker = interval(Duration::from_millis(1000 / fps as u64));
@@ -493,25 +495,6 @@ impl WledManager {
             handle.abort();
             info!("Stopped realtime mode");
         }
-    }
-
-    /// Generate fight effect pixels, `r,g,b` per LED (reactive pulses)
-    fn generate_fight_frame(num_leds: usize) -> Vec<u8> {
-        let mut frame = Vec::with_capacity(num_leds * 3);
-
-        // Pulsing red effect
-        let time = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as f32;
-
-        let brightness = ((time * 0.005).sin() * 0.5 + 0.5) * 255.0;
-
-        for _ in 0..num_leds {
-            frame.extend_from_slice(&[brightness as u8, 0, 0]);
-        }
-
-        frame
     }
 
     /// Probe every controller once with `GET /json/info`, feeding the link
@@ -660,8 +643,11 @@ enum Scene {
         inputs: LiveInputs,
         comps: std::collections::HashMap<(usize, usize), Compositor>,
     },
-    /// Still the old pulsing red; fight layers are a separate task (shadow-warrior-19b).
-    Fight,
+    /// Ember base + punch pulses + shout ripple, one scene per strip like warming.
+    Fight {
+        inputs: LiveInputs,
+        scenes: std::collections::HashMap<(usize, usize), FightScene>,
+    },
     Dark,
 }
 
@@ -672,14 +658,17 @@ impl Scene {
                 inputs: LiveInputs::default(),
                 comps: Default::default(),
             },
-            ArenaState::Fight => Scene::Fight,
+            ArenaState::Fight => Scene::Fight {
+                inputs: LiveInputs::default(),
+                scenes: Default::default(),
+            },
             _ => Scene::Dark,
         }
     }
 
     /// Fold queued bus events into the scene's inputs without blocking.
     fn drain_events(&mut self, rx: &mut tokio::sync::broadcast::Receiver<Event>) {
-        let Scene::Warming { inputs, .. } = self else {
+        let (Scene::Warming { inputs, .. } | Scene::Fight { inputs, .. }) = self else {
             return;
         };
         loop {
@@ -688,6 +677,7 @@ impl Scene {
                     inputs.on_energy(energy, max_energy)
                 }
                 Ok(Event::ShoutDetected { intensity, .. }) => inputs.on_shout(intensity),
+                Ok(Event::PunchDetected { power, .. }) => inputs.on_punch(power),
                 Ok(_) | Err(TryRecvError::Lagged(_)) => {}
                 Err(TryRecvError::Empty | TryRecvError::Closed) => break,
             }
@@ -697,7 +687,7 @@ impl Scene {
     /// Advance shared input state by `dt` and return this frame's inputs.
     fn begin_frame(&mut self, dt: f32) -> Inputs {
         match self {
-            Scene::Warming { inputs, .. } => inputs.frame(dt),
+            Scene::Warming { inputs, .. } | Scene::Fight { inputs, .. } => inputs.frame(dt),
             _ => Inputs::default(),
         }
     }
@@ -721,7 +711,7 @@ impl Scene {
     }
 
     /// One strip, bottom LED first. The seam for per-column scenes: `layout` says which
-    /// column this is and how far from the bag (the fight scene will use it).
+    /// column this is and how far from the bag (the fight scene delays punch pulses by it).
     fn render_strip(
         &mut self,
         idx: usize,
@@ -746,7 +736,17 @@ impl Scene {
                 };
                 comp.render(dt, inputs).to_vec()
             }
-            Scene::Fight => WledManager::generate_fight_frame(layout.leds),
+            Scene::Fight { scenes, .. } => {
+                let stale = scenes.get(&(idx, j)).is_none_or(|sc| {
+                    sc.layout().leds != layout.leds
+                        || sc.layout().bag_distance != layout.bag_distance
+                });
+                if stale {
+                    scenes.insert((idx, j), scenes::fight(layout.leds, *layout));
+                }
+                let sc = scenes.get_mut(&(idx, j)).expect("just inserted");
+                sc.render(dt, inputs).to_vec()
+            }
             Scene::Dark => vec![0u8; layout.leds * 3],
         }
     }
@@ -1194,6 +1194,87 @@ mod tests {
         assert!(a[..3].iter().any(|&v| v > 100));
         assert!(b[59 * 3..].iter().any(|&v| v > 100), "second strip is reversed");
         wled.stop_realtime_mode().await;
+    }
+
+    /// FIGHT over the real event path: PunchDetected makes a bright pulse that shows on the
+    /// strip nearest the bag before the outer one (both strips hang off one controller), a
+    /// heavy punch is brighter than a jab, the ember base alone stays dim, and the packets
+    /// stop when the realtime task is stopped (cooldown's HTTP effect takes over).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn fight_punch_pulse_reaches_the_inner_strip_first() {
+        use crate::config::StripConfig;
+        let rx = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let port = rx.local_addr().unwrap().port();
+        let mut config = Config::default();
+        config.wled.effects.fight.effect = "realtime".into();
+        let db = Arc::new(DatabaseManager::new("sqlite::memory:").await.unwrap());
+        let bus: SharedEventBus = Arc::new(EventBus::new(100));
+        let wled = Arc::new(WledManager::new(config.wled.clone(), db, bus.clone()).with_realtime_port(port));
+        // three columns: column 1 hangs at the bag (distance 0), column 2 is the outermost
+        *wled.controllers.write().await = vec![WledController {
+            ip: "127.0.0.1".into(),
+            num_leds: 120,
+            strips: vec![
+                StripConfig { column: 1, leds: 60, reverse: false },
+                StripConfig { column: 2, leds: 60, reverse: false },
+            ],
+        }];
+        wled.rebuild_sockets().await.unwrap();
+        wled.clone().start_event_loop();
+        bus.publish(Event::state_changed("WARMING", "FIGHT"));
+
+        rx.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let calm = last_of(&rx, 10);
+        assert_eq!(calm.len(), 120 * 3);
+        assert!(calm.iter().all(|&b| b < 140), "ember alone stays dim");
+
+        // Packets from before the punch may be queued; drop them.
+        let drain = |rx: &std::net::UdpSocket| {
+            rx.set_read_timeout(Some(Duration::from_millis(5))).unwrap();
+            let mut buf = [0u8; 2048];
+            while rx.recv_from(&mut buf).is_ok() {}
+            rx.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        };
+        // peak of the pulse per half over the next 40 frames and the first frame each half is bright
+        let capture = |rx: &std::net::UdpSocket| {
+            let (mut peak, mut first) = ([0u8; 2], [None::<usize>; 2]);
+            for k in 0..40 {
+                let f = last_of(rx, 1);
+                for (h, half) in f.chunks(60 * 3).enumerate() {
+                    let m = *half.iter().max().unwrap();
+                    peak[h] = peak[h].max(m);
+                    // the LED at bag height (0.45 of the strip) has no ember at rest
+                    let at_bag = half[26 * 3..26 * 3 + 3].iter().max().unwrap();
+                    if *at_bag > 60 && first[h].is_none() {
+                        first[h] = Some(k);
+                    }
+                }
+            }
+            (peak, first)
+        };
+        drain(&rx);
+        bus.publish(Event::punch_detected(30.0, 0.0, 0.0, 0.0));
+        let (jab, _) = capture(&rx);
+        drain(&rx);
+        bus.publish(Event::punch_detected(95.0, 0.0, 0.0, 0.0));
+        let (heavy, _) = capture(&rx);
+        assert!(heavy[0] > jab[0], "heavy brighter than jab: {jab:?} {heavy:?}");
+        // a hook has no whole-strip flash: its arrival time shows the per-column delay
+        drain(&rx);
+        bus.publish(Event::punch_detected(60.0, 0.0, 0.0, 0.0));
+        let (_, first) = capture(&rx);
+        let (inner, outer) = (first[0].expect("inner strip lit"), first[1].expect("outer strip lit"));
+        assert!(inner < outer, "inner strip first: {inner} vs {outer}");
+
+        // pulses end: back to dim ember
+        let after = last_of(&rx, 90);
+        assert!(after.iter().all(|&b| b < 140), "pulse is over");
+
+        wled.stop_realtime_mode().await;
+        rx.set_read_timeout(Some(Duration::from_millis(300))).unwrap();
+        let mut buf = [0u8; 2048];
+        while rx.recv_from(&mut buf).is_ok() {}
+        assert!(rx.recv_from(&mut buf).is_err(), "no frames after stop");
     }
 
     /// A device reporting another count resizes a single-strip controller but not a

@@ -12,7 +12,7 @@
 //! eye should see); WLED applies its own gamma. Idle and cooldown stay WLED built-in effects;
 //! this module is for the states that react live (warming, fight).
 //!
-//! Warming is wired into `wled_manager`; fight scenes are still to come (shadow-warrior-19b).
+//! Warming and fight are wired into `wled_manager` (shadow-warrior-19b).
 // One-shot layers, extra blend modes and punch inputs are for the fight scene; re-exports
 // are the module's public surface. Drop this once fight uses them.
 #![allow(dead_code, unused_imports)]

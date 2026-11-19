@@ -92,16 +92,35 @@ Scenes:
 - **Warming:** `EnergyBar` (persistent: rises fast, falls slowly, anti-aliased edge, bright head,
   white flash while full) + `ShoutGlow` (added around the bar head, wider and brighter with a
   louder shout, nothing in silence).
-- **Fight (planned):** ember/fire base, punch pulse one-shots scaled by power, shout overlay,
-  optional energy bar, later a music layer (needs a level/beat tap on playback).
+- **Fight** (`scenes::fight(len, layout)` -> `FightScene`, one per strip; all numbers in
+  `FightStyle` = `EmberStyle` + `PunchStyle` + `ShoutRippleStyle` + `EnergyBarStyle`):
+  - `Ember` (persistent): dark-red/orange flicker scrolling up from the bottom of the column,
+    peak brightness 0.30 at rest, 0.48 at full `rage` (decaying average of punch power), reaching
+    38% / 62% of the strip. Kept dim on purpose so punches pop.
+  - `PunchPulse` (one-shot per punch, `Blend::Add`, max 8 alive per strip, oldest dropped): a
+    shockwave from the bag height (`bag_height` 0.45 of the column) up and down, plus a short
+    bright core at the bag. Starts `bag_distance x 80 ms` late (inner columns first) and is up to
+    35% dimmer on the outermost column. Tiers by power (0..100): jab < 45 small amber; hook < 75
+    larger orange-white; heavy >= 75 large white-hot with a ~90 ms whole-strip flash.
+  - `ShoutRipple` (persistent, `Blend::Add`): teal (hue ~175) glow around the bag height with
+    ripples running outwards, wider and brighter with the live shout level. Teal is reserved for
+    shouts; every punch colour stays out of 150-200 degrees (tested).
+  - Optional thin `EnergyBar` under the fire: `FightStyle.energy_bar` (default off).
+  - Later: a music layer (needs a level/beat tap on playback).
+  - Punches reach every strip once: `LiveInputs::on_punch` gives each `Punch` a monotonically
+    increasing `id`; each `FightScene` spawns only ids above its own cursor, so the shared
+    `Inputs` can feed all strips. A strip whose LED count (or bag distance) changes gets a new
+    scene (in-flight pulses are dropped).
 
 Preview a scene as a filmstrip image (time down, LEDs across):
 
 ```
 LED_PREVIEW_OUT=<dir> cargo test led::scenes -- --ignored
+# -> warming.ppm, fight_columns.ppm (5 columns side by side), fight_strip.ppm (centre column)
 ```
 
-All colours and timings live in style structs (`EnergyBarStyle`, `ShoutGlowStyle`).
+All colours and timings live in style structs (`EnergyBarStyle`, `ShoutGlowStyle`, `EmberStyle`,
+`PunchStyle`/`TierStyle`, `ShoutRippleStyle`, `FightStyle`).
 
 ## Status
 
@@ -112,6 +131,10 @@ All colours and timings live in style structs (`EnergyBarStyle`, `ShoutGlowStyle
   `ShoutDetected` -> `shout = max(shout, intensity)`, decaying with tau 0.35 s per frame.
   Frames are sent every tick even when nothing changes (WLED realtime timeout is 2 s).
   Verified only by tests and the filmstrip preview; not yet seen on a strip.
-- Not yet wired: fight still draws the old pulsing red (`Scene::Fight` in `wled_manager.rs` is
-  the seam for the new scene). Tracked in beads (`shadow-warrior-19b`).
+- **Fight is wired**: `Scene::Fight` in `wled_manager` renders one `FightScene` per strip,
+  fed by the same event drain as warming plus `PunchDetected { power }` (0..100). Leaving
+  FIGHT: the next state's effect is an HTTP effect, which stops the realtime task (cooldown's
+  built-in Fire takes over). Verified by unit tests, a UDP integration test
+  (`fight_punch_pulse_reaches_the_inner_strip_first`) and the filmstrip; not yet seen on a
+  strip or in the simulator. Not done: music layer.
 - Controller power limit (`maxpwr` 1000 mA) is unchanged until the strip's PSU rating is known.
