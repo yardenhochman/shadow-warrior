@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use rand::seq::SliceRandom;
-use rand::thread_rng;
+use rand::{thread_rng, Rng};
 use rodio::{Decoder, Player, DeviceSinkBuilder};
 use std::fs::{self, File};
 use std::io::BufReader;
@@ -52,6 +52,17 @@ impl PlaylistCursor {
         }
         self.index = (self.index + 1) % len;
         Some(self.index)
+    }
+}
+
+/// Reshuffle the playlist for a new fight. Without this the order is fixed at start-up and every
+/// fight begins with the same track. The new first track is never the one the previous fight began
+/// with (when there is a choice), so back-to-back fights do not open with the same song.
+pub fn reshuffle_for_session(tracks: &mut [PathBuf], previous_first: Option<&Path>, rng: &mut impl Rng) {
+    tracks.shuffle(rng);
+    if tracks.len() > 1 && previous_first.is_some_and(|p| tracks[0] == p) {
+        let other = rng.gen_range(1..tracks.len());
+        tracks.swap(0, other);
     }
 }
 
@@ -118,6 +129,8 @@ pub struct MusicManager {
     cursor: Arc<RwLock<PlaylistCursor>>,
     /// Ducking factor 0..1 from the sound manager, times `config.volume` (1.0 = not ducked).
     duck: Arc<RwLock<f32>>,
+    /// The track the last session started with (see `reshuffle_for_session`).
+    last_first: Arc<RwLock<Option<PathBuf>>>,
 }
 
 impl MusicManager {
@@ -132,6 +145,7 @@ impl MusicManager {
             playing: Arc::new(RwLock::new(false)),
             cursor: Arc::new(RwLock::new(PlaylistCursor::default())),
             duck: Arc::new(RwLock::new(1.0)),
+            last_first: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -191,16 +205,22 @@ impl MusicManager {
             return Ok(());
         }
 
+        if self.config.shuffle {
+            let previous = self.last_first.read().await.clone();
+            reshuffle_for_session(&mut self.playlist.write().await, previous.as_deref(), &mut thread_rng());
+        }
+
         let playlist = self.playlist.read().await;
         if playlist.is_empty() {
             warn!("Playlist is empty, cannot play");
             return Ok(());
         }
 
-        // Start from the beginning of the playlist
+        // Start from the beginning of the (re)shuffled playlist
         self.cursor.write().await.reset();
         let track_path = playlist[0].clone();
         drop(playlist); // Release lock
+        *self.last_first.write().await = Some(track_path.clone());
 
         let track_name = track_name(&track_path);
 
@@ -344,6 +364,51 @@ impl MusicManager {
 
 #[cfg(test)]
 mod tests {
+    use rand::rngs::StdRng;
+    use rand::SeedableRng;
+
+    fn tracks(n: usize) -> Vec<PathBuf> {
+        (0..n).map(|i| PathBuf::from(format!("t{i}.m4a"))).collect()
+    }
+
+    #[test]
+    fn a_new_session_never_starts_with_the_previous_first_track() {
+        let mut rng = StdRng::seed_from_u64(7);
+        let prev = PathBuf::from("t0.m4a");
+        for _ in 0..200 {
+            let mut t = tracks(5);
+            reshuffle_for_session(&mut t, Some(&prev), &mut rng);
+            assert_ne!(t[0], prev);
+            assert_eq!(t.len(), 5);
+        }
+    }
+
+    #[test]
+    fn reshuffling_varies_the_first_track_and_keeps_every_track() {
+        let mut rng = StdRng::seed_from_u64(1);
+        let mut firsts = std::collections::HashSet::new();
+        for _ in 0..100 {
+            let mut t = tracks(8);
+            reshuffle_for_session(&mut t, None, &mut rng);
+            firsts.insert(t[0].clone());
+            let mut sorted = t.clone();
+            sorted.sort();
+            assert_eq!(sorted, tracks(8));
+        }
+        assert!(firsts.len() >= 6, "first track should vary, got {}", firsts.len());
+    }
+
+    #[test]
+    fn a_single_track_playlist_is_left_alone() {
+        let mut rng = StdRng::seed_from_u64(3);
+        let mut t = tracks(1);
+        reshuffle_for_session(&mut t, Some(Path::new("t0.m4a")), &mut rng);
+        assert_eq!(t, tracks(1));
+        let mut empty: Vec<PathBuf> = vec![];
+        reshuffle_for_session(&mut empty, None, &mut rng);
+        assert!(empty.is_empty());
+    }
+
     use super::*;
 
     #[test]
