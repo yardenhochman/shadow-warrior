@@ -15,6 +15,8 @@ pub(super) const FAIL_THRESHOLD: u32 = 3;
 struct Entry {
     fails: u32,
     down: bool,
+    /// The layout was probed since the controller last (re)connected.
+    probed: bool,
 }
 
 pub(super) struct LinkHealth {
@@ -44,6 +46,18 @@ impl LinkHealth {
         self.bus.publish(Event::WledConnected { ip: ip.to_string() });
     }
 
+    /// True once per connect: the caller should probe the layout now.
+    pub(super) fn take_probe_due(&self, ip: &str) -> bool {
+        let mut m = self.inner.lock().unwrap();
+        let e = m.entry(ip.to_string()).or_default();
+        !std::mem::replace(&mut e.probed, true)
+    }
+
+    /// The probe could not reach the controller: allow another attempt.
+    pub(super) fn probe_failed(&self, ip: &str) {
+        self.inner.lock().unwrap().entry(ip.to_string()).or_default().probed = false;
+    }
+
     /// A call to `ip` failed.
     pub(super) fn fail(&self, ip: &str, error: impl std::fmt::Display) {
         let mut m = self.inner.lock().unwrap();
@@ -52,6 +66,7 @@ impl LinkHealth {
         let go_down = e.fails >= self.threshold && !e.down;
         if go_down {
             e.down = true;
+            e.probed = false; // probe again when it is back
         }
         drop(m);
         self.bus.publish(Event::WledError { ip: ip.to_string(), error: error.to_string() });
@@ -99,6 +114,20 @@ mod tests {
             h.fail("1.1.1.1", "timeout");
         }
         assert!(drain(&mut rx).contains(&"WledDisconnected".to_string()));
+    }
+
+    #[test]
+    fn probe_is_due_once_per_connect() {
+        let (h, _rx) = setup(2);
+        assert!(h.take_probe_due("a"));
+        assert!(!h.take_probe_due("a"));
+        h.fail("a", "x");
+        assert!(!h.take_probe_due("a"), "still connected");
+        h.fail("a", "x"); // down
+        h.ok("a");
+        assert!(h.take_probe_due("a"), "reconnected");
+        h.probe_failed("a");
+        assert!(h.take_probe_due("a"), "transport failure allows a retry");
     }
 
     #[test]

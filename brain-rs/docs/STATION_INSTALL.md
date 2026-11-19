@@ -201,7 +201,10 @@ On each controller (WLED web UI):
       against the controller (`/json/eff`, `/json/pal`) and the fallback table is for 0.15.4
       (verified on an ESP32-C3). Use exact names in `config.yaml` (`"Fade"`, `"Fire 2012"`, `"Lava"`).
 - [ ] An ESP32-C3 rebooted under 4 Hz GET polling: do not poll it hard. The brain polls
-      `/json/info` every 1.5 s at most and only to read the LED count and detect reboots.
+      `/json/info` every 30 s (LED count, liveness) and reads `/json/cfg` (LED outputs) once
+      per connect, never repeatedly.
+- [ ] Leave WLED's per-output **Reverse off**; flip a strip with `reverse: true` in
+      `config.yaml`. Whether WLED's Reverse also flips UDP realtime frames is unverified.
 
 In `/opt/shadow-brain/config.yaml` on the station:
 
@@ -218,6 +221,12 @@ wled:
 
 - Column 0 is the outermost on one side; the bag hangs in the **centre**, so the middle columns
   are nearest to it (punch shockwaves reach them first).
+- The brain probes each controller's LED outputs (`/json/cfg`) once per connect. A configured
+  layout that disagrees with the device (output count or lengths) logs a warning and is kept;
+  the system status API shows the probed outputs under `wled[].outputs`. A controller with only
+  `{ip: ..., auto_layout: true}` gets one strip per output (first on its own column, the rest on
+  the next free columns); discovered controllers always work this way. Columns are never
+  probed: set them in `strips`.
 - Invalid layouts (duplicate column, strips not summing to `num_leds`) stop the brain at start
   with a clear error. A multi-strip controller keeps its configured layout even if WLED reports
   another LED count (warning in the log).

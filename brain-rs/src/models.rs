@@ -69,6 +69,20 @@ pub struct WledStatus {
     pub current_effect: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
+    /// LED outputs the controller reported in `/json/cfg` (`hw.led.ins`), empty until probed.
+    /// `rev` is informational: the brain's own `reverse` config is the only flip it applies.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outputs: Vec<WledOutput>,
+}
+
+/// One LED output of a WLED controller, as probed from `/json/cfg` `hw.led.ins[]`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WledOutput {
+    pub start: usize,
+    pub len: usize,
+    pub rev: bool,
+    /// WLED colour order code (0 = GRB).
+    pub order: u8,
 }
 
 /// Tasmota plug status

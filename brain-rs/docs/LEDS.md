@@ -66,7 +66,8 @@ strips (flipping `reverse` ones) into the controller's frame. Scenes get the str
 4 columns: 1, 1/3, 1/3, 1), so punch shockwaves can travel inner columns first. Warming is the
 same on every column for now.
 
-Controllers found at runtime by discovery (mDNS) are added with one 180-LED strip on the lowest
+Controllers found at runtime by discovery (mDNS) are added with `auto_layout`: one 180-LED strip
+(until the probe says otherwise) on the lowest
 column no strip drives yet (never a column already assigned). A discovered address that is already
 configured is ignored; when `columns` is set and all of them are taken it is logged and not added.
 Without `columns` the arena grows by one column. Configure controllers explicitly in
@@ -75,8 +76,56 @@ Without `columns` the arena grows by one column. Configure controllers explicitl
 The browser simulator's live bridge can show this layout (one UDP listener per controller, strips
 cut into columns): see `simulator/web/README.md`, "Layout: several controllers and strips".
 
-LED-count adoption (`/json/info` `leds.count`) resizes a single-strip controller; for a
-multi-strip controller a different count only logs a warning and the configured layout stays.
+### Layout probe (`GET /json/cfg`)
+
+Once per connect (the first successful health poll, and again after the controller was
+declared disconnected and came back) the brain reads `GET /json/cfg` -> `hw.led.ins[]`, one
+entry per LED output. Never polled: an ESP32-C3 rebooted under 4 Hz GET polling. A refused or
+timed-out probe is retried on the next health poll (30 s); an answer that cannot be used
+(404, not JSON, no `ins`, outputs that do not follow each other from LED 0) is logged and the
+`/json/info` `leds.count` path below applies until the next reconnect.
+
+Real WLED 0.15.4 (ESP32-C3), `hw.led` with everything but the layout trimmed (fixture:
+`src/services/wled_manager/fixtures/cfg_0_15_4_one_strip.json`):
+
+```json
+{"total":180, "maxpwr":1000, "ins":[{"start":0,"len":180,"pin":[10],"order":0,"rev":false,
+  "skip":0,"type":22,"ref":false,"rgbwm":0,"freq":0,"maxpwr":1000,"ledma":55}]}
+```
+
+What the probe does with it:
+
+- `auto_layout: true` controllers (all found by discovery or the database; opt-in in config
+  with just `{ip: ..., auto_layout: true}`, `num_leds` optional): **one strip per output**,
+  lengths from `len`. The first keeps the controller's column, further outputs take the lowest
+  free columns (limited by `columns`; an output with no free column is logged and not drawn).
+  `reverse` per position stays what the config says (false for new ones).
+- Controllers with an explicit layout: the **config wins**. If the probe disagrees (different
+  number of outputs or lengths) a warning names both and nothing changes; a multi-strip config is
+  never silently overridden. One exception: one configured strip on one output takes the
+  output's length (like the `/json/info` count does).
+- Column is not probeable. It comes from `strips[].column` / the list order (pinned at load, see
+  below) / the next free column for discovered ones. A naming convention (WLED name `col2`) is
+  not implemented.
+- the system status API (`wled[].outputs`: `start`, `len`, `rev`, `order`) and the log show what was
+  probed. Outputs carrying `rev: true` are logged as "(WLED rev)".
+
+Columns of controllers without `strips` are resolved once at load (the list index becomes an
+explicit one-strip layout), so `remove_controller` cannot shift the later ones.
+
+LED-count adoption (`/json/info` `leds.count`, every 30 s poll) resizes a single-strip
+controller; for a multi-strip controller a different count only logs a warning and the
+configured layout stays.
+
+### OPEN: does WLED's per-output `rev` apply to realtime UDP frames?
+
+Unverified, deliberately not guessed in code. WLED's per-output "Reverse" (LED preferences)
+flips the output in the bus layer, so it may or may not touch DRGB/DNRGB realtime data. The
+brain's own `reverse` (strip config) is the only flip it applies. Until this is checked on a
+real controller **leave WLED's Reverse off** on every output and use `reverse: true` in
+`config.yaml`; if the probe reports `rev: true` the brain only reports it. To settle it: set
+Reverse on one output, send a DRGB frame with only LED 0 lit and look which end lights (bd
+issue filed for this).
 
 ## Warming and fight: the `led` module (`src/led/`)
 

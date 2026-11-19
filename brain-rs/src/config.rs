@@ -351,6 +351,12 @@ pub struct WledController {
     pub num_leds: usize,
     #[serde(default)]
     pub strips: Vec<StripConfig>,
+    /// Build the strips from the controller's LED outputs (`GET /json/cfg`, once per
+    /// connect): one strip per output, the first on this controller's column, further
+    /// ones on the next free columns. `num_leds` may then be omitted (180 until probed).
+    /// Set for controllers found by discovery; opt in per controller in config.
+    #[serde(default)]
+    pub auto_layout: bool,
 }
 
 /// LEDs on a typical column: one 3 m strip at 60 LEDs/m. Used when nothing else is known
@@ -414,6 +420,8 @@ impl WledConfig {
                         c.ip, c.num_leds
                     ));
                 }
+            } else if c.num_leds == 0 && c.auto_layout {
+                c.num_leds = DEFAULT_STRIP_LEDS;
             } else if c.num_leds == 0 {
                 return Err(format!("wled controller {}: num_leds (or strips) is required", c.ip));
             }
@@ -778,6 +786,14 @@ mod load_tests {
         let strip = |column, leds| StripConfig { column, leds, reverse: false };
         assert_eq!(cfg.wled.controllers[0].strips, vec![strip(0, 90)]);
         assert_eq!(cfg.wled.controllers[1].strips, vec![strip(1, 180)]);
+    }
+
+    #[test]
+    fn auto_layout_controller_needs_only_an_ip() {
+        let cfg = load("wled:\n  controllers:\n    - {ip: a, auto_layout: true}\n").unwrap();
+        assert_eq!(cfg.wled.controllers[0].num_leds, DEFAULT_STRIP_LEDS);
+        assert!(cfg.wled.controllers[0].auto_layout);
+        assert!(load("wled:\n  controllers:\n    - {ip: a}\n").is_err());
     }
 
     #[test]

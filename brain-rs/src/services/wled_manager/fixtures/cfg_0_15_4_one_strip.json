@@ -1,0 +1,43 @@
+{
+ "rev": [
+  1,
+  0
+ ],
+ "vid": 2508020,
+ "id": {
+  "mdns": "wled-redacted",
+  "name": "WLED"
+ },
+ "hw": {
+  "led": {
+   "total": 180,
+   "maxpwr": 1000,
+   "ledma": 0,
+   "cct": false,
+   "cr": false,
+   "ic": false,
+   "cb": 0,
+   "fps": 42,
+   "rgbwm": 255,
+   "ld": true,
+   "ins": [
+    {
+     "start": 0,
+     "len": 180,
+     "pin": [
+      10
+     ],
+     "order": 0,
+     "rev": false,
+     "skip": 0,
+     "type": 22,
+     "ref": false,
+     "rgbwm": 0,
+     "freq": 0,
+     "maxpwr": 1000,
+     "ledma": 55
+    }
+   ]
+  }
+ }
+}

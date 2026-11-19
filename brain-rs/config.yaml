@@ -136,7 +136,12 @@ sound:
 wled:
   # The arena has 4-5 columns, each a 3 m strip of 180 LEDs (60/m), normally one WLED
   # controller per column; a controller hosting several strips has num_leds = 180 x strips.
-  # The brain adopts the count the controller reports.
+  # The brain adopts the count the controller reports and reads its LED outputs once per
+  # connect (GET /json/cfg hw.led.ins): a layout here that disagrees is only warned about and
+  # kept; with `auto_layout: true` the strips follow the outputs (one strip each, first on this
+  # controller's column, the rest on the next free columns). Column is never probed.
+  # Keep WLED's own per-output Reverse off and use `reverse: true` below (unverified whether
+  # WLED's Reverse flips UDP realtime frames).
   # controllers:
   #   - ip: "10.0.0.55"          # one strip = column 0 (column = list index)
   #     num_leds: 180
@@ -144,6 +149,7 @@ wled:
   #     strips:
   #       - {column: 1, leds: 180}
   #       - {column: 2, leds: 180, reverse: true}   # reverse: wired top-down
+  #   - {ip: "10.0.0.57", auto_layout: true}   # strips from the controller's outputs
   # columns: 4                   # optional; default = highest column + 1
   controllers: []
 

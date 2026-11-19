@@ -14,10 +14,11 @@ use crate::core::{ArenaState, Event, SharedEventBus};
 use crate::led::layout::{append_strip, controller_strips};
 use crate::led::scenes::FightScene;
 use crate::led::{scenes, ColumnLayout, Compositor, Inputs, LiveInputs};
-use crate::models::WledStatus;
+use crate::models::{WledOutput, WledStatus};
 use crate::services::database_manager::SharedDatabaseManager;
 
 mod health;
+mod probe;
 mod protocol;
 use health::LinkHealth;
 
@@ -45,6 +46,8 @@ pub struct WledManager {
     palette_cache: RwLock<Vec<String>>,
     /// Publishes disconnect/error/reconnect events from call outcomes.
     link: Arc<LinkHealth>,
+    /// Outputs each controller reported in `/json/cfg` at its last probe.
+    probed: std::sync::Mutex<std::collections::HashMap<String, Vec<WledOutput>>>,
     /// UDP realtime port; WLED's own 21324 except in tests, which pick a free port.
     realtime_port: u16,
 }
@@ -68,6 +71,7 @@ impl WledManager {
             effect_cache: RwLock::new(Vec::new()),
             palette_cache: RwLock::new(Vec::new()),
             link: Arc::new(LinkHealth::new(event_bus.clone())),
+            probed: Default::default(),
             realtime_port: REALTIME_PORT,
         }
     }
@@ -105,7 +109,8 @@ impl WledManager {
                         loaded_controllers.push(WledController {
                             ip: dev.host.clone(),
                             num_leds: DEFAULT_STRIP_LEDS, // until the device reports its own count
-                ..Default::default()
+                            auto_layout: true,
+                            ..Default::default()
                         });
                     }
                 }
@@ -127,6 +132,7 @@ impl WledManager {
     pub async fn get_status(&self) -> Vec<WledStatus> {
         let controllers = self.controllers.read().await;
         let socket_count = self.udp_sockets.read().await.len();
+        let probed = self.probed.lock().unwrap();
         controllers
             .iter()
             .enumerate()
@@ -135,6 +141,7 @@ impl WledManager {
                 connected: i < socket_count,
                 current_effect: None,
                 last_error: None,
+                outputs: probed.get(&c.ip).cloned().unwrap_or_default(),
             })
             .collect()
     }
@@ -161,9 +168,11 @@ impl WledManager {
                 ip: ip.clone(),
                 num_leds: DEFAULT_STRIP_LEDS,
                 strips: vec![StripConfig { column, leds: DEFAULT_STRIP_LEDS, reverse: false }],
+                auto_layout: true,
             });
         }
         self.rebuild_sockets().await?;
+        self.probe_layout_if_due(&ip).await;
 
         // Flash solid green
         let green_payload = serde_json::json!({
@@ -533,6 +542,8 @@ impl WledManager {
             {
                 Ok(resp) => {
                     self.link.ok(&ip);
+                    // Layout first (once per connect), then the count as a fallback/check.
+                    self.probe_layout_if_due(&ip).await;
                     // The device knows its real strip length; config/discovery only guess.
                     if let Some(n) = resp
                         .json::<serde_json::Value>()
@@ -545,6 +556,88 @@ impl WledManager {
                     }
                 }
                 Err(e) => self.link.fail(&ip, &e),
+            }
+        }
+    }
+
+    /// Probe `GET /json/cfg` if this controller connected (or reconnected) since the last
+    /// probe. One request per connect, never polled. A transport failure allows a retry on
+    /// the next health poll; an unusable answer falls back to the `/json/info` LED count.
+    async fn probe_layout_if_due(&self, ip: &str) {
+        if !self.link.take_probe_due(ip) {
+            return;
+        }
+        let url = format!("http://{ip}/json/cfg");
+        let cfg = match self.http_client.get(&url).send().await.and_then(|r| r.error_for_status()) {
+            Ok(r) => r.json::<serde_json::Value>().await,
+            Err(e) => Err(e),
+        };
+        let cfg = match cfg {
+            Ok(v) => v,
+            Err(e) if e.is_connect() || e.is_timeout() => {
+                debug!("WLED {ip} layout probe unreachable: {e}");
+                self.link.probe_failed(ip);
+                return;
+            }
+            Err(e) => {
+                warn!("WLED {ip} /json/cfg unusable ({e}); using the /json/info LED count");
+                return;
+            }
+        };
+        match probe::parse_cfg(&cfg) {
+            Ok(outputs) => self.apply_probe(ip, outputs).await,
+            Err(why) => warn!("WLED {ip} /json/cfg layout unusable ({why}); using the /json/info LED count"),
+        }
+    }
+
+    /// Fit the probed outputs to the controller's strips. `auto_layout` controllers take
+    /// one strip per output. For others the configuration wins: a mismatch is only logged,
+    /// except a single strip on a single output, whose length is adopted like the
+    /// `/json/info` count. Probed `rev` is reported (status, log) but never applied.
+    async fn apply_probe(&self, ip: &str, outputs: Vec<WledOutput>) {
+        let desc: Vec<String> = outputs
+            .iter()
+            .map(|o| format!("{} LEDs{}", o.len, if o.rev { " (WLED rev)" } else { "" }))
+            .collect();
+        info!("WLED {ip} reports {} output(s): {}", outputs.len(), desc.join(", "));
+        let changed = {
+            let mut controllers = self.controllers.write().await;
+            let Some(i) = controllers.iter().position(|c| c.ip == ip) else { return };
+            let specs = controllers[i].strip_specs(i);
+            let matches = specs.len() == outputs.len() && specs.iter().zip(&outputs).all(|(s, o)| s.leds == o.len);
+            if matches {
+                false
+            } else if controllers[i].auto_layout {
+                let (strips, dropped) = probe::auto_strips(&controllers, ip, &outputs, self.config.columns);
+                if dropped > 0 {
+                    warn!("WLED {ip}: {dropped} output(s) found no free column and are not drawn");
+                }
+                let c = &mut controllers[i];
+                c.num_leds = strips.iter().map(|s| s.leds).sum();
+                c.strips = strips;
+                true
+            } else if specs.len() == 1 && outputs.len() == 1 {
+                let c = &mut controllers[i];
+                info!("WLED {ip} output is {} LEDs (configured {})", outputs[0].len, specs[0].leds);
+                c.num_leds = outputs[0].len;
+                c.strips = vec![StripConfig { leds: outputs[0].len, ..specs[0].clone() }];
+                true
+            } else {
+                warn!(
+                    "WLED {ip}: probed {} output(s) ({}) but {} strip(s) are configured ({}); keeping the configuration. \
+                     Fix config.yaml (strips) or set auto_layout: true",
+                    outputs.len(),
+                    desc.join(", "),
+                    specs.len(),
+                    specs.iter().map(|s| format!("column {}: {} LEDs", s.column, s.leds)).collect::<Vec<_>>().join(", ")
+                );
+                false
+            }
+        };
+        self.probed.lock().unwrap().insert(ip.to_string(), outputs);
+        if changed {
+            if let Err(e) = self.rebuild_sockets().await {
+                warn!("WLED socket rebuild after layout probe failed: {e}");
             }
         }
     }
@@ -1191,6 +1284,7 @@ mod tests {
                 StripConfig { column: 0, leds: 60, reverse: false },
                 StripConfig { column: 1, leds: 60, reverse: true },
             ],
+            auto_layout: false,
         }];
         wled.rebuild_sockets().await.unwrap();
         {
@@ -1232,6 +1326,7 @@ mod tests {
                 StripConfig { column: 1, leds: 60, reverse: false },
                 StripConfig { column: 2, leds: 60, reverse: false },
             ],
+            auto_layout: false,
         }];
         wled.rebuild_sockets().await.unwrap();
         wled.clone().start_event_loop();
@@ -1304,10 +1399,10 @@ mod tests {
             WledController { ip: "a".into(), num_leds: 120, strips: vec![
                 StripConfig { column: 0, leds: 60, reverse: false },
                 StripConfig { column: 1, leds: 60, reverse: false },
-            ] },
+            ], auto_layout: false },
             WledController { ip: "b".into(), num_leds: 180, strips: vec![
                 StripConfig { column: 2, leds: 180, reverse: false },
-            ] },
+            ], auto_layout: false },
         ];
         wled.update_led_count("a", 90).await;
         wled.update_led_count("b", 150).await;
@@ -1377,8 +1472,129 @@ mod tests {
         );
     }
 
+    const CFG_ONE: &str = include_str!("wled_manager/fixtures/cfg_0_15_4_one_strip.json");
+    const CFG_TWO: &str = include_str!("wled_manager/fixtures/cfg_two_outputs.json");
+    const INFO_REAL: &str = include_str!("wled_manager/fixtures/info_0_15_4.json");
+
+    async fn probe_manager(controllers: Vec<WledController>, cfg: &str, info: &str) -> (WledManager, crate::test_util::Seen) {
+        let config = Config::default();
+        let db = Arc::new(DatabaseManager::new("sqlite::memory:").await.unwrap());
+        let bus: SharedEventBus = Arc::new(EventBus::new(100));
+        let wled = WledManager::new(config.wled.clone(), db, bus);
+        let (addr, _routes, seen) =
+            mock_http(&[("GET /json/cfg", 200, cfg), ("GET /json/info", 200, info)]).await;
+        let controllers = controllers
+            .into_iter()
+            .map(|mut c| {
+                c.ip = addr.clone();
+                c
+            })
+            .collect();
+        *wled.controllers.write().await = controllers;
+        (wled, seen)
+    }
+
+    async fn cfg_gets(seen: &crate::test_util::Seen) -> usize {
+        seen.lock().await.iter().filter(|r| r.starts_with("GET /json/cfg")).count()
+    }
+
+    fn one_strip(leds: usize) -> WledController {
+        WledController {
+            num_leds: leds,
+            strips: vec![StripConfig { column: 0, leds, reverse: false }],
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn probe_matching_the_config_changes_nothing_and_runs_once() {
+        let (wled, seen) = probe_manager(vec![one_strip(180)], CFG_ONE, INFO_REAL).await;
+        wled.poll_health_once().await;
+        wled.poll_health_once().await;
+        wled.poll_health_once().await;
+        assert_eq!(cfg_gets(&seen).await, 1, "layout is probed once per connect, not polled");
+        assert_eq!(wled.controllers.read().await[0].num_leds, 180);
+        let st = wled.get_status().await;
+        assert_eq!(st[0].outputs, vec![WledOutput { start: 0, len: 180, rev: false, order: 0 }]);
+    }
+
+    #[tokio::test]
+    async fn probe_fills_in_the_length_of_a_single_strip() {
+        // the info answer has no count, so only the probe can know
+        let (wled, _) = probe_manager(vec![one_strip(90)], CFG_ONE, "{}").await;
+        wled.poll_health_once().await;
+        let c = wled.controllers.read().await;
+        assert_eq!((c[0].num_leds, c[0].strips[0].leds), (180, 180));
+    }
+
+    #[tokio::test]
+    async fn auto_layout_builds_one_strip_per_output_and_ignores_wled_rev() {
+        let c = WledController { num_leds: 180, auto_layout: true, ..Default::default() };
+        let (wled, _) = probe_manager(vec![c], CFG_TWO, "{}").await;
+        wled.poll_health_once().await;
+        {
+            let c = wled.controllers.read().await;
+            assert_eq!(c[0].num_leds, 360);
+            let specs = c[0].strip_specs(0);
+            // WLED says the second output is rev; the brain's own `reverse` stays false
+            assert_eq!(
+                specs,
+                vec![
+                    StripConfig { column: 0, leds: 180, reverse: false },
+                    StripConfig { column: 1, leds: 180, reverse: false },
+                ]
+            );
+        }
+        let st = wled.get_status().await;
+        assert!(st[0].outputs[1].rev, "probed rev is reported");
+        let socks = wled.udp_sockets.read().await;
+        assert_eq!(socks[0].1.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn probe_disagreeing_with_a_multi_strip_config_keeps_the_config() {
+        let two = WledController {
+            num_leds: 120,
+            strips: vec![
+                StripConfig { column: 0, leds: 60, reverse: false },
+                StripConfig { column: 1, leds: 60, reverse: true },
+            ],
+            ..Default::default()
+        };
+        let (wled, _) = probe_manager(vec![two.clone()], CFG_ONE, "{}").await;
+        wled.poll_health_once().await;
+        assert_eq!(wled.controllers.read().await[0].strips, two.strips);
+        // the same strips against a 2 x 180 device: still the config, no silent override
+        let (wled, _) = probe_manager(vec![two.clone()], CFG_TWO, "{}").await;
+        wled.poll_health_once().await;
+        assert_eq!(wled.controllers.read().await[0].strips, two.strips);
+        assert_eq!(wled.get_status().await[0].outputs.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn unusable_cfg_falls_back_to_the_info_count() {
+        for cfg in ["not json", "{}", r#"{"hw":{"led":{"ins":[]}}}"#] {
+            let (wled, seen) = probe_manager(vec![one_strip(90)], cfg, INFO_REAL).await;
+            wled.poll_health_once().await;
+            wled.poll_health_once().await;
+            assert_eq!(wled.controllers.read().await[0].num_leds, 180, "{cfg}");
+            assert!(wled.get_status().await[0].outputs.is_empty());
+            assert_eq!(cfg_gets(&seen).await, 1, "an unusable answer is not retried until reconnect");
+        }
+    }
+
+    #[tokio::test]
+    async fn unreachable_cfg_is_retried_on_the_next_poll() {
+        let (wled, seen) = probe_manager(vec![one_strip(180)], CFG_ONE, INFO_REAL).await;
+        // the mock cannot refuse a connection for one path only: mark the probe as failed by hand
+        wled.poll_health_once().await;
+        wled.link.probe_failed(&wled.controllers.read().await[0].ip);
+        wled.poll_health_once().await;
+        assert_eq!(cfg_gets(&seen).await, 2);
+    }
+
     fn ctrl(ip: &str, strips: Vec<StripConfig>) -> WledController {
-        WledController { ip: ip.into(), num_leds: 180, strips }
+        WledController { ip: ip.into(), num_leds: 180, strips, auto_layout: false }
     }
 
     #[test]
