@@ -4,7 +4,7 @@ import { VICTORY } from './hitfx.js';
 import { FIGHT_STARTS } from '../sound-lab/js/fightstart.js';
 import { buildImpact } from '../sound-lab/js/impacts.js';
 import { defeat as buildDefeat } from '../sound-lab/js/ambience.js';
-import { BreakRule, buildBreak, isBreakStuffTrack, BREAK_BUS_GAIN } from '../sound-lab/js/breakstuff.js';
+import { BreakRule, buildBreak, isBreakStuffTrack, liveBreakBus, liveGain } from '../sound-lab/js/breakstuff.js';
 
 // Punch sound families the game can switch between (header picker). 'current' = the synth below.
 export const IMPACT_CHOICES = [{ id: 'current', name: 'Punch: original' }, { id: 'cinema', name: 'Punch: Cinematic Boom' }, { id: 'anime', name: 'Punch: Anime Crack' }];
@@ -128,8 +128,9 @@ export class Sfx {
     this.breakRule = this.breakRule || new BreakRule({ chance: { jab: 0.06, hook: 0.2, heavy: 0.5 } });
     const b = this.breakRule.decide(power, { now: this.ctx.currentTime, combo });
     if (!b) return null;
-    if (!this.breakBus) { this.breakBus = this.ctx.createGain(); this.breakBus.gain.value = BREAK_BUS_GAIN; this.breakBus.connect(this.master); }
-    buildBreak(b.kind, this.ctx, this.breakBus, this.ctx.currentTime + 0.03, b.alt, b.gain);
+    // loud bus straight to the output (skips the 0.7 master), so the smash cuts through the song (Yarden 20.11)
+    if (!this.breakBus) this.breakBus = liveBreakBus(this.ctx, this.ctx.destination);
+    buildBreak(b.kind, this.ctx, this.breakBus, this.ctx.currentTime + 0.03, b.alt, b.gain * liveGain(b.kind));
     return b;
   }
 
