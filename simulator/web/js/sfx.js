@@ -3,6 +3,7 @@
 import { VICTORY } from './hitfx.js';
 import { FIGHT_STARTS } from '../sound-lab/js/fightstart.js';
 import { buildImpact } from '../sound-lab/js/impacts.js';
+import { defeat as buildDefeat } from '../sound-lab/js/ambience.js';
 
 // Punch sound families the game can switch between (header picker). 'current' = the synth below.
 export const IMPACT_CHOICES = [{ id: 'current', name: 'Punch: original' }, { id: 'cinema', name: 'Punch: Cinematic Boom' }, { id: 'anime', name: 'Punch: Anime Crack' }];
@@ -116,6 +117,12 @@ export class Sfx {
       if (!buf) { const r = await fetch(url); if (!r.ok) return; buf = await this.ctx.decodeAudioData(await r.arrayBuffer()); this.voiceCache.set(url, buf); }
       const src = this.ctx.createBufferSource(), g = this.ctx.createGain(); g.gain.value = gain; src.buffer = buf; src.connect(g).connect(this.master); src.start();
     } catch {}
+  }
+
+  /** Game over without a single K.O.: three sinking notes and a tape-stop dive (sound lab Defeat stinger). */
+  defeat() {
+    if (!this.enabled || !this.ctx) return;
+    this.stopMusic(); buildDefeat(this.ctx, this.master, this.ctx.currentTime + 0.05);
   }
 
   /** Shadow defeated: the victory fanfare (~6 s), its climax on VICTORY.climax with the LED finale. */

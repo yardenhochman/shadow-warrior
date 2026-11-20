@@ -146,6 +146,7 @@ function onStateEnter(to) {
     game.summary = `${punches} punches, max ${maxPower.toFixed(0)}, ${game.kos} KO${game.kos === 1 ? '' : 's'}${reason ? `, ended: ${reason}` : ''}`;
     const title = { KnockOut: 'VICTORY', TimeElapsed: 'TIME UP', InactivityTimeout: 'TOO QUIET' }[endReason] || 'FIGHT OVER';
     scene.showBanner(title, game.summary, 3.5);
+    if (!game.kos) { sfx.defeat(); log('Defeat stinger (no K.O. this game)', 'state'); } // Yarden 20.11
   } else if (to === S.Warming) {
     scene.showBanner('WAKE IT UP', 'shout!', 1.6);
   }
