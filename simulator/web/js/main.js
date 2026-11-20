@@ -128,6 +128,15 @@ function onPresence(detected) {
   lastGreet = performance.now(); sfx.voice(GREETING); log('Greeting: "סליחה... אַתְּ, אַתָּה, אַתֶּם... אפס."', 'presence');
 }
 
+// A lull in the fight: the shadow mocks the player once, the next punch re-arms it (Yarden 20.11, sound lab stamina1).
+const IDLE_TAUNT = 'sound-lab/voice/hebrew/stamina1.mp3';
+let lullTaunted = false;
+function idleTaunt(st, inactiveSec, limit) {
+  if (st !== S.Fight || inactiveSec == null || inactiveSec < 1) { lullTaunted = false; return; }
+  if (lullTaunted || inactiveSec < cfg.taunt_idle_sec || (limit && inactiveSec >= limit - 1)) return;
+  lullTaunted = true; sfx.voice(IDLE_TAUNT); log('Taunt (no punches): "מתנשפים כבר? חמוד. ממש חמוד."', 'presence');
+}
+
 function onStateEnter(to) {
   if (to === S.Fight) {
     game.punches = 0; game.maxPower = 0; game.endReason = null;
@@ -730,6 +739,7 @@ function updatePanels(info) {
   } else { $('energyBar').style.width = st === S.Fight ? '100%' : '0%'; $('energyVal').textContent = st === S.Fight ? 'full' : '-'; }
   $('fightLeft').textContent = st === S.Fight ? `${info.fightRemainingSec.toFixed(0)} s` : '-';
   $('inactive').textContent = st === S.Fight ? `${info.timeSinceLastActivitySec.toFixed(0)} / ${cfg.fight_inactivity_timeout_sec} s` : '-';
+  idleTaunt(st, st === S.Fight ? info.timeSinceLastActivitySec : null, cfg.fight_inactivity_timeout_sec);
   $('punches').textContent = arena.currentSessionPunches;
   $('maxPower').textContent = arena.currentSessionMaxPower.toFixed(0);
   $('coolLeft').textContent = st === S.Cooldown ? `${info.cooldownRemainingSec.toFixed(0)} s` : '-';
@@ -771,6 +781,7 @@ function updateBrainPanels(info) {
   } else { $('energyBar').style.width = st === S.Fight ? '100%' : '0%'; $('energyVal').textContent = st === S.Fight ? 'full' : '-'; }
   $('fightLeft').textContent = info.fightRemainingSec != null ? `${info.fightRemainingSec.toFixed(0)} s` : '-';
   $('inactive').textContent = info.timeSinceLastActivitySec != null ? `${info.timeSinceLastActivitySec.toFixed(0)} / ${tu.fight_inactivity_timeout_sec ?? '?'} s` : '-';
+  idleTaunt(st, info.timeSinceLastActivitySec, tu.fight_inactivity_timeout_sec);
   $('punches').textContent = info.punches;
   $('maxPower').textContent = Number(info.maxPower).toFixed(0);
   $('coolLeft').textContent = info.cooldownRemainingSec != null ? `${info.cooldownRemainingSec.toFixed(0)} s` : '-';
