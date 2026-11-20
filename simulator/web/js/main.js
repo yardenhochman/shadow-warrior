@@ -128,24 +128,6 @@ function onPresence(detected) {
   lastGreet = performance.now(); sfx.voice(GREETING); log('Greeting: "סליחה... אַתְּ, אַתָּה, אַתֶּם... אפס."', 'presence');
 }
 
-// A lull in the fight: the shadow mocks the player once, the next punch re-arms it (Yarden 20.11, sound lab stamina1).
-const IDLE_TAUNT = 'sound-lab/voice/hebrew/stamina1.mp3';
-let lullTaunted = false;
-function idleTaunt(st, inactiveSec, limit) {
-  if (st !== S.Fight || inactiveSec == null || inactiveSec < 1) { lullTaunted = false; return; }
-  if (lullTaunted || inactiveSec < cfg.taunt_idle_sec || (limit && inactiveSec >= limit - 1)) return;
-  lullTaunted = true; sfx.voice(IDLE_TAUNT); log('Taunt (no punches): "מתנשפים כבר? חמוד. ממש חמוד."', 'presence');
-}
-
-// A weak punch (jab tier) in a fight: the shadow scoffs, alternating lines, at most every taunt_weak_gap_sec (Yarden 20.11: weak2, weak4).
-const WEAK_TAUNTS = [['sound-lab/voice/hebrew/weak2.mp3', 'סליחה על השאלה: זה היה אגרוף, או ליטוף?'], ['sound-lab/voice/hebrew/weak4.mp3', 'מרגש. באמת. עוד מעט אולי ארגיש משהו.']];
-let weakIdx = 0, lastWeakTaunt = -Infinity;
-function weakTaunt(power) {
-  if (tierOf(power) !== 'jab' || performance.now() - lastWeakTaunt < cfg.taunt_weak_gap_sec * 1000) return;
-  lastWeakTaunt = performance.now(); const [url, text] = WEAK_TAUNTS[weakIdx++ % WEAK_TAUNTS.length];
-  sfx.voice(url); log(`Taunt (weak punch): "${text}"`, 'presence');
-}
-
 function onStateEnter(to) {
   if (to === S.Fight) {
     game.punches = 0; game.maxPower = 0; game.endReason = null;
@@ -268,7 +250,6 @@ function landPunch(power, info, state) {
   const sig = hitPicker.pick(power, { combo, rage: rig.rage, dir: info.dir, variety: cfg.hit_fx_variety >= 1, table: hitTable(rig.presetFor(tier)), hueShift: rig.P(tier).hue });
   scene.hit(power, info, sig); rig.punch(power, sig); sfx.punch(power, sig);
   if (!counted) { log(`PunchDetected power=${power.toFixed(0)} (not counted: ${state})`, 'ignored'); return; }
-  weakTaunt(power);
   game.punches = (game.punches || 0) + 1; game.maxPower = Math.max(game.maxPower || 0, power);
   game.combo = combo;
   game.lastHitAt = t;
@@ -754,7 +735,6 @@ function updatePanels(info) {
   } else { $('energyBar').style.width = st === S.Fight ? '100%' : '0%'; $('energyVal').textContent = st === S.Fight ? 'full' : '-'; }
   $('fightLeft').textContent = st === S.Fight ? `${info.fightRemainingSec.toFixed(0)} s` : '-';
   $('inactive').textContent = st === S.Fight ? `${info.timeSinceLastActivitySec.toFixed(0)} / ${cfg.fight_inactivity_timeout_sec} s` : '-';
-  idleTaunt(st, st === S.Fight ? info.timeSinceLastActivitySec : null, cfg.fight_inactivity_timeout_sec);
   $('punches').textContent = arena.currentSessionPunches;
   $('maxPower').textContent = arena.currentSessionMaxPower.toFixed(0);
   $('coolLeft').textContent = st === S.Cooldown ? `${info.cooldownRemainingSec.toFixed(0)} s` : '-';
@@ -796,7 +776,6 @@ function updateBrainPanels(info) {
   } else { $('energyBar').style.width = st === S.Fight ? '100%' : '0%'; $('energyVal').textContent = st === S.Fight ? 'full' : '-'; }
   $('fightLeft').textContent = info.fightRemainingSec != null ? `${info.fightRemainingSec.toFixed(0)} s` : '-';
   $('inactive').textContent = info.timeSinceLastActivitySec != null ? `${info.timeSinceLastActivitySec.toFixed(0)} / ${tu.fight_inactivity_timeout_sec ?? '?'} s` : '-';
-  idleTaunt(st, info.timeSinceLastActivitySec, tu.fight_inactivity_timeout_sec);
   $('punches').textContent = info.punches;
   $('maxPower').textContent = Number(info.maxPower).toFixed(0);
   $('coolLeft').textContent = info.cooldownRemainingSec != null ? `${info.cooldownRemainingSec.toFixed(0)} s` : '-';
