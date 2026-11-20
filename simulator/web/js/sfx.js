@@ -4,7 +4,6 @@ import { VICTORY } from './hitfx.js';
 import { FIGHT_STARTS } from '../sound-lab/js/fightstart.js';
 import { buildImpact } from '../sound-lab/js/impacts.js';
 import { defeat as buildDefeat } from '../sound-lab/js/ambience.js';
-import { BreakRule, buildBreak, isBreakStuffTrack, liveBreakBus, liveGain } from '../sound-lab/js/breakstuff.js';
 
 // Punch sound families the game can switch between (header picker). 'current' = the synth below.
 export const IMPACT_CHOICES = [{ id: 'current', name: 'Punch: original' }, { id: 'cinema', name: 'Punch: Cinematic Boom' }, { id: 'anime', name: 'Punch: Anime Crack' }];
@@ -119,19 +118,6 @@ export class Sfx {
       if (!buf) { const r = await fetch(url); if (!r.ok) return; buf = await this.ctx.decodeAudioData(await r.arrayBuffer()); this.voiceCache.set(url, buf); }
       const src = this.ctx.createBufferSource(), g = this.ctx.createGain(); g.gain.value = gain; src.buffer = buf; src.connect(g).connect(this.master); src.start();
     } catch {}
-  }
-
-  /** While "Break Stuff" plays, punches now and then smash something sized to the punch (sound lab Break Stuff objects, Yarden 20.11). */
-  breakStuff(power, combo) {
-    if (!this.enabled || !this.ctx || !this.playlist?.playing || !isBreakStuffTrack(this.playlist.current)) return null;
-    // object size follows the punch: jabs rarely break something small (glass, cup, twig), hooks medium, heavies big
-    this.breakRule = this.breakRule || new BreakRule({ chance: { jab: 0.06, hook: 0.2, heavy: 0.5 } });
-    const b = this.breakRule.decide(power, { now: this.ctx.currentTime, combo });
-    if (!b) return null;
-    // loud bus straight to the output (skips the 0.7 master), so the smash cuts through the song (Yarden 20.11)
-    if (!this.breakBus) this.breakBus = liveBreakBus(this.ctx, this.ctx.destination);
-    buildBreak(b.kind, this.ctx, this.breakBus, this.ctx.currentTime + 0.03, b.alt, b.gain * liveGain(b.kind));
-    return b;
   }
 
   /** Game over without a single K.O.: three sinking notes and a tape-stop dive (sound lab Defeat stinger). */
