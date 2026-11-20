@@ -137,6 +137,15 @@ function idleTaunt(st, inactiveSec, limit) {
   lullTaunted = true; sfx.voice(IDLE_TAUNT); log('Taunt (no punches): "מתנשפים כבר? חמוד. ממש חמוד."', 'presence');
 }
 
+// A weak punch (jab tier) in a fight: the shadow scoffs, alternating lines, at most every taunt_weak_gap_sec (Yarden 20.11: weak2, weak4).
+const WEAK_TAUNTS = [['sound-lab/voice/hebrew/weak2.mp3', 'סליחה על השאלה: זה היה אגרוף, או ליטוף?'], ['sound-lab/voice/hebrew/weak4.mp3', 'מרגש. באמת. עוד מעט אולי ארגיש משהו.']];
+let weakIdx = 0, lastWeakTaunt = -Infinity;
+function weakTaunt(power) {
+  if (tierOf(power) !== 'jab' || performance.now() - lastWeakTaunt < cfg.taunt_weak_gap_sec * 1000) return;
+  lastWeakTaunt = performance.now(); const [url, text] = WEAK_TAUNTS[weakIdx++ % WEAK_TAUNTS.length];
+  sfx.voice(url); log(`Taunt (weak punch): "${text}"`, 'presence');
+}
+
 function onStateEnter(to) {
   if (to === S.Fight) {
     game.punches = 0; game.maxPower = 0; game.endReason = null;
@@ -259,6 +268,7 @@ function landPunch(power, info, state) {
   const sig = hitPicker.pick(power, { combo, rage: rig.rage, dir: info.dir, variety: cfg.hit_fx_variety >= 1, table: hitTable(rig.presetFor(tier)), hueShift: rig.P(tier).hue });
   scene.hit(power, info, sig); rig.punch(power, sig); sfx.punch(power, sig);
   if (!counted) { log(`PunchDetected power=${power.toFixed(0)} (not counted: ${state})`, 'ignored'); return; }
+  weakTaunt(power);
   game.punches = (game.punches || 0) + 1; game.maxPower = Math.max(game.maxPower || 0, power);
   game.combo = combo;
   game.lastHitAt = t;
