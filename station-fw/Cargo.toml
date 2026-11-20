@@ -1,0 +1,23 @@
+# Host workspace: the no_std crates that are unit-tested on the dev machine.
+# The ESP32 binary lives in `firmware/` as its own Cargo project (own
+# .cargo/config.toml, rust-toolchain.toml = "esp", build-std), because a
+# workspace-wide `[build] target = xtensa-...` would make `cargo test` here
+# cross-compile. `firmware/` depends on these crates by path.
+[workspace]
+resolver = "2"
+members = ["station-proto", "station-core"]
+exclude = ["firmware"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "MIT"
+
+[workspace.dependencies]
+serde = { version = "1", default-features = false, features = ["derive"] }
+postcard = { version = "1.1", default-features = false }
+heapless = { version = "0.8", features = ["serde"] }
+cobs = { version = "0.5", default-features = false }
+crc = "3"
+libm = "0.2"

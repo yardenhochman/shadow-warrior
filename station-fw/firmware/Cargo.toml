@@ -1,0 +1,30 @@
+[package]
+name = "station-fw"
+description = "Shadow Warrior sensor station firmware (ESP32-WROOM, ESP-IDF std)"
+version = "0.1.0"
+edition = "2021"
+resolver = "2"
+rust-version = "1.82"
+license = "MIT"
+
+[[bin]]
+name = "station-fw"
+harness = false # no test harness on target; host tests live in ../station-core and ../station-proto
+
+[profile.release]
+opt-level = "s"
+
+[profile.dev]
+debug = true    # symbols do not end up in flash
+opt-level = "z"
+
+[dependencies]
+log = "0.4"
+anyhow = "1"
+heapless = "0.8"
+esp-idf-svc = { version = "0.53", features = ["critical-section"] }
+station-proto = { path = "../station-proto" }
+station-core = { path = "../station-core" }
+
+[build-dependencies]
+embuild = "0.33.5"

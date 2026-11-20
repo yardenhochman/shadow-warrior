@@ -1,0 +1,3 @@
+[toolchain]
+# Xtensa (classic ESP32 / ESP32-S3) needs the Espressif fork installed by `espup install`.
+channel = "esp"

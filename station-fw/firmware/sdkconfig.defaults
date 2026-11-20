@@ -1,0 +1,21 @@
+# Rust needs more main-task stack than C (default 3K).
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
+CONFIG_FREERTOS_IDLE_TASK_STACKSIZE=4096
+CONFIG_PTHREAD_TASK_STACK_SIZE_DEFAULT=4096
+
+# Binary protocol frames share UART0 with the log. The console must not turn
+# 0x0A into 0x0D 0x0A, or frames containing 0x0A fail their CRC.
+# (IDF <= 5.x newlib name and the newer libc name; unknown keys are ignored.)
+CONFIG_NEWLIB_STDOUT_LINE_ENDING_LF=y
+CONFIG_LIBC_STDOUT_LINE_ENDING_LF=y
+
+# Console stays at 115200 so the ROM/bootloader output is readable; the app
+# may switch to STATION_BAUD at runtime (see README).
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=115200
+
+# 240 MHz, 4 MB flash on WROOM-32 modules.
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y

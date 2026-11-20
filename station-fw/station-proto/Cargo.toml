@@ -1,0 +1,18 @@
+[package]
+name = "station-proto"
+description = "Wire types and framing shared by the sensor station firmware and brain-rs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+postcard.workspace = true
+heapless.workspace = true
+cobs.workspace = true
+crc.workspace = true
+
+[features]
+default = []
+std = ["serde/std", "postcard/use-std"]

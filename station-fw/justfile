@@ -1,0 +1,50 @@
+# Sensor station firmware. `just` lists recipes.
+# Firmware recipes need the Xtensa toolchain env from `espup install` (~/export-esp.sh).
+
+port := env_var_or_default("STATION_PORT", "")
+# Console baud after boot (bootloader is always 115200). Baked in at build time.
+baud := env_var_or_default("STATION_BAUD", "115200")
+export STATION_BAUD := baud
+port_arg := if port == "" { "" } else { "--port " + port }
+esp_env := "source ~/export-esp.sh >/dev/null 2>&1;"
+
+default:
+    @just --list
+
+# Host unit tests: LD2410 parser, level math, framing; plus the python decoder cross-check
+test:
+    cargo test
+    cargo run -q -p station-proto --example sample_stream > target/sample_stream.bin
+    uv run tools/station_monitor.py --file target/sample_stream.bin --quiet-text
+
+# Clippy for host crates and firmware
+lint:
+    cargo clippy --all-targets -- -D warnings
+    cd firmware && {{esp_env}} cargo clippy --release -- -D warnings
+
+# Build the ESP32 firmware (release)
+build:
+    cd firmware && {{esp_env}} cargo build --release
+
+# Flash the firmware (does not open a monitor)
+flash: build
+    cd firmware && {{esp_env}} espflash flash {{port_arg}} target/xtensa-esp32-espidf/release/station-fw
+
+# Plain text monitor (frames show up as binary noise; prefer `just decode`)
+monitor:
+    espflash monitor {{port_arg}} --baud {{baud}}
+
+# Flash then monitor
+run: flash monitor
+
+# Decode frames + log text from the station (pass extra args, e.g. `just decode --json`)
+decode *args:
+    uv run tools/station_monitor.py {{port_arg}} --baud {{baud}} {{args}}
+
+# Install the Xtensa toolchain and flashing tools if missing
+setup:
+    command -v espup >/dev/null || cargo install espup --locked
+    command -v ldproxy >/dev/null || cargo install ldproxy --locked
+    # espflash >= 4.7 needs rustc >= 1.95; 4.5.0 builds on older stable
+    command -v espflash >/dev/null || cargo install espflash@4.5.0 --locked
+    test -f ~/export-esp.sh || espup install
