@@ -242,6 +242,7 @@ function landPunch(power, info, state) {
   const sig = hitPicker.pick(power, { combo, rage: rig.rage, dir: info.dir, variety: cfg.hit_fx_variety >= 1, table: hitTable(rig.presetFor(tier)), hueShift: rig.P(tier).hue });
   scene.hit(power, info, sig); rig.punch(power, sig); sfx.punch(power, sig);
   if (!counted) { log(`PunchDetected power=${power.toFixed(0)} (not counted: ${state})`, 'ignored'); return; }
+  const brk = sfx.breakStuff(power, combo); if (brk) log(`Break Stuff: ${brk.kind} (${brk.size}, ${brk.reason})`, 'state');
   game.punches = (game.punches || 0) + 1; game.maxPower = Math.max(game.maxPower || 0, power);
   game.combo = combo;
   game.lastHitAt = t;

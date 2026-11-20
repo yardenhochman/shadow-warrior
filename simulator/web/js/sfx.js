@@ -4,6 +4,7 @@ import { VICTORY } from './hitfx.js';
 import { FIGHT_STARTS } from '../sound-lab/js/fightstart.js';
 import { buildImpact } from '../sound-lab/js/impacts.js';
 import { defeat as buildDefeat } from '../sound-lab/js/ambience.js';
+import { BreakRule, buildBreak, isBreakStuffTrack, BREAK_BUS_GAIN } from '../sound-lab/js/breakstuff.js';
 
 // Punch sound families the game can switch between (header picker). 'current' = the synth below.
 export const IMPACT_CHOICES = [{ id: 'current', name: 'Punch: original' }, { id: 'cinema', name: 'Punch: Cinematic Boom' }, { id: 'anime', name: 'Punch: Anime Crack' }];
@@ -118,6 +119,17 @@ export class Sfx {
       if (!buf) { const r = await fetch(url); if (!r.ok) return; buf = await this.ctx.decodeAudioData(await r.arrayBuffer()); this.voiceCache.set(url, buf); }
       const src = this.ctx.createBufferSource(), g = this.ctx.createGain(); g.gain.value = gain; src.buffer = buf; src.connect(g).connect(this.master); src.start();
     } catch {}
+  }
+
+  /** While "Break Stuff" plays: hooks and heavies now and then smash something (sound lab medium/big objects, Yarden 20.11). */
+  breakStuff(power, combo) {
+    if (!this.enabled || !this.ctx || power < 45 || !this.playlist?.playing || !isBreakStuffTrack(this.playlist.current)) return null;
+    this.breakRule = this.breakRule || new BreakRule({ chance: { jab: 0, hook: 0.2, heavy: 0.5 } });
+    const b = this.breakRule.decide(power, { now: this.ctx.currentTime, combo });
+    if (!b) return null;
+    if (!this.breakBus) { this.breakBus = this.ctx.createGain(); this.breakBus.gain.value = BREAK_BUS_GAIN; this.breakBus.connect(this.master); }
+    buildBreak(b.kind, this.ctx, this.breakBus, this.ctx.currentTime + 0.03, b.alt, b.gain);
+    return b;
   }
 
   /** Game over without a single K.O.: three sinking notes and a tape-stop dive (sound lab Defeat stinger). */
