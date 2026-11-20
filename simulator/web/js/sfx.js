@@ -121,10 +121,11 @@ export class Sfx {
     } catch {}
   }
 
-  /** While "Break Stuff" plays: hooks and heavies now and then smash something (sound lab medium/big objects, Yarden 20.11). */
+  /** While "Break Stuff" plays, punches now and then smash something sized to the punch (sound lab Break Stuff objects, Yarden 20.11). */
   breakStuff(power, combo) {
-    if (!this.enabled || !this.ctx || power < 45 || !this.playlist?.playing || !isBreakStuffTrack(this.playlist.current)) return null;
-    this.breakRule = this.breakRule || new BreakRule({ chance: { jab: 0, hook: 0.2, heavy: 0.5 } });
+    if (!this.enabled || !this.ctx || !this.playlist?.playing || !isBreakStuffTrack(this.playlist.current)) return null;
+    // object size follows the punch: jabs rarely break something small (glass, cup, twig), hooks medium, heavies big
+    this.breakRule = this.breakRule || new BreakRule({ chance: { jab: 0.06, hook: 0.2, heavy: 0.5 } });
     const b = this.breakRule.decide(power, { now: this.ctx.currentTime, combo });
     if (!b) return null;
     if (!this.breakBus) { this.breakBus = this.ctx.createGain(); this.breakBus.gain.value = BREAK_BUS_GAIN; this.breakBus.connect(this.master); }
