@@ -102,6 +102,17 @@ export class Sfx {
     else buildArenaOpen(this.ctx, this.master, this.ctx.currentTime + 0.01, this.noise);
   }
 
+  /** Play a recorded voice line (mp3/wav URL) over everything, through the master bus. */
+  async voice(url, gain = 1) {
+    if (!this.enabled) return;
+    this.ensure(); this.voiceCache = this.voiceCache || new Map();
+    try {
+      let buf = this.voiceCache.get(url);
+      if (!buf) { const r = await fetch(url); if (!r.ok) return; buf = await this.ctx.decodeAudioData(await r.arrayBuffer()); this.voiceCache.set(url, buf); }
+      const src = this.ctx.createBufferSource(), g = this.ctx.createGain(); g.gain.value = gain; src.buffer = buf; src.connect(g).connect(this.master); src.start();
+    } catch {}
+  }
+
   /** Shadow defeated: the victory fanfare (~6 s), its climax on VICTORY.climax with the LED finale. */
   victory() {
     if (!this.enabled || !this.ctx) return;
