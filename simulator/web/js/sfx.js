@@ -1,8 +1,16 @@
 // Synthesised sound (no assets): punch thumps, shout chime, fight start, KO, victory and
 // fight music: the playlist (music.js) when loaded, else a synth drum loop.
 import { VICTORY } from './hitfx.js';
+import { FIGHT_STARTS } from '../sound-lab/js/fightstart.js';
+
+// Fight-start sounds the game can switch between (header picker). 'current' = buildArenaOpen below.
+export const OPEN_CHOICES = [
+  { id: 'current', name: 'Arena opening (original)' },
+  ...['bellcrowd', 'bell3', 'rustbell', 'pipe', 'alarm', 'blownbell', 'drum'].map((id) => FIGHT_STARTS.find((f) => f.id === id)).filter(Boolean)
+    .map((f) => ({ id: f.id, name: f.rough ? `${f.name} (rough)` : f.name, build: f.build })),
+];
 export class Sfx {
-  constructor() { this.ctx = null; this.enabled = true; this.music = null; this.noise = null; this.playlist = null; }
+  constructor() { this.ctx = null; this.enabled = true; this.music = null; this.noise = null; this.playlist = null; this.openId = 'bellcrowd'; }
 
   ensure() {
     if (!this.ctx) {
@@ -89,7 +97,9 @@ export class Sfx {
     const now = performance.now();
     if (this.lastOpen && now - this.lastOpen < 1500) return;
     this.lastOpen = now;
-    buildArenaOpen(this.ctx, this.master, this.ctx.currentTime + 0.01, this.noise);
+    const pick = OPEN_CHOICES.find((o) => o.id === this.openId);
+    if (pick && pick.build) pick.build(this.ctx, this.master, this.ctx.currentTime + 0.01);
+    else buildArenaOpen(this.ctx, this.master, this.ctx.currentTime + 0.01, this.noise);
   }
 
   /** Shadow defeated: the victory fanfare (~6 s), its climax on VICTORY.climax with the LED finale. */

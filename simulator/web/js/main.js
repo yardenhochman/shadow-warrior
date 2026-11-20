@@ -11,7 +11,7 @@ import { LedRig, COLUMNS } from './wled.js';
 import { Scene } from './scene.js';
 import { HitPicker, tierOf, VICTORY } from './hitfx.js';
 import { PRESETS, PRESET_IDS, STAGES, STAGE_BY_ID, FX_PARAMS, hitTable } from './presets.js';
-import { Sfx } from './sfx.js';
+import { OPEN_CHOICES, Sfx } from './sfx.js';
 import { Playlist } from './music.js';
 import { LiveLink, LIVE_REQUESTED, BRAIN_REQUESTED, unstripFrame } from './live.js';
 import { BrainClient } from './brain.js';
@@ -310,6 +310,11 @@ window.addEventListener('keyup', (e) => {
 });
 
 // ------------------------------------------------------------------ sound / lights
+const openSel = $('openSel');
+for (const o of OPEN_CHOICES) { const op = document.createElement('option'); op.value = o.id; op.textContent = o.name; openSel.append(op); }
+if (OPEN_CHOICES.some((o) => o.id === prefs.fightOpen)) sfx.openId = prefs.fightOpen;
+openSel.value = sfx.openId;
+openSel.onchange = () => { sfx.openId = openSel.value; prefs.fightOpen = sfx.openId; savePrefs(); sfx.ensure(); sfx.lastOpen = 0; sfx.arenaOpen(); };
 const soundBtn = $('soundBtn');
 const renderSound = () => { soundBtn.textContent = sfx.enabled ? 'Sound on' : 'Sound off'; };
 soundBtn.onclick = () => { sfx.enabled = !sfx.enabled; prefs.sound = sfx.enabled; savePrefs(); renderSound(); if (!sfx.enabled) sfx.stopMusic(); else { sfx.ensure(); if (sm.currentState === S.Fight) sfx.startMusic(); } };

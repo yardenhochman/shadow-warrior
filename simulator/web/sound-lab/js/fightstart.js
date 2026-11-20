@@ -2,7 +2,7 @@
 // Same contract as buildArenaOpen() in ../js/sfx.js: build(c, dest, t0) on any (Offline)AudioContext,
 // returns the end time; each runs through its own compressor + limiter so the peak stays under 0 dBFS
 // over the music. `hit` = seconds from t0 to the moment the LEDs should go full (for the visuals).
-import { rng, env, noise, noiseHit, tone, partials, reverb } from './dsp.js';
+import { rng, env, noise, noiseHit, tone, partials, reverb, drive } from './dsp.js';
 
 function chain(c, dest) {
   const comp = c.createDynamicsCompressor(); comp.threshold.value = -16; comp.knee.value = 8; comp.ratio.value = 5; comp.attack.value = 0.003; comp.release.value = 0.3;
@@ -67,6 +67,33 @@ function bell(c, dest, t, { f = 1020, size = 1, dec = 2.2, r = Math.random } = {
 function bellOut(c, dest, wet = 0.3, sec = 2.4) {
   const o = chain(c, dest), rv = reverb(c, { sec, decay: 1.6, bright: 0.6, pre: 0.02, seed: 40 }), w = c.createGain(); w.gain.value = wet;
   const inp = c.createGain(); inp.connect(o.bus); inp.connect(rv).connect(w).connect(o.bus); return { o, inp };
+}
+
+// ---- rough family (Yarden, 20.11: the clean bells sound too tonal; wants rough) ----------------
+/** inp -> highpass -> tanh drive -> optional bit-crush -> lowpass -> dest: a cheap, overdriven PA. */
+function dirt(c, dest, { amount = 5, hp = 120, lp = 4200, crush = 0, gain = 0.7 } = {}) {
+  const inp = c.createGain(), h = c.createBiquadFilter(), l = c.createBiquadFilter(), g = c.createGain();
+  h.type = 'highpass'; h.frequency.value = hp; l.type = 'lowpass'; l.frequency.value = lp; g.gain.value = gain;
+  let x = inp.connect(h).connect(drive(c, amount));
+  if (crush) { const w = c.createWaveShaper(), n = 2048, cv = new Float32Array(n); for (let i = 0; i < n; i++) { const v = (i / (n - 1)) * 2 - 1; cv[i] = Math.round(v * crush) / crush; } w.curve = cv; x = x.connect(w); }
+  x.connect(l).connect(g).connect(dest); return inp;
+}
+/** Struck junk metal: inharmonic, beating partials, a hard clank and a rattle; no clear pitch. */
+function junk(c, dest, t, { f = 380, ratios = [1, 1.37, 2.76, 3.9, 5.4, 8.93], size = 1, dec = 0.9, r = Math.random } = {}) {
+  noiseHit(c, dest, t, { type: 'bandpass', f: 1800 + r() * 900, q: 1.2, peak: 0.6 * size, dec: 0.025, r });
+  noiseHit(c, dest, t, { type: 'highpass', f: 4000, peak: 0.3 * size, dec: 0.012, r });
+  ratios.forEach((k, i) => { const ff = f * k * (1 + (r() - 0.5) * 0.04); [0, 7 + r() * 9].forEach((dt) => tone(c, dest, t, { type: i < 2 ? 'triangle' : 'sine', f: ff, detune: dt, peak: 0.16 * size / (1 + i * 0.5), dec: dec / (1 + i * 0.3), a: 0.0006 })); });
+  for (let i = 0; i < 6; i++) noiseHit(c, dest, t + 0.03 + r() * 0.25, { type: 'bandpass', f: 2500 + r() * 3000, q: 3, peak: 0.06 * size, dec: 0.01, r }); // loose bits rattling
+}
+function roughRoom(c, dest, wet = 0.3, sec = 1.4) {
+  const o = chain(c, dest), rv = reverb(c, { sec, decay: 2.2, bright: 0.35, pre: 0.012, seed: 51 }), w = c.createGain(); w.gain.value = wet;
+  const inp = c.createGain(); inp.connect(o.bus); inp.connect(rv).connect(w).connect(o.bus); return { o, inp };
+}
+/** Chanting crowd: a rough "HEY!" bark from many throats (formant-filtered noise + buzzy saws). */
+function hey(c, dest, t, peak = 0.3, r = Math.random) {
+  const g = c.createGain(); env(g.gain, t, 0.03, peak, 0.35); const v = c.createGain(); v.connect(g).connect(dest);
+  [[600, 1], [1700, 0.6], [2600, 0.3]].forEach(([fc, k]) => { const bp = c.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 4; bp.frequency.value = fc; const kg = c.createGain(); kg.gain.value = k * 2; noise(c, t, 0.5, 'pink', r).connect(bp).connect(kg).connect(v); });
+  for (let i = 0; i < 8; i++) { const x = c.createOscillator(), xg = c.createGain(); x.type = 'sawtooth'; x.frequency.setValueAtTime(140 + r() * 120, t); x.frequency.exponentialRampToValueAtTime(100 + r() * 60, t + 0.4); xg.gain.value = 0.02; const bp = c.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 700; bp.Q.value = 1.5; x.connect(bp).connect(xg).connect(v); x.start(t); x.stop(t + 0.45); }
 }
 
 export const FIGHT_STARTS = [
@@ -142,4 +169,32 @@ export const FIGHT_STARTS = [
     leds: 'Three pulses with the dings, then a fast random sparkle across all columns for the crowd (like camera flashes).',
     build(c, dest, t0) { const r = rng(44), { o, inp } = bellOut(c, dest, 0.22, 1.8);
       [0, 0.27, 0.55].forEach((d, i) => bell(c, inp, t0 + d, { size: 0.9, dec: i === 2 ? 2.2 : 1.1, r })); crowd(c, o, t0 + 0.1, 3.4, 0.3, r); drums(c, o, t0 + 0.55, [[0, 0.8]], r); return t0 + 3.8; } },
+  { id: 'rustbell', name: 'Rusty bell: ding-ding-ding', dur: 3.0, hit: 0.0, rough: true,
+    desc: 'The ring bell, but a dented, rusty one: no clean note, beating out-of-tune partials, a loose clapper rattle, through an overdriven PA in a concrete room.',
+    leds: 'Three ragged pulses (a little flicker on each), dirty orange-white instead of gold.',
+    build(c, dest, t0) { const r = rng(61), { inp } = roughRoom(c, dest, 0.3, 1.3), d = dirt(c, inp, { amount: 6, hp: 250, lp: 5000 });
+      [0, 0.24, 0.5].forEach((dd, i) => junk(c, d, t0 + dd + r() * 0.03, { f: 690, ratios: [1, 1.19, 2.31, 2.9, 4.2, 5.95], size: i === 2 ? 1 : 0.8, dec: i === 2 ? 1.8 : 0.8, r })); return t0 + 3.0; } },
+  { id: 'pipe', name: 'Steel pipe x3 + roar', dur: 3.8, hit: 0.0, rough: true,
+    desc: 'Someone beats a scaffolding pipe with a hammer three times, hard; a low sub kick under each, then the crowd erupts, all slightly distorted.',
+    leds: 'Three hard white hits, columns shaking (random brightness jitter), then crowd sparkle.',
+    build(c, dest, t0) { const r = rng(62), { o, inp } = roughRoom(c, dest, 0.25, 1.6), d = dirt(c, inp, { amount: 7, hp: 90, lp: 6000 });
+      [0, 0.3, 0.62].forEach((dd, i) => { junk(c, d, t0 + dd, { f: 330, ratios: [1, 2.76, 5.4, 8.93, 13.3], size: 0.9 + 0.15 * i, dec: 0.7 + 0.5 * (i === 2), r }); tone(c, o.bus, t0 + dd, { f: 110, f2: 40, glide: 0.15, peak: 0.6, dec: 0.3 }); });
+      crowd(c, o, t0 + 0.7, 3.0, 0.32, r); return t0 + 3.8; } },
+  { id: 'alarm', name: 'Fire-alarm bell', dur: 3.2, hit: 0.0, rough: true,
+    desc: 'An electric school/fire-alarm bell: the hammer rattles the gong 22 times a second for a second and a half, grating and urgent, then cuts with a thump and the crowd.',
+    leds: 'Fast red-white strobe on all columns while it rings; hard cut to fight colours.',
+    build(c, dest, t0) { const r = rng(63), { o, inp } = roughRoom(c, dest, 0.2, 1.0), d = dirt(c, inp, { amount: 4, hp: 300, lp: 7000 });
+      const n = 33; for (let i = 0; i < n; i++) junk(c, d, t0 + i / 22 + (r() - 0.5) * 0.004, { f: 1180, ratios: [1, 2.42, 3.1, 4.9], size: 0.55, dec: 0.18, r });
+      const end = t0 + n / 22; tone(c, o.bus, end, { f: 90, f2: 35, glide: 0.2, peak: 0.8, dec: 0.4 }); crowd(c, o, end, 1.6, 0.26, r); return t0 + 3.2; } },
+  { id: 'blownbell', name: 'Bell + roar, blown speaker', dur: 3.8, hit: 0.0, rough: true,
+    desc: 'Bell + crowd roar (J) as if played through a cheap megaphone that is way past its limit: crushed, crackling, mid-range only.',
+    leds: 'Like J, but the pulses clip: flat full-brightness tops with crackle.',
+    build(c, dest, t0) { const r = rng(64), o = chain(c, dest), d = dirt(c, o.both, { amount: 12, hp: 400, lp: 3200, crush: 6, gain: 0.5 });
+      [0, 0.27, 0.55].forEach((dd, i) => bell(c, d, t0 + dd, { size: 1.2, dec: i === 2 ? 2.0 : 1.0, r })); crowd(c, { both: d, bus: d }, t0 + 0.1, 3.4, 0.35, r); drums(c, o, t0 + 0.55, [[0, 0.9]], r); return t0 + 3.8; } },
+  { id: 'drum', name: 'Oil drum + "HEY!"', dur: 3.4, hit: 0.0, rough: true,
+    desc: 'Three slams on an empty oil barrel, a crowd barking "HEY!" on each, and a final roar. Raw, tribal, no bell at all.',
+    leds: 'Each slam punches all columns from the base up; the HEYs are short red flashes.',
+    build(c, dest, t0) { const r = rng(65), { o, inp } = roughRoom(c, dest, 0.35, 1.8), d = dirt(c, inp, { amount: 5, hp: 60, lp: 3500 });
+      [0, 0.42, 0.84].forEach((dd, i) => { const t = t0 + dd; tone(c, d, t, { f: 85, f2: 52, glide: 0.2, peak: 0.9, dec: 0.5 }); junk(c, d, t, { f: 140, ratios: [1, 1.6, 2.3, 3.4, 4.7], size: 0.9, dec: 0.6, r }); hey(c, o.both, t + 0.06, 0.28 + 0.06 * i, r); });
+      crowd(c, o, t0 + 1.1, 2.2, 0.3, r); return t0 + 3.4; } },
 ];
