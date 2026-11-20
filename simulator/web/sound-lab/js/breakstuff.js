@@ -97,7 +97,7 @@ export function buildBreak(kind, c, dest, t, alt = 0, gain = 1) {
   const b = BREAKS.find((x) => x.id === kind), g = c.createGain(); g.gain.value = gain * SIZE_GAIN[b.size]; g.connect(dest);
   b.build(c, g, t, rng(1000 + alt * 97 + kind.length));
 }
-// Live game (Yarden 20.11: "can barely hear the breaks"): the song is mastered at ~-6 LUFS, the raw objects sat
+// Live game (Yarden 20.11: "can barely hear the breaks"; this level was then confirmed right, keep it for any new smash sounds): the song is mastered at ~-6 LUFS, the raw objects sat
 // 25-35 dB under it. LIVE_GAIN lifts each object to a size-scaled loudness (big > medium > small, measured offline),
 // and liveBreakBus() squeezes the transients (fast compressor + soft clip) so they land over the music without clipping.
 export const LIVE_GAIN = { glass: 3.6, cup: 13.7, twig: 26, plate: 15.8, wood: 14.6, bottle: 21.4, window: 13.7, tv: 12.5, table: 10.8, windshield: 13.8 }; // dB
