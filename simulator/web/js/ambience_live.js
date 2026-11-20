@@ -30,7 +30,7 @@ export class LiveAmbience {
     // heartbeat bus: warm saturation + lowpass, so the thump carries on small speakers too (Yarden 20.11: louder, more pronounced)
     const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 600;
     const sat = c.createWaveShaper(), n = 1024, cv = new Float32Array(n); for (let i = 0; i < n; i++) { const x = (i / (n - 1)) * 2 - 1; cv[i] = Math.tanh(2.5 * x) / Math.tanh(2.5); } sat.curve = cv;
-    const out = c.createGain(); out.gain.value = 0.8; // full meter peaks ~0.9, no clipping
+    const out = c.createGain(); out.gain.value = 0.45; // balanced 20.11 (0.8 was too strong): full meter peaks ~0.5
     this.beatBus = c.createGain(); this.beatBus.connect(sat).connect(lp).connect(out).connect(c.destination);
     this.loading = true;
     renderWindLoop(c.sampleRate).then((buf) => {
@@ -52,7 +52,7 @@ export class LiveAmbience {
     const e = Math.max(0, Math.min(1, energyPct || 0));
     if (this.nextBeat < t) this.nextBeat = t + 0.05;
     if (this.nextBeat - t > 0.12) return; // schedule just ahead, so speed/volume follow the meter
-    const bpm = 58 + 92 * e, gap = 60 / bpm, level = 0.18 + 0.82 * e ** 1.3;
+    const bpm = 58 + 92 * e, gap = 60 / bpm, level = 0.14 + 0.86 * e ** 1.3;
     this.beat(this.nextBeat, level, gap);
     this.nextBeat += gap;
   }
