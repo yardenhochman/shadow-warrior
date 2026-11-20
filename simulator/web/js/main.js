@@ -94,7 +94,7 @@ bus.subscribe((e) => {
       log(`${e.from} -> ${e.to}`, 'state');
       onStateEnter(e.to, e.from);
       break;
-    case 'PresenceDetected': log(`PresenceDetected { detected: ${e.detected} }`, 'presence'); onPresence(e.detected); break;
+    case 'PresenceDetected': log(`PresenceDetected { detected: ${e.detected} }`, 'presence'); break;
     case 'ShoutDetected': {
       game.shouts++; game.lastShout = e;
       const st = sm.currentState;
@@ -118,17 +118,6 @@ bus.subscribe((e) => {
     default: break;
   }
 });
-
-// Someone arrives (presence detected outside a fight): the shadow greets them once per arrival.
-// Line picked by Yarden 20.11 (sound lab zero3); swap for a friend's recording when it comes in.
-const GREETING = 'sound-lab/voice/hebrew/zero3.mp3', GREET_GAP_MS = 30000;
-let lastGreet = -Infinity, wasPresent = false;
-function onPresence(detected) {
-  const arrived = detected && !wasPresent; wasPresent = detected;
-  const st = BRAIN ? brain.info().currentState : sm.currentState;
-  if (!arrived || st === S.Fight || st === S.Cooldown || performance.now() - lastGreet < GREET_GAP_MS) return;
-  lastGreet = performance.now(); sfx.voice(GREETING); log('Greeting: "סליחה... אַתְּ, אַתָּה, אַתֶּם... אפס."', 'presence');
-}
 
 function onStateEnter(to) {
   if (to === S.Fight) {
@@ -573,7 +562,7 @@ if (BRAIN) {
 function onBrainEvent(type, d) {
   switch (type) {
     case 'StateChanged': log(`${d.from} -> ${d.to}`, 'state'); onStateEnter(d.to, d.from); break;
-    case 'PresenceDetected': log(`PresenceDetected { detected: ${d.detected} }`, 'presence'); onPresence(d.detected); break;
+    case 'PresenceDetected': log(`PresenceDetected { detected: ${d.detected} }`, 'presence'); break;
     case 'ShoutDetected': {
       const st = brain.info().currentState, mult = brain.tunables?.shout_energy_multiplier ?? 10;
       log(`ShoutDetected intensity=${(d.intensity ?? 0).toFixed(2)}${st === S.Warming ? ` (+${(d.intensity * mult).toFixed(1)} energy)` : st === S.Fight ? ' (FIGHT, visual only)' : ` (ignored: ${st})`}`, st === S.Warming ? 'shout' : 'ignored');
