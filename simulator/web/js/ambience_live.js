@@ -27,7 +27,11 @@ export class LiveAmbience {
     const c = this.sfx.ctx;
     if (this.beatBus || !c) return;
     this.windGain = c.createGain(); this.windGain.gain.value = 0.0001; this.windGain.connect(this.sfx.master);
-    this.beatBus = c.createBiquadFilter(); this.beatBus.type = 'lowpass'; this.beatBus.frequency.value = 170; this.beatBus.connect(this.sfx.master);
+    // heartbeat bus: warm saturation + lowpass, so the thump carries on small speakers too (Yarden 20.11: louder, more pronounced)
+    const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 600;
+    const sat = c.createWaveShaper(), n = 1024, cv = new Float32Array(n); for (let i = 0; i < n; i++) { const x = (i / (n - 1)) * 2 - 1; cv[i] = Math.tanh(2.5 * x) / Math.tanh(2.5); } sat.curve = cv;
+    const out = c.createGain(); out.gain.value = 0.8; // full meter peaks ~0.9, no clipping
+    this.beatBus = c.createGain(); this.beatBus.connect(sat).connect(lp).connect(out).connect(c.destination);
     this.loading = true;
     renderWindLoop(c.sampleRate).then((buf) => {
       const src = c.createBufferSource(); src.buffer = buf; src.loop = true; src.connect(this.windGain); src.start(); this.wind = src;
@@ -48,19 +52,27 @@ export class LiveAmbience {
     const e = Math.max(0, Math.min(1, energyPct || 0));
     if (this.nextBeat < t) this.nextBeat = t + 0.05;
     if (this.nextBeat - t > 0.12) return; // schedule just ahead, so speed/volume follow the meter
-    const bpm = 58 + 92 * e, gap = 60 / bpm, level = 0.06 + 0.9 * e ** 1.6;
+    const bpm = 58 + 92 * e, gap = 60 / bpm, level = 0.18 + 0.82 * e ** 1.3;
     this.beat(this.nextBeat, level, gap);
     this.nextBeat += gap;
   }
 
   beat(t, level, gap) {
     const c = this.sfx.ctx;
-    const thump = (at, f, f2, pk) => {
+    const thump = (at, f, f2, pk, dec) => {
       const o = c.createOscillator(), g = c.createGain();
-      o.frequency.setValueAtTime(f, at); o.frequency.exponentialRampToValueAtTime(f2, at + 0.08);
-      g.gain.setValueAtTime(0.0001, at); g.gain.exponentialRampToValueAtTime(pk, at + 0.004); g.gain.exponentialRampToValueAtTime(0.0001, at + 0.12);
-      o.connect(g).connect(this.beatBus); o.start(at); o.stop(at + 0.15);
+      o.frequency.setValueAtTime(f, at); o.frequency.exponentialRampToValueAtTime(f2, at + 0.09);
+      g.gain.setValueAtTime(0.0001, at); g.gain.exponentialRampToValueAtTime(pk, at + 0.004); g.gain.exponentialRampToValueAtTime(0.0001, at + dec);
+      o.connect(g).connect(this.beatBus); o.start(at); o.stop(at + dec + 0.03);
     };
-    thump(t, 62, 40, 0.7 * level); thump(t + gap * 0.32, 54, 36, 0.5 * level); // lub-dub
+    const knock = (at, pk) => { // the "skin" of the beat: a short muffled knock you hear even where the sub is lost
+      const len = Math.ceil(0.05 * c.sampleRate), b = c.createBuffer(1, len, c.sampleRate), d = b.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / len) ** 3;
+      const src = c.createBufferSource(), bp = c.createBiquadFilter(), g = c.createGain(); src.buffer = b; bp.type = 'bandpass'; bp.frequency.value = 220; bp.Q.value = 1.2; g.gain.value = pk;
+      src.connect(bp).connect(g).connect(this.beatBus); src.start(at);
+    };
+    const dub = t + gap * 0.3;
+    thump(t, 75, 42, 1.1 * level, 0.16); thump(t, 130, 70, 0.45 * level, 0.07); knock(t, 1.4 * level);       // lub
+    thump(dub, 64, 38, 0.8 * level, 0.14); thump(dub, 115, 62, 0.3 * level, 0.06); knock(dub, 1.0 * level); // dub
   }
 }

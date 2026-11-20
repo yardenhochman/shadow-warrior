@@ -12,7 +12,7 @@ export const IMPACT_CHOICES = [{ id: 'current', name: 'Punch: original' }, { id:
 export const OPEN_CHOICES = [
   { id: 'current', name: 'Arena opening (original)' },
   ...['blast', 'bellcrowd', 'bell3', 'rustbell', 'pipe', 'alarm', 'blownbell', 'drum'].map((id) => FIGHT_STARTS.find((f) => f.id === id)).filter(Boolean)
-    .map((f) => ({ id: f.id, name: f.rough ? `${f.name} (rough)` : f.name, build: f.build })),
+    .map((f) => ({ id: f.id, name: f.rough ? `${f.name} (rough)` : f.name, build: f.build, loud: f.loud })),
 ];
 export class Sfx {
   constructor() { this.ctx = null; this.enabled = true; this.music = null; this.noise = null; this.playlist = null; this.openId = 'blast'; this.impactId = 'current'; this.impactSeed = 1; }
@@ -104,7 +104,8 @@ export class Sfx {
     if (this.lastOpen && now - this.lastOpen < 1500) return;
     this.lastOpen = now;
     const pick = OPEN_CHOICES.find((o) => o.id === this.openId);
-    if (pick && pick.build) pick.build(this.ctx, this.master, this.ctx.currentTime + 0.01);
+    // 'loud' starts skip the master volume (0.7) so the blast lands at full scale over the music
+    if (pick && pick.build) pick.build(this.ctx, pick.loud ? this.ctx.destination : this.master, this.ctx.currentTime + 0.01);
     else buildArenaOpen(this.ctx, this.master, this.ctx.currentTime + 0.01, this.noise);
   }
 

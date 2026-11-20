@@ -103,9 +103,10 @@ const blastHits = new Map();
 const blastHit = (sr) => { if (!blastHits.has(sr)) blastHits.set(sr, renderOffline(2.4, (cc, d, t) => buildImpact('cinema', cc, d, t, 100, 5), sr)); return blastHits.get(sr); };
 async function blast(c, dest, t0) {
   const hit = await blastHit(c.sampleRate), t = Math.max(t0, c.currentTime + 0.01), r = rng(71);
-  const lim = c.createDynamicsCompressor(); lim.threshold.value = -4; lim.knee.value = 0; lim.ratio.value = 20; lim.attack.value = 0.001; lim.release.value = 0.15;
-  const out = c.createGain(); out.gain.value = 1.0; const bus = c.createGain(); bus.gain.value = 1.0;
-  bus.connect(drive(c, 2.2)).connect(lim).connect(out).connect(dest);
+  // louder (Yarden 20.11): more drive and a harder limiter, so it is dense as well as peaking high
+  const lim = c.createDynamicsCompressor(); lim.threshold.value = -2; lim.knee.value = 0; lim.ratio.value = 20; lim.attack.value = 0.0005; lim.release.value = 0.2;
+  const out = c.createGain(); out.gain.value = 1.0; const bus = c.createGain(); bus.gain.value = 1.8;
+  bus.connect(drive(c, 3.5)).connect(lim).connect(out).connect(dest);
   const hs = c.createBufferSource(), hg = c.createGain(); hs.buffer = hit; hs.playbackRate.value = 0.5;
   hg.gain.setValueAtTime(1.6, t); hg.gain.setValueAtTime(1.6, t + 0.9); hg.gain.exponentialRampToValueAtTime(0.0001, t + 2.4); // trim the long tail
   hs.connect(hg).connect(bus); hs.start(t); hs.stop(t + 2.5);
@@ -220,5 +221,5 @@ export const FIGHT_STARTS = [
   { id: 'blast', name: 'Explosion (bullet-time hit)', dur: 2.6, hit: 0.0, rough: true,
     desc: 'Just the bullet-time heavy impact, loud: no backwards swell, no tail. The full shout meter detonates: a half-speed Cinematic Boom heavy, a sub drop, a blast of pressure and falling debris.',
     leds: 'Everything at full white on the blast, then a fast fade into fight colours with flickering embers for the debris.',
-    build: (c, dest, t0) => blast(c, dest, t0) },
+    loud: true, build: (c, dest, t0) => blast(c, dest, t0) },
 ];
