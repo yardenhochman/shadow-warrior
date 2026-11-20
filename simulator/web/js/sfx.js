@@ -11,11 +11,11 @@ export const IMPACT_CHOICES = [{ id: 'current', name: 'Punch: original' }, { id:
 // Fight-start sounds the game can switch between (header picker). 'current' = buildArenaOpen below.
 export const OPEN_CHOICES = [
   { id: 'current', name: 'Arena opening (original)' },
-  ...['bellcrowd', 'bell3', 'rustbell', 'pipe', 'alarm', 'blownbell', 'drum'].map((id) => FIGHT_STARTS.find((f) => f.id === id)).filter(Boolean)
+  ...['blast', 'bellcrowd', 'bell3', 'rustbell', 'pipe', 'alarm', 'blownbell', 'drum'].map((id) => FIGHT_STARTS.find((f) => f.id === id)).filter(Boolean)
     .map((f) => ({ id: f.id, name: f.rough ? `${f.name} (rough)` : f.name, build: f.build })),
 ];
 export class Sfx {
-  constructor() { this.ctx = null; this.enabled = true; this.music = null; this.noise = null; this.playlist = null; this.openId = 'bellcrowd'; this.impactId = 'current'; this.impactSeed = 1; }
+  constructor() { this.ctx = null; this.enabled = true; this.music = null; this.noise = null; this.playlist = null; this.openId = 'blast'; this.impactId = 'current'; this.impactSeed = 1; }
 
   ensure() {
     if (!this.ctx) {

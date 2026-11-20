@@ -2,7 +2,8 @@
 // Same contract as buildArenaOpen() in ../js/sfx.js: build(c, dest, t0) on any (Offline)AudioContext,
 // returns the end time; each runs through its own compressor + limiter so the peak stays under 0 dBFS
 // over the music. `hit` = seconds from t0 to the moment the LEDs should go full (for the visuals).
-import { rng, env, noise, noiseHit, tone, partials, reverb, drive } from './dsp.js';
+import { rng, env, noise, noiseHit, tone, partials, reverb, drive, renderOffline } from './dsp.js';
+import { buildImpact } from './impacts.js';
 
 function chain(c, dest) {
   const comp = c.createDynamicsCompressor(); comp.threshold.value = -16; comp.knee.value = 8; comp.ratio.value = 5; comp.attack.value = 0.003; comp.release.value = 0.3;
@@ -94,6 +95,25 @@ function hey(c, dest, t, peak = 0.3, r = Math.random) {
   const g = c.createGain(); env(g.gain, t, 0.03, peak, 0.35); const v = c.createGain(); v.connect(g).connect(dest);
   [[600, 1], [1700, 0.6], [2600, 0.3]].forEach(([fc, k]) => { const bp = c.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 4; bp.frequency.value = fc; const kg = c.createGain(); kg.gain.value = k * 2; noise(c, t, 0.5, 'pink', r).connect(bp).connect(kg).connect(v); });
   for (let i = 0; i < 8; i++) { const x = c.createOscillator(), xg = c.createGain(); x.type = 'sawtooth'; x.frequency.setValueAtTime(140 + r() * 120, t); x.frequency.exponentialRampToValueAtTime(100 + r() * 60, t + 0.4); xg.gain.value = 0.02; const bp = c.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 700; bp.Q.value = 1.5; x.connect(bp).connect(xg).connect(v); x.start(t); x.stop(t + 0.45); }
+}
+
+// Explosion: the bullet-time heavy without its run-up (Yarden 20.11): the Cinematic Boom heavy at
+// half speed, trimmed to the blast, pushed loud, with a sub and a burst of debris on top.
+const blastHits = new Map();
+const blastHit = (sr) => { if (!blastHits.has(sr)) blastHits.set(sr, renderOffline(2.4, (cc, d, t) => buildImpact('cinema', cc, d, t, 100, 5), sr)); return blastHits.get(sr); };
+async function blast(c, dest, t0) {
+  const hit = await blastHit(c.sampleRate), t = Math.max(t0, c.currentTime + 0.01), r = rng(71);
+  const lim = c.createDynamicsCompressor(); lim.threshold.value = -4; lim.knee.value = 0; lim.ratio.value = 20; lim.attack.value = 0.001; lim.release.value = 0.15;
+  const out = c.createGain(); out.gain.value = 1.0; const bus = c.createGain(); bus.gain.value = 1.0;
+  bus.connect(drive(c, 2.2)).connect(lim).connect(out).connect(dest);
+  const hs = c.createBufferSource(), hg = c.createGain(); hs.buffer = hit; hs.playbackRate.value = 0.5;
+  hg.gain.setValueAtTime(1.6, t); hg.gain.setValueAtTime(1.6, t + 0.9); hg.gain.exponentialRampToValueAtTime(0.0001, t + 2.4); // trim the long tail
+  hs.connect(hg).connect(bus); hs.start(t); hs.stop(t + 2.5);
+  tone(c, bus, t, { f: 70, f2: 24, glide: 0.9, peak: 0.95, dec: 1.5 });                        // sub drop
+  noiseHit(c, bus, t, { type: 'lowpass', f: 3200, peak: 0.9, dec: 0.32, color: 'pink', r });     // the blast itself
+  noiseHit(c, bus, t, { type: 'lowpass', f: 400, peak: 0.7, dec: 0.9, color: 'brown', r });       // pressure wave
+  for (let i = 0; i < 14; i++) noiseHit(c, bus, t + 0.25 + r() * 1.2, { type: 'bandpass', f: 1500 + r() * 3500, q: 2, peak: 0.12 * r(), dec: 0.02, r }); // debris
+  return t0 + 2.6;
 }
 
 export const FIGHT_STARTS = [
@@ -197,4 +217,8 @@ export const FIGHT_STARTS = [
     build(c, dest, t0) { const r = rng(65), { o, inp } = roughRoom(c, dest, 0.35, 1.8), d = dirt(c, inp, { amount: 5, hp: 60, lp: 3500 });
       [0, 0.42, 0.84].forEach((dd, i) => { const t = t0 + dd; tone(c, d, t, { f: 85, f2: 52, glide: 0.2, peak: 0.9, dec: 0.5 }); junk(c, d, t, { f: 140, ratios: [1, 1.6, 2.3, 3.4, 4.7], size: 0.9, dec: 0.6, r }); hey(c, o.both, t + 0.06, 0.28 + 0.06 * i, r); });
       crowd(c, o, t0 + 1.1, 2.2, 0.3, r); return t0 + 3.4; } },
+  { id: 'blast', name: 'Explosion (bullet-time hit)', dur: 2.6, hit: 0.0, rough: true,
+    desc: 'Just the bullet-time heavy impact, loud: no backwards swell, no tail. The full shout meter detonates: a half-speed Cinematic Boom heavy, a sub drop, a blast of pressure and falling debris.',
+    leds: 'Everything at full white on the blast, then a fast fade into fight colours with flickering embers for the debris.',
+    build: (c, dest, t0) => blast(c, dest, t0) },
 ];

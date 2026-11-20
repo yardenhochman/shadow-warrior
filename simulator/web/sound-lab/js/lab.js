@@ -112,7 +112,7 @@ function fightStartSection() {
     leds: 'As now: the LED burst at 0.35 s.',
     build: async (c, d, t) => { const m = await import('../../js/sfx.js'); m.buildArenaOpen(c, d, t); } };
   const items = [cur, ...FIGHT_STARTS];
-  return section('fight-start', 'Fight start', 'The moment WARMING turns into FIGHT. Pick by letter. A is the current sound; B onward are new, all WebAudio so they drop into sfx.js in place of buildArenaOpen(). Ring bells are G to J; K to O are the rough family (dented bell, steel pipe, fire-alarm bell, blown speaker, oil drum).',
+  return section('fight-start', 'Fight start', 'The moment WARMING turns into FIGHT. Pick by letter. A is the current sound; B onward are new, all WebAudio so they drop into sfx.js in place of buildArenaOpen(). Ring bells are G to J; K to O are the rough family (dented bell, steel pipe, fire-alarm bell, blown speaker, oil drum); P is the explosion (the bullet-time heavy's impact alone, loud).',
     h('div', { class: 'grid' }, items.map((f, i) => card({ letter: LETTERS[i], name: f.name, desc: f.desc, leds: f.leds, section: 'Fight start', get: synth(f.dur + 0.3, (c, d, t) => f.build(c, d, t)) }))));
 }
 
