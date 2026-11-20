@@ -128,11 +128,7 @@ export class Scene {
     // heavy
     this.slow = Math.max(this.slow, 0.1); // hit-stop: the arena freezes for a beat
     const big = (1 + 0.35 * e) * sc;
-    if (sig.label) { // the signature's name: full = beside the bag; minimal = on the floor under the bag, clear of the columns
-      const g = this.bagGeom(), col = `rgb(${hsv(sig.hue, 0.55, 1).map((v) => v * 255 | 0)})`;
-      if (this.full) this.floater(`${sig.label}!`, this.cx + info.dir * (g.rw * 2.2 + 70 * sc), (g.top + g.bot) / 2, col, true, 0.8 + 0.3 * e);
-      else this.floater(`${sig.label}!`, this.cx, Math.min(this.H - 40, g.bot + 46 * sc + 18), col, true, 0.7 + 0.25 * e);
-    }
+    // No name call-out (THUNDER, SUPERNOVA...): the bag can't tell punch types apart, so the arena shows no label for it (Yarden, 20.11).
     switch (look) {
       case 'thunder': {
         for (const [k, at] of [[0, 0], [1, 0.08], [2, 0.19], [3, 0.31], [4, 0.46]].slice(0, 3 + Math.round(2 * e))) {
