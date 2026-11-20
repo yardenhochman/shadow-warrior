@@ -18,7 +18,9 @@ h2 { font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: v
 .states span.on { color: #fff; border-color: transparent; box-shadow: 0 0 12px var(--c); background: var(--c); }
 .states span[role=button] { cursor: pointer; user-select: none; }
 .states span[role=button]:hover:not(.on) { color: var(--text); border-color: var(--dim); }
-.topbtns { display: flex; gap: 6px; }
+.topbtns { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; margin-left: auto; }
+.topbtns .btn { white-space: nowrap; }
+.topbtns select.btn { max-width: 165px; text-overflow: ellipsis; }
 
 .layout { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 14px; padding: 14px; max-width: 1600px; margin: 0 auto; }
 .stage { display: flex; flex-direction: column; gap: 12px; min-width: 0; }

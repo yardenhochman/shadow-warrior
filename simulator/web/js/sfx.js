@@ -2,6 +2,10 @@
 // fight music: the playlist (music.js) when loaded, else a synth drum loop.
 import { VICTORY } from './hitfx.js';
 import { FIGHT_STARTS } from '../sound-lab/js/fightstart.js';
+import { buildImpact } from '../sound-lab/js/impacts.js';
+
+// Punch sound families the game can switch between (header picker). 'current' = the synth below.
+export const IMPACT_CHOICES = [{ id: 'current', name: 'Punch: original' }, { id: 'cinema', name: 'Punch: Cinematic Boom' }, { id: 'anime', name: 'Punch: Anime Crack' }];
 
 // Fight-start sounds the game can switch between (header picker). 'current' = buildArenaOpen below.
 export const OPEN_CHOICES = [
@@ -10,7 +14,7 @@ export const OPEN_CHOICES = [
     .map((f) => ({ id: f.id, name: f.rough ? `${f.name} (rough)` : f.name, build: f.build })),
 ];
 export class Sfx {
-  constructor() { this.ctx = null; this.enabled = true; this.music = null; this.noise = null; this.playlist = null; this.openId = 'bellcrowd'; }
+  constructor() { this.ctx = null; this.enabled = true; this.music = null; this.noise = null; this.playlist = null; this.openId = 'bellcrowd'; this.impactId = 'current'; this.impactSeed = 1; }
 
   ensure() {
     if (!this.ctx) {
@@ -33,6 +37,7 @@ export class Sfx {
     const c = this.ctx, t = c.currentTime, p = power / 100;
     const look = sig?.look || sig?.kind;
     const nova = look === 'nova', t1 = nova ? t + 0.2 + 0.06 * (sig.esc || 0) : t; // nova: the hit lands after the blackout beat
+    if (this.impactId !== 'current') { buildImpact(this.impactId, c, this.master, t1, Math.max(1, Math.min(100, power)), this.impactSeed++); return; }
     const o = c.createOscillator(), g = c.createGain();
     o.frequency.setValueAtTime(140 + 60 * p, t1); o.frequency.exponentialRampToValueAtTime(40, t1 + 0.18);
     this.env(g, t1, 0.004, 0.5 + 0.5 * p, 0.2 + 0.15 * p);
