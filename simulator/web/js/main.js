@@ -11,6 +11,7 @@ import { LedRig, COLUMNS } from './wled.js';
 import { Scene } from './scene.js';
 import { HitPicker, tierOf, VICTORY } from './hitfx.js';
 import { PRESETS, PRESET_IDS, STAGES, STAGE_BY_ID, FX_PARAMS, hitTable } from './presets.js';
+import { LiveAmbience } from './ambience_live.js';
 import { IMPACT_CHOICES, OPEN_CHOICES, Sfx } from './sfx.js';
 import { Playlist } from './music.js';
 import { LiveLink, LIVE_REQUESTED, BRAIN_REQUESTED, unstripFrame } from './live.js';
@@ -39,6 +40,7 @@ const arena = new ArenaManager(cfg, sm, bus, now, fixes);
 const presence = new PresenceService(cfg, bus, now);
 const detector = new ShoutDetector();
 const sfx = new Sfx(); sfx.enabled = prefs.sound;
+const ambience = new LiveAmbience(sfx);
 const playlist = new Playlist(sfx); sfx.playlist = playlist;
 const nowPlaying = document.getElementById('nowPlaying');
 playlist.onchange = () => {
@@ -825,6 +827,7 @@ function frame(tms) {
       fightRemaining: info.fightRemainingSec, cooldownProgress, cooldownLeft: info.cooldownRemainingSec, summary: game.summary, respawning: game.respawnAt != null,
       inactiveFor: info.timeSinceLastActivitySec ?? 0, inactivityTimeout: BRAIN ? brain.tunables?.fight_inactivity_timeout_sec ?? 30 : cfg.fight_inactivity_timeout_sec,
     }, dt);
+    ambience.update(st, info.energyPercentage);
     drawStrips();
     if (!BRAIN) live?.frame(rig, tms);
     if (tms - lastPanel > 66) { lastPanel = tms; updatePanels(info); }
