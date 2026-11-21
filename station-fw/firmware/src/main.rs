@@ -4,7 +4,8 @@
 //! `station-proto` frames (`0x00 <COBS> 0x00`). No Wi-Fi yet.
 //!
 //! Threads:
-//! - audio: reads I2S DMA buffers, emits an `AudioLevel` every 100 ms.
+//! - audio: reads I2S DMA buffers, emits an `AudioLevel` every 100 ms and a
+//!   `Direction` (GCC-PHAT) for every 1024-sample frame above the level gate.
 //! - radar: identifies the LD2410 (enable config, read version, end config),
 //!   then parses its reports and emits a `RadarEvent` per report. A missing
 //!   radar is logged and retried; it never stops the station.
@@ -29,8 +30,9 @@ use esp_idf_svc::sys;
 use log::{info, warn};
 
 use station_core::ld2410::{self, Frame, FwVersion, Parser};
+use station_core::doa::{DoaConfig, DoaEstimator, FRAME_LEN as DOA_FRAME};
 use station_core::level::LevelMeter;
-use station_proto::{encode_frame, Envelope, Hello, Msg, MAX_FRAME, PROTO_VERSION};
+use station_proto::{encode_frame, Direction, Envelope, Hello, Msg, MAX_FRAME, PROTO_VERSION};
 
 const SAMPLE_RATE: u32 = 48_000;
 /// 100 ms windows.
@@ -43,6 +45,28 @@ const RADAR_SILENT_WARN: Duration = Duration::from_secs(2);
 const RADAR_WARN_EVERY: Duration = Duration::from_secs(5);
 const RADAR_IDENTIFY_RETRY: Duration = Duration::from_secs(10);
 const RADAR_ACK_TIMEOUT: Duration = Duration::from_millis(300);
+
+const DOA_LOG_EVERY: Duration = Duration::from_millis(100);
+
+/// Build-time f32 setting, e.g. `STATION_DOA_BIAS=0.8 just flash`.
+fn env_f32(v: Option<&'static str>, default: f32) -> f32 {
+    v.and_then(|s| s.trim().parse().ok()).unwrap_or(default)
+}
+
+/// Direction-finding settings, overridable at build time:
+/// `STATION_MIC_MM` (mic spacing, default 130), `STATION_DOA_BIAS` (broadside lag
+/// bias in samples, default 0), `STATION_DOA_GATE_DBFS` (level gate, default -50;
+/// -200 analyses every frame, for measuring CPU cost).
+fn doa_config() -> DoaConfig {
+    let d = DoaConfig::default();
+    DoaConfig {
+        sample_rate_hz: SAMPLE_RATE as f32,
+        mic_distance_m: env_f32(option_env!("STATION_MIC_MM"), d.mic_distance_m * 1000.0) / 1000.0,
+        lag_bias_samples: env_f32(option_env!("STATION_DOA_BIAS"), d.lag_bias_samples),
+        gate_dbfs: env_f32(option_env!("STATION_DOA_GATE_DBFS"), d.gate_dbfs),
+        ..d
+    }
+}
 
 /// Console baud after boot. Set at build time: `STATION_BAUD=921600 just build`.
 fn console_baud() -> u32 {
@@ -86,6 +110,19 @@ struct Shared {
     radar_frames: AtomicU32,
     audio_reads: AtomicU32,
     audio_errors: AtomicU32,
+    /// Stereo frames read from I2S; the stats line turns it into a rate per window.
+    audio_frames: AtomicU32,
+    /// DOA frames analysed (above the gate) / all frames, since the last stats line.
+    doa_dirs: AtomicU32,
+    doa_frames: AtomicU32,
+    /// Time spent in reads that ran GCC-PHAT, since the last stats line (us).
+    doa_us_sum: AtomicU32,
+    doa_us_max: AtomicU32,
+}
+
+fn now_us() -> i64 {
+    // SAFETY: esp_timer_get_time has no preconditions.
+    unsafe { sys::esp_timer_get_time() }
 }
 
 fn station_id() -> u32 {
@@ -132,6 +169,11 @@ fn main() -> anyhow::Result<()> {
         radar_frames: AtomicU32::new(0),
         audio_reads: AtomicU32::new(0),
         audio_errors: AtomicU32::new(0),
+        audio_frames: AtomicU32::new(0),
+        doa_dirs: AtomicU32::new(0),
+        doa_frames: AtomicU32::new(0),
+        doa_us_sum: AtomicU32::new(0),
+        doa_us_max: AtomicU32::new(0),
     });
     send(&tx, hello(&shared, id));
 
@@ -174,28 +216,56 @@ fn main() -> anyhow::Result<()> {
     }
 
     // --- main: hello + diagnostics ---
+    let mut last = now_us();
     loop {
         thread::sleep(HELLO_EVERY);
         send(&tx, hello(&shared, id));
         let sent = tx.lock().unwrap_or_else(|p| p.into_inner()).sent;
+        let t = now_us();
+        let window_us = (t - last).max(1) as f32;
+        last = t;
+        let frames = shared.audio_frames.swap(0, Ordering::Relaxed);
+        let dirs = shared.doa_dirs.swap(0, Ordering::Relaxed);
+        let doa_frames = shared.doa_frames.swap(0, Ordering::Relaxed);
+        let us_sum = shared.doa_us_sum.swap(0, Ordering::Relaxed);
+        let us_max = shared.doa_us_max.swap(0, Ordering::Relaxed);
         info!(
-            "stats: frames_sent={sent} radar_frames={} i2s_reads={} i2s_errors={} heap_free={}",
+            "stats: frames_sent={sent} radar_frames={} i2s_reads={} i2s_errors={} i2s_rate={:.0}/s \
+             doa {dirs}/{doa_frames} frames, {}us avg {us_max}us max, cpu {:.1}% heap_free={} heap_min={}",
             shared.radar_frames.load(Ordering::Relaxed),
             shared.audio_reads.load(Ordering::Relaxed),
             shared.audio_errors.load(Ordering::Relaxed),
+            frames as f32 * 1e6 / window_us,
+            us_sum.checked_div(dirs).unwrap_or(0),
+            us_sum as f32 * 100.0 / window_us,
             unsafe { sys::esp_get_free_heap_size() },
+            unsafe { sys::esp_get_minimum_free_heap_size() },
         );
     }
 }
 
 fn audio_task(mut i2s: I2sDriver<'static, I2sRx>, tx: Tx, shared: Arc<Shared>) {
     let mut meter = LevelMeter::new(LEVEL_WINDOW);
+    let cfg = doa_config();
+    let mut doa = DoaEstimator::new(cfg);
+    info!(
+        "doa: GCC-PHAT {DOA_FRAME} samples/frame, d={:.0} mm, max lag {:.2} samples, search +-{}, bias {:.2}, gate {:.0} dBFS, band {:.0}-{:.0} Hz",
+        cfg.mic_distance_m * 1000.0,
+        cfg.max_lag_samples(),
+        doa.search_range(),
+        cfg.lag_bias_samples,
+        cfg.gate_dbfs,
+        cfg.band_lo_hz,
+        cfg.band_hi_hz,
+    );
+    let mut last_doa_log = Instant::now() - DOA_LOG_EVERY;
     let mut buf = vec![0u8; I2S_READ_FRAMES * 2 * 4];
     let timeout = TickType::new_millis(1000).ticks();
     loop {
         match i2s.read(&mut buf, timeout) {
             Ok(n) => {
                 shared.audio_reads.fetch_add(1, Ordering::Relaxed);
+                shared.audio_frames.fetch_add((n / 8) as u32, Ordering::Relaxed);
                 meter.push_bytes(&buf[..n], |lvl| {
                     info!(
                         "audio: L {:7.1} dBFS  R {:7.1} dBFS  peak {:7.1} dBFS",
@@ -203,6 +273,35 @@ fn audio_task(mut i2s: I2sDriver<'static, I2sRx>, tx: Tx, shared: Arc<Shared>) {
                     );
                     send(&tx, Msg::Audio(lvl));
                 });
+                // A 480-frame read completes at most one 1024-sample frame; keep room for 2.
+                // Results are collected first so the timing covers the analysis only,
+                // not the (blocking) UART write.
+                let mut dirs: heapless::Vec<Direction, 2> = heapless::Vec::new();
+                let t0 = now_us();
+                doa.push_bytes(&buf[..n], |o| {
+                    shared.doa_frames.fetch_add(1, Ordering::Relaxed);
+                    if let Some(d) = o.direction {
+                        let _ = dirs.push(d);
+                    }
+                });
+                if !dirs.is_empty() {
+                    let dt = (now_us() - t0).clamp(0, u32::MAX as i64) as u32;
+                    shared.doa_us_sum.fetch_add(dt, Ordering::Relaxed);
+                    // Not fetch_max: atomicrmw umax makes the Xtensa backend (esp rustc 1.90.0.0)
+                    // fail with "Undefined temporary symbol". fetch_update is a plain CAS loop.
+                    let _ = shared.doa_us_max.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |m| (dt > m).then_some(dt));
+                }
+                for d in dirs {
+                    shared.doa_dirs.fetch_add(1, Ordering::Relaxed);
+                    send(&tx, Msg::Direction(d));
+                    if last_doa_log.elapsed() >= DOA_LOG_EVERY {
+                        last_doa_log = Instant::now();
+                        info!(
+                            "doa: {:+6.1} deg  lag {:+6.2}  conf {:6.1}  rms {:6.1} dBFS  frame {}",
+                            d.angle_deg, d.lag_samples, d.confidence, d.rms_dbfs, d.frame
+                        );
+                    }
+                }
             }
             Err(e) => {
                 let n = shared.audio_errors.fetch_add(1, Ordering::Relaxed);

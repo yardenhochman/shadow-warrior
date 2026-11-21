@@ -87,12 +87,41 @@ impl AudioLevel {
     pub const FLOOR_DBFS: f32 = -144.0;
 }
 
+/// Direction of arrival from GCC-PHAT on one audio frame (1024 samples, about 21 ms
+/// at 48 kHz). Sent only for frames whose level passes the station's gate, so silence
+/// and the room noise floor produce no messages. One message per frame, no smoothing.
+///
+/// Sign convention: `lag_samples` is the arrival time at the L mic minus the arrival
+/// time at the R mic, in samples, after the station's fixed calibration bias was
+/// subtracted. Positive lag means the sound reached R first, so the source is on the
+/// R mic side and `angle_deg` is positive. 0 deg is broadside (perpendicular to the
+/// mic axis). Two mics cannot tell front from back: the angle is a half-plane value.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Direction {
+    /// Index of the audio frame since boot (frame length is fixed by the firmware,
+    /// 1024 samples in stage 1); gaps mean gated or dropped frames.
+    pub frame: u32,
+    /// Sub-sample lag (parabolic peak interpolation), bias-corrected.
+    pub lag_samples: f32,
+    /// `asin(lag * c / (fs * d))`, clamped to -90..=90.
+    pub angle_deg: f32,
+    /// Correlation peak divided by the median |correlation| over all lags. Around
+    /// 3-5 for uncorrelated noise; a clear single source gives much more.
+    pub confidence: f32,
+    /// Frame RMS over both channels after DC removal, dBFS (24-bit full scale).
+    pub rms_dbfs: f32,
+}
+
 /// Everything a station can send. Append new variants at the end only.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Msg {
     Hello(Hello),
     Radar(RadarEvent),
     Audio(AudioLevel),
+    /// Added after proto v1 without a version bump: appending a variant does not
+    /// change the encoding of the others. A v1 reader that predates it rejects
+    /// these frames as undecodable and keeps going.
+    Direction(Direction),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -119,9 +148,7 @@ pub enum FrameError {
 /// Encode `env` as a delimited frame into `out`; returns the bytes written.
 pub fn encode_frame(env: &Envelope, out: &mut [u8]) -> Result<usize, FrameError> {
     let mut raw = [0u8; MAX_PAYLOAD + CRC_LEN];
-    let n = postcard::to_slice(env, &mut raw[..MAX_PAYLOAD])
-        .map_err(|_| FrameError::TooLarge)?
-        .len();
+    let n = postcard::to_slice(env, &mut raw[..MAX_PAYLOAD]).map_err(|_| FrameError::TooLarge)?.len();
     let crc = CRC32.checksum(&raw[..n]);
     raw[n..n + CRC_LEN].copy_from_slice(&crc.to_le_bytes());
     let raw = &raw[..n + CRC_LEN];
@@ -140,9 +167,7 @@ pub fn decode_frame(cobs_bytes: &[u8]) -> Result<Envelope, FrameError> {
     if cobs_bytes.len() > cobs_max(raw.len()) {
         return Err(FrameError::TooLarge);
     }
-    let n = cobs::decode(cobs_bytes, &mut raw)
-        .map_err(|_| FrameError::Cobs)?
-        .frame_size();
+    let n = cobs::decode(cobs_bytes, &mut raw).map_err(|_| FrameError::Cobs)?.frame_size();
     if n < CRC_LEN + 1 {
         return Err(FrameError::Short);
     }
@@ -169,7 +194,10 @@ pub enum Chunk<'a> {
     Frame(Envelope),
     /// Non-frame bytes (log text, or a damaged frame). `overflow` is set when
     /// the chunk was longer than the buffer and only its start is kept.
-    Other { bytes: &'a [u8], overflow: bool },
+    Other {
+        bytes: &'a [u8],
+        overflow: bool,
+    },
 }
 
 impl<const N: usize> Default for StreamSplitter<N> {
@@ -226,7 +254,7 @@ mod tests {
         }
     }
 
-    fn all() -> [Envelope; 3] {
+    fn all() -> [Envelope; 4] {
         [
             hello(),
             Envelope {
@@ -247,6 +275,16 @@ mod tests {
                     rms_dbfs_r: AudioLevel::FLOOR_DBFS,
                     peak_dbfs: -0.0,
                     frames: 4800,
+                }),
+            },
+            Envelope {
+                seq: 1,
+                msg: Msg::Direction(Direction {
+                    frame: 123_456,
+                    lag_samples: -7.25,
+                    angle_deg: -23.5,
+                    confidence: 42.0,
+                    rms_dbfs: -31.5,
                 }),
             },
         ]
@@ -295,6 +333,27 @@ mod tests {
     }
 
     #[test]
+    fn known_direction_layout() {
+        let env = Envelope {
+            seq: 2,
+            msg: Msg::Direction(Direction {
+                frame: 300,
+                lag_samples: 1.5,
+                angle_deg: -90.0,
+                confidence: 0.0,
+                rms_dbfs: -50.0,
+            }),
+        };
+        let mut buf = [0u8; 32];
+        let b = postcard::to_slice(&env, &mut buf).unwrap();
+        let mut want = std::vec![0x02, 0x03, 0xAC, 0x02];
+        for f in [1.5f32, -90.0, 0.0, -50.0] {
+            want.extend_from_slice(&f.to_le_bytes());
+        }
+        assert_eq!(b, want.as_slice());
+    }
+
+    #[test]
     fn splitter_separates_text_and_frames() {
         let mut stream = std::vec::Vec::new();
         stream.extend_from_slice(b"I (123) boot: hello\n");
@@ -318,8 +377,8 @@ mod tests {
             }
         }
         assert_eq!(frames, all().to_vec());
-        // boot line, 3 log lines (the last one runs into the 0x55 garbage), [13 37]
-        assert_eq!(texts, 1 + 3 + 1);
+        // boot line, 4 log lines (the last one runs into the 0x55 garbage), [13 37]
+        assert_eq!(texts, 1 + 4 + 1);
     }
 
     #[test]

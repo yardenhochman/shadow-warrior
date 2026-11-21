@@ -8,17 +8,18 @@ Stage 1 is a bring-up binary with no Wi-Fi. It writes, on the USB serial port (U
 
 - human-readable log lines: L/R RMS dBFS and peak every 100 ms, one line per radar
   report (about 10 Hz), stats every 5 s;
-- `station-proto` binary frames for the same data (`Hello`, `RadarEvent`, `AudioLevel`),
-  which `tools/station_monitor.py` decodes.
+- `station-proto` binary frames for the same data (`Hello`, `RadarEvent`, `AudioLevel`,
+  and `Direction` from GCC-PHAT, see below), which `tools/station_monitor.py` decodes.
 
 ## Layout
 
 | Path | What | Builds for |
 |---|---|---|
 | `station-proto/` | `no_std` wire types + framing (postcard, CRC-32, COBS). Will be shared with brain-rs. | host + ESP |
-| `station-core/` | `no_std` pure logic: LD2410 frame parser and command builders, RMS/peak level meter. | host + ESP |
+| `station-core/` | `no_std` + `alloc` pure logic: LD2410 frame parser and command builders, RMS/peak level meter, f32 FFT and GCC-PHAT direction finding. | host + ESP |
 | `firmware/` | ESP32 binary `station-fw` (own Cargo project: `esp` toolchain, `build-std`, ESP-IDF v5.5.3). | ESP only |
 | `tools/station_monitor.py` | Serial reader / frame decoder (uv script, PEP 723). | host |
+| `tools/doa_view.py` | Direction view: one line per sound event, angle histogram, PNG plot, broadside calibration. | host |
 
 The top-level `Cargo.toml` is a host workspace with the two `no_std` crates, so
 `cargo test` runs on the Mac. `firmware/` is excluded from it because its
@@ -39,8 +40,8 @@ The top-level `Cargo.toml` is a host workspace with the two `no_std` crates, so
 | Radar OUT | 27 | LD2410 `OUT` (optional) | presence pin, read as input with pull-down, shown in logs |
 | Radar VCC / GND | 5V (VIN) / GND | LD2410 | 5 V supply, 3.3 V UART logic (HLK manual); peak draw is about 100 mA+ |
 
-No MCLK: the ICS-43434 does not use one. Mic spacing for later direction
-finding (GCC-PHAT): 8-10 cm.
+No MCLK: the ICS-43434 does not use one. Mic spacing on the bench station: **13 cm**
+between the sound ports (the direction finder default; see `STATION_MIC_MM`).
 
 ## ICS-43434 notes
 
@@ -83,12 +84,136 @@ finding (GCC-PHAT): 8-10 cm.
 A frame is `0x00 | COBS( postcard(Envelope{seq: u16, msg: Msg}) ++ crc32_le ) | 0x00`.
 CRC-32 is ISO-HDLC (`zlib.crc32`). `Msg` is `Hello | Radar | Audio`. Variant and field order
 are part of the format: only append. `PROTO_VERSION` (now 1) goes in `Hello`, which is sent at
-boot, every 5 s and when the radar firmware is identified.
+boot, every 5 s and when the radar firmware is identified. `Msg::Direction` (variant 3) was
+appended without a version bump: the other variants encode exactly as before, and an older
+reader just fails to decode the new frames and skips them.
 
 On UART0 the frames share the line with log text. A reader splits on `0x00`, keeps every chunk
 that decodes and passes the CRC, and treats the rest as text (`StreamSplitter` in Rust,
 `station_monitor.py` in Python). `sdkconfig.defaults` sets LF stdout line endings so the
 console does not turn `0x0A` into `0x0D 0x0A` inside frames.
+
+## Direction finding (GCC-PHAT)
+
+The audio thread cuts the stereo stream into non-overlapping frames of 1024 samples
+(21.3 ms, 46.9 frames/s) and, for each frame (`station-core/src/doa.rs`):
+
+1. removes each channel's DC offset and computes the frame RMS over both channels;
+2. **level gate**: below `STATION_DOA_GATE_DBFS` (default **-50 dBFS**, the idle floor is about
+   -68) nothing else happens and nothing is sent. Silence and room noise give no direction;
+3. GCC-PHAT: zero-pad to 2048, one complex FFT of `L + jR`, cross spectrum with PHAT weighting
+   in the 150 Hz - 10 kHz band, inverse FFT;
+4. peak search in +-20 samples only (max physical lag = d fs / c = 0.13 * 48000 / 343 = 18.2
+   samples, plus the bias, plus 1), refined with a parabola through the peak and its neighbours;
+5. sends one `Direction` frame: `frame` index, `lag_samples` (bias-corrected), `angle_deg =
+   asin(lag c / (fs d))` clamped to +-90, `confidence` = peak / median |correlation|,
+   `rms_dbfs`. Every gated frame is sent raw, with no smoothing; the text log shows at most
+   10 `doa:` lines per second.
+
+**Sign convention.** 0 deg is broadside (straight out, perpendicular to the line between the
+mics). **Positive angle = toward the R mic (SEL = 3V3)**, negative = toward the L mic (SEL =
+GND). Positive lag means the sound reached R first.
+
+**Front/back ambiguity.** Two mics only measure the arrival time difference, so a source at
++30 deg in front and its mirror image behind the board (150 deg) give the same reading. The
+output is a half-plane angle. A third mic or the radar would resolve it.
+
+**Resolution.** One sample is 3.1 deg near broadside. Near the axis (+-60..90 deg) `asin` gets
+steep, so small lag errors become large angle errors, and +-90 is reached at 18.2 samples.
+Sub-sample interpolation in the host tests is better than 0.03 samples on clean broadband noise.
+
+**Confidence.** Two uncorrelated noise channels score a median of 4 and at most 8.5 (200 host-test
+frames). A single broadband source is above 100 without noise, and well above 10 at 0 dB SNR.
+`station_core::doa::MIN_CONFIDENCE = 10` is the suggested consumer threshold. The station
+does not filter on it.
+
+**Spatial aliasing.** Above c / 2d = 1.3 kHz the phase difference wraps. Broadband sounds
+(claps, clicks, shouts) still give one clear peak. A pure tone or whistle can give a wrong
+lag with a high confidence.
+
+**Build-time settings** (baked in, like `STATION_BAUD`; cargo rebuilds when they change):
+
+| Env | Default | Meaning |
+|---|---|---|
+| `STATION_MIC_MM` | 130 | mic port spacing, mm |
+| `STATION_DOA_BIAS` | 0 | raw lag at broadside, samples; subtracted from every frame (see calibration below) |
+| `STATION_DOA_GATE_DBFS` | -50 | level gate; `-200` analyses every frame (for CPU measurement) |
+
+The boot log prints the active values (`doa: GCC-PHAT 1024 samples/frame, d=130 mm, ...`). The
+5 s stats line adds `i2s_rate` (stereo frames read per second, expect 48000: lower means
+dropped DMA buffers), `doa A/B frames` (analysed / total), the average and maximum time of an
+I2S read that ran GCC-PHAT, and `cpu %` (GCC-PHAT time / wall time, one core).
+
+### Measured on the ESP32-WROOM (240 MHz, 2026-11-21)
+
+| What | Result |
+|---|---|
+| `GccPhat::estimate` alone (on-device micro-benchmark) | 4.7 ms per frame (two 2048-point FFTs at 2.37 ms each are most of it, median 0.5 ms) |
+| Worst case, every frame analysed (`STATION_DOA_GATE_DBFS=-200`) | 5.5 ms avg / 6.1 ms max per I2S read with a frame, **26 % of one core**, 47 `Direction` frames/s |
+| I2S at the same time | `i2s_rate` 48000/s, `i2s_errors=0`, no `seq` gaps over 30 s (radar running too) |
+| Default gate -50 dBFS, quiet room | 0 frames analysed (CPU 0 %), apart from frame 1 at boot (mic power-up transient) |
+| Heap | about 50 KB for GCC-PHAT, 159 KB free afterwards, steady |
+
+**Idle correlation at lag 0.** With the gate off, room-noise frames (-77..-46 dBFS) have a
+median confidence of 9.5, and 45 % score >= 10, all at lag 0 (max 505). Something common to
+both channels (supply or ground noise, or clock crosstalk) is correlated with no delay. The
+gate hides it at idle, but a quiet sound just above the gate can be pulled toward 0 deg. This
+is tracked in bd.
+
+### Bench test: angle accuracy
+
+You need a protractor (or a printed angle sheet), something that makes sharp broadband sounds
+(hand claps, two pieces of wood, a clicker, or a phone playing a click track), and a quiet
+room. Keep the station at least 1 m from walls if possible, because reflections pull the peak.
+
+1. Put the board flat with both mics at the same height. Mark the midpoint between the two mic
+   ports, and draw the mic axis (L to R) and the broadside line (perpendicular, 0 deg)
+   through it. Mark -90 (L side, along the axis), -45, 0, +45 and +90 (R side) on a 1.5 m
+   radius. Use the same side of the board (the "front") for every position.
+2. Start a recording (this resets the board; wait for the `doa:` boot line):
+   ```sh
+   just doa --save cal0.bin            # = uv run tools/doa_view.py --save cal0.bin
+   ```
+3. **Broadside calibration first.** Stand at 0 deg, 1-2 m away, at about mic height. Clap 10
+   times, about 1 s apart. Ctrl-C. The summary prints the median lag. Then:
+   ```sh
+   uv run tools/doa_view.py --file cal0.bin --calibrate
+   STATION_DOA_BIAS=<printed value> STATION_PORT=/dev/cu.usbserial-0001 just flash
+   ```
+   Skip the reflash if the bias is within +-0.3 samples (about 1 deg). A larger bias comes from
+   the mics not being exactly where you measured, unequal port tubes, or the mics' own
+   group delay.
+4. **Angle sweep.** `just doa --save sweep.bin`. Clap 10 times at each of -90, -45, 0, +45,
+   +90 deg, in that order, with a pause of a few seconds between positions. Each clap prints
+   one line (`t=  12.34s  L [----#----|---------] R  -44.8 deg ...`). Ctrl-C prints the
+   histogram. Then make the plot:
+   ```sh
+   uv run tools/doa_view.py --file sweep.bin --png sweep.png
+   ```
+5. What to look for:
+   - each position gives a tight cluster (spread < 5 deg) at 0 and +-45. At +-90 expect
+     readings of 75-90, because the endfire region is compressed;
+   - the sign is right: R side positive. If it is reversed, the mics or SEL pins are swapped;
+   - confidence is well above 10 for claps, and frames between claps produce no lines (gate);
+   - optional: repeat one position behind the board to see the front/back mirror, and at 3 m
+     to see how far the gate reaches (raise or lower `STATION_DOA_GATE_DBFS`).
+6. Put `sweep.bin`, `sweep.png` and the histogram output on bead `shadow-warrior-66b`.
+
+`just decode --only direction --json` shows the raw per-frame values, and
+`just decode --only direction --csv doa.csv --quiet-text` writes them to a CSV.
+
+### Xtensa compiler workarounds
+
+The esp toolchain (rustc 1.90.0.0) LLVM backend crashed on three constructs in this code. The
+workarounds are commented in place:
+
+- loops with a constant trip count of 1024 over zipped slices (`Cannot select: i32 =
+  Constant<-8192>` / `<-4096>`, in `doa::load_input` and `doa::median_abs_corr`): use loop
+  bounds taken from runtime slice lengths;
+- `AtomicU32::fetch_max` (`Undefined temporary symbol`, firmware stats): use `fetch_update`
+  instead.
+
+If a build fails with one of these messages after a change, look for the same patterns.
 
 ## Toolchain setup (macOS, once)
 
@@ -107,7 +232,7 @@ incremental.
 ## Build, flash, monitor
 
 ```sh
-just test                        # host unit tests + python decoder cross-check
+just test                        # host unit tests + python decoder cross-check (exact JSON diff)
 just build                       # cargo build --release for xtensa-esp32-espidf
 just flash                       # espflash flash (auto-detects the port)
 STATION_PORT=/dev/cu.usbserial-0001 just flash
@@ -115,6 +240,7 @@ just monitor                     # espflash monitor (text; frames appear as nois
 just decode                      # decoded frames + log text
 just decode --json --only audio  # JSON lines
 just decode --csv levels.csv --quiet-text
+just doa                         # direction per sound event (tools/doa_view.py)
 STATION_BAUD=921600 just flash decode   # faster console after boot (bootloader stays 115200)
 ```
 
@@ -149,3 +275,8 @@ and boot have been checked on a bare ESP32-WROOM dev board with nothing attached
 missing radar logs a timeout and the station keeps running, and floating I2S input produces
 levels without crashing. **Mic levels and LD2410 parsing on real sensors have NOT been
 verified**: they are covered only by host unit tests.
+
+Direction finding (bead `shadow-warrior-66b`): runs on the WROOM with both mics connected, with
+no I2S drops and acceptable CPU (table above). **Angle accuracy has NOT been checked with real
+sound sources yet**: GCC-PHAT correctness is covered by host tests with synthetic delays only.
+Run the bench test above.

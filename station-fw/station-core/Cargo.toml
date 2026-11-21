@@ -1,6 +1,6 @@
 [package]
 name = "station-core"
-description = "Pure, host-testable sensor station logic: LD2410 radar parser, audio level math"
+description = "Pure, host-testable sensor station logic: LD2410 radar parser, audio level math, GCC-PHAT direction"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -11,11 +11,12 @@ esp_env := "source ~/export-esp.sh >/dev/null 2>&1;"
 default:
     @just --list
 
-# Host unit tests: LD2410 parser, level math, framing; plus the python decoder cross-check
+# Host unit tests: LD2410 parser, level math, GCC-PHAT, framing; plus the python decoder cross-check
 test:
     cargo test
     cargo run -q -p station-proto --example sample_stream > target/sample_stream.bin
-    uv run tools/station_monitor.py --file target/sample_stream.bin --quiet-text
+    uv run tools/station_monitor.py --file target/sample_stream.bin --quiet-text --json --check > target/sample_stream.json
+    diff -u tools/testdata/sample_stream.json target/sample_stream.json
 
 # Clippy for host crates and firmware
 lint:
@@ -40,6 +41,10 @@ run: flash monitor
 # Decode frames + log text from the station (pass extra args, e.g. `just decode --json`)
 decode *args:
     uv run tools/station_monitor.py {{port_arg}} --baud {{baud}} {{args}}
+
+# Live direction view / recording / histogram (see `uv run tools/doa_view.py --help`)
+doa *args:
+    uv run tools/doa_view.py {{port_arg}} --baud {{baud}} {{args}}
 
 # Install the Xtensa toolchain and flashing tools if missing
 setup:

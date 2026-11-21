@@ -1,5 +1,6 @@
 //! Writes a sample stream (log text interleaved with one frame of each type) to stdout,
-//! for checking `tools/station_monitor.py` against the Rust encoder:
+//! for checking `tools/station_monitor.py` against the Rust encoder (`just test` diffs its
+//! JSON output against `tools/testdata/sample_stream.json`):
 //! `cargo run -q -p station-proto --example sample_stream > s.bin && uv run tools/station_monitor.py --file s.bin`
 use std::io::Write;
 
@@ -22,6 +23,13 @@ fn main() {
             state: 3,
         }),
         Msg::Audio(AudioLevel { rms_dbfs_l: -42.5, rms_dbfs_r: -60.25, peak_dbfs: -12.0, frames: 4800 }),
+        Msg::Direction(Direction {
+            frame: 70_000,
+            lag_samples: -9.125,
+            angle_deg: -30.0,
+            confidence: 123.5,
+            rms_dbfs: -27.75,
+        }),
     ];
     let mut out = std::io::stdout().lock();
     let mut buf = [0u8; MAX_FRAME];
@@ -33,7 +41,10 @@ fn main() {
     }
     // trailing frame so the last text chunk is delimited
     let n = encode_frame(
-        &Envelope { seq: 3, msg: Msg::Audio(AudioLevel { rms_dbfs_l: -144.0, rms_dbfs_r: -144.0, peak_dbfs: -144.0, frames: 4800 }) },
+        &Envelope {
+            seq: 4,
+            msg: Msg::Audio(AudioLevel { rms_dbfs_l: -144.0, rms_dbfs_r: -144.0, peak_dbfs: -144.0, frames: 4800 }),
+        },
         &mut buf,
     )
     .unwrap();
