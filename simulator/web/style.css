@@ -202,3 +202,20 @@ a.btn { text-decoration: none; display: inline-block; }
 .fxNone { color: #7d7b94; font-size: 12px; }
 .fxTune summary { cursor: pointer; color: var(--accent); font: 600 12.5px system-ui; padding: 6px 0 2px; }
 .fxTune summary.changed { color: var(--gold); }
+
+/* Mixer (one row per sound / light effect) */
+.mixer .panelHead { display: flex; justify-content: space-between; align-items: center; }
+.mixGroup { font: 700 11px system-ui; letter-spacing: .1em; text-transform: uppercase; color: var(--dim); margin: 10px 0 2px; border-top: 1px solid var(--line); padding-top: 8px; }
+.mixGroup:first-child { border-top: 0; margin-top: 0; padding-top: 0; }
+.mixRow { display: grid; grid-template-columns: auto minmax(0, 1fr) 96px 42px 30px; align-items: center; gap: 4px 8px; padding: 5px 0; }
+.mixRow .mixName { min-width: 0; }
+.mixRow .mixName b { display: block; font: 600 13px system-ui; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mixRow .mixName small { display: block; color: var(--dim); font-size: 11px; line-height: 1.25; }
+.mixRow input[type=range] { width: 100%; accent-color: var(--accent); }
+.mixRow .mixVal { font: 600 12px ui-monospace, monospace; text-align: right; color: var(--text); font-variant-numeric: tabular-nums; }
+.mixRow .mixVal.changed { color: var(--gold); }
+.mixRow .mixTest { padding: 4px 0; width: 30px; font-size: 11px; }
+.mixRow .mixExtra { grid-column: 2 / -1; }
+.mixRow .mixExtra select { width: 100%; }
+.mixRow.off .mixName b, .mixRow.off .mixVal { color: var(--dim); }
+.mixRow.off input[type=range] { opacity: .4; }

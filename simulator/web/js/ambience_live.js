@@ -26,12 +26,12 @@ export class LiveAmbience {
   setup() {
     const c = this.sfx.ctx;
     if (this.beatBus || !c) return;
-    this.windGain = c.createGain(); this.windGain.gain.value = 0.0001; this.windGain.connect(this.sfx.master);
+    this.windGain = c.createGain(); this.windGain.gain.value = 0.0001; this.windGain.connect(this.sfx.bus('wind'));
     // heartbeat bus: warm saturation + lowpass, so the thump carries on small speakers too (Yarden 20.11: louder, more pronounced)
     const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 600;
     const sat = c.createWaveShaper(), n = 1024, cv = new Float32Array(n); for (let i = 0; i < n; i++) { const x = (i / (n - 1)) * 2 - 1; cv[i] = Math.tanh(2.5 * x) / Math.tanh(2.5); } sat.curve = cv;
     const out = c.createGain(); out.gain.value = 0.45; // balanced 20.11 (0.8 was too strong): full meter peaks ~0.5
-    this.beatBus = c.createGain(); this.beatBus.connect(sat).connect(lp).connect(out).connect(c.destination);
+    this.beatBus = c.createGain(); this.beatBus.connect(sat).connect(lp).connect(out).connect(this.sfx.bus('heart', true)); // mixer channel, past the master
     this.loading = true;
     renderWindLoop(c.sampleRate).then((buf) => {
       const src = c.createBufferSource(); src.buffer = buf; src.loop = true; src.connect(this.windGain); src.start(); this.wind = src;
@@ -48,7 +48,7 @@ export class LiveAmbience {
     const wantWind = on && state === 'IDLE' ? WIND_LEVEL : 0.0001;
     if (this.windTarget !== wantWind) { this.windTarget = wantWind; const g = this.windGain.gain; g.cancelScheduledValues(t); g.setValueAtTime(Math.max(g.value, 0.0001), t); g.exponentialRampToValueAtTime(wantWind, t + FADE); }
     // heartbeat: someone is here and the meter is filling
-    if (!on || state !== 'WARMING') { this.nextBeat = 0; return; }
+    if (!on || state !== 'WARMING' || !this.sfx.isOn('heart')) { this.nextBeat = 0; return; }
     const e = Math.max(0, Math.min(1, energyPct || 0));
     if (this.nextBeat < t) this.nextBeat = t + 0.05;
     if (this.nextBeat - t > 0.12) return; // schedule just ahead, so speed/volume follow the meter

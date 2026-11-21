@@ -12,7 +12,7 @@ import { Scene } from './scene.js';
 import { HitPicker, tierOf, VICTORY } from './hitfx.js';
 import { PRESETS, PRESET_IDS, STAGES, STAGE_BY_ID, FX_PARAMS, hitTable } from './presets.js';
 import { LiveAmbience } from './ambience_live.js';
-import { IMPACT_CHOICES, OPEN_CHOICES, Sfx } from './sfx.js';
+import { IMPACT_CHOICES, OPEN_CHOICES, Sfx, MIX_CHANNELS, MIX_DEFAULT, MIX_MAX } from './sfx.js';
 import { Playlist } from './music.js';
 import { LiveLink, LIVE_REQUESTED, BRAIN_REQUESTED, unstripFrame } from './live.js';
 import { BrainClient } from './brain.js';
@@ -40,6 +40,7 @@ const arena = new ArenaManager(cfg, sm, bus, now, fixes);
 const presence = new PresenceService(cfg, bus, now);
 const detector = new ShoutDetector();
 const sfx = new Sfx(); sfx.enabled = prefs.sound;
+for (const [id, m] of Object.entries(prefs.mix || {})) if (sfx.mix[id] && m) sfx.mix[id] = { on: m.on !== false, vol: Number.isFinite(m.vol) ? m.vol : 1 };
 const ambience = new LiveAmbience(sfx);
 const playlist = new Playlist(sfx); sfx.playlist = playlist;
 const nowPlaying = document.getElementById('nowPlaying');
@@ -323,6 +324,7 @@ for (const o of OPEN_CHOICES) { const op = document.createElement('option'); op.
 if (OPEN_CHOICES.some((o) => o.id === prefs.fightOpen)) sfx.openId = prefs.fightOpen;
 openSel.value = sfx.openId;
 openSel.onchange = () => { sfx.openId = openSel.value; prefs.fightOpen = sfx.openId; savePrefs(); sfx.ensure(); sfx.lastOpen = 0; sfx.arenaOpen(); };
+const mixLightEls = {}; // Mixer light rows, kept in sync with the Tunables panel
 const soundBtn = $('soundBtn');
 const renderSound = () => { soundBtn.textContent = sfx.enabled ? 'Sound on' : 'Sound off'; };
 soundBtn.onclick = () => { sfx.enabled = !sfx.enabled; prefs.sound = sfx.enabled; savePrefs(); renderSound(); if (!sfx.enabled) sfx.stopMusic(); else { sfx.ensure(); if (sm.currentState === S.Fight) sfx.startMusic(); } };
@@ -634,6 +636,7 @@ function buildTunables() {
   }
 }
 function onTunable(key) {
+  mixLightEls[key]?.(cfg[key]);
   if (['warming_energy_threshold', 'shout_energy_multiplier', 'energy_decay_rate'].includes(key)) arena.onTunablesChanged();
   if (key === 'leds_per_column' && rig.n !== cfg.leds_per_column) rig.resize(cfg.leds_per_column);
   if (key === 'synth_shout_db') feats.synthDb = cfg.synth_shout_db;
@@ -641,6 +644,78 @@ function onTunable(key) {
   if (key === 'hit_fx_intensity') { rig.intensity = cfg.hit_fx_intensity; scene.intensity = cfg.hit_fx_intensity; }
 }
 buildTunables();
+
+// ---- Mixer (Yarden 21.11): one place for every effect: on/off, volume, a test button ----
+const MIX_TESTS = {
+  punch: () => sfx.punch(60, null),
+  open: () => { sfx.lastOpen = 0; sfx.arenaOpen(); },
+  shout: () => sfx.shout(1),
+  ko: () => sfx.ko(),
+  victory: () => sfx.victory(),
+  defeat: () => sfx.defeat(),
+  heart: () => { ambience.setup(); const t = sfx.ctx.currentTime + 0.05; for (let i = 0; i < 4; i++) ambience.beat(t + i * 0.75, 0.6, 0.75); },
+};
+const MIX_EXTRA = { punch: 'impactSel', open: 'openSel' };
+const saveMix = () => { prefs.mix = sfx.mix; savePrefs(); };
+const mixRow = ({ name, note, on, onToggle, min, max, step, value, onValue, fmt, def, test, extra }) => {
+  const row = document.createElement('div'); row.className = 'mixRow';
+  const tg = document.createElement('label'); tg.className = 'toggle'; tg.title = `${name} on/off`;
+  const cb = document.createElement('input'); cb.type = 'checkbox'; cb.setAttribute('aria-label', `${name} on`);
+  const sw = document.createElement('span'); sw.className = 'sw'; tg.append(cb, sw);
+  const nm = document.createElement('div'); nm.className = 'mixName';
+  const b = document.createElement('b'); b.textContent = name; nm.append(b);
+  if (note) { const sm = document.createElement('small'); sm.textContent = note; nm.append(sm); }
+  const rng = document.createElement('input'); rng.type = 'range'; rng.min = min; rng.max = max; rng.step = step; rng.setAttribute('aria-label', `${name} level`);
+  const val = document.createElement('span'); val.className = 'mixVal';
+  row.append(tg, nm, rng, val);
+  if (test) { const bt = document.createElement('button'); bt.type = 'button'; bt.className = 'btn small ghost mixTest'; bt.textContent = '▶'; bt.title = `Play ${name}`; bt.onclick = () => { sfx.ensure(); test(); }; row.append(bt); }
+  else row.append(document.createElement('span'));
+  if (extra) { const ex = document.createElement('div'); ex.className = 'mixExtra'; ex.append(extra); row.append(ex); }
+  const show = (v, o) => { rng.value = v; val.textContent = fmt(v); val.classList.toggle('changed', Math.abs(v - def) > 1e-6); cb.checked = o; row.classList.toggle('off', !o); };
+  cb.onchange = () => { onToggle(cb.checked); show(Number(rng.value), cb.checked); };
+  rng.oninput = () => { onValue(Number(rng.value)); show(Number(rng.value), cb.checked); };
+  show(value, on);
+  return { row, show };
+};
+const mixRefresh = {};
+function buildMixer() {
+  const root = $('mixRows'); root.textContent = '';
+  const group = (t) => { const h = document.createElement('div'); h.className = 'mixGroup'; h.textContent = t; root.append(h); };
+  let last = '';
+  for (const ch of MIX_CHANNELS) {
+    if (ch.group !== last) { group(ch.group); last = ch.group; }
+    const r = mixRow({
+      name: ch.name, note: ch.note, on: sfx.mix[ch.id].on, value: sfx.mix[ch.id].vol, def: 1, min: 0, max: MIX_MAX, step: 0.05,
+      fmt: (v) => `${Math.round(v * 100)}%`, test: MIX_TESTS[ch.id], extra: MIX_EXTRA[ch.id] && $(MIX_EXTRA[ch.id]),
+      onToggle: (o) => { sfx.setMix(ch.id, { on: o }); saveMix(); }, onValue: (v) => { sfx.setMix(ch.id, { vol: v }); saveMix(); },
+    });
+    mixRefresh[ch.id] = () => r.show(sfx.mix[ch.id].vol, sfx.mix[ch.id].on);
+    root.append(r.row);
+  }
+  // lights: the same controls as the Tunables panel (one source of truth: cfg + tunEls)
+  group('Lights');
+  const ti = TUNABLES.find((t) => t.key === 'hit_fx_intensity'), dflt = defaults();
+  const li = mixRow({
+    name: 'Punch lights', note: 'Strength of LED punch effects and screen flashes', on: true, value: cfg.hit_fx_intensity, def: dflt.hit_fx_intensity, min: ti.min, max: ti.max, step: ti.step,
+    fmt: (v) => `${Math.round(v * 100)}%`, onToggle: () => {}, onValue: (v) => tunEls.hit_fx_intensity.set(v),
+  });
+  li.row.querySelector('.toggle').style.visibility = 'hidden'; // strength only; LED punch feedback always stays on
+  mixLightEls.hit_fx_intensity = (v) => li.show(v, true);
+  root.append(li.row);
+  const lv = mixRow({
+    name: 'Varied effects', note: 'Off: one classic light effect for every punch', on: cfg.hit_fx_variety >= 1, value: 1, def: 1, min: 0, max: 1, step: 1,
+    fmt: () => '', onToggle: (o) => tunEls.hit_fx_variety.set(o ? 1 : 0), onValue: () => {},
+  });
+  lv.row.querySelector('input[type=range]').style.visibility = 'hidden';
+  mixLightEls.hit_fx_variety = (v) => lv.show(1, v >= 1);
+  root.append(lv.row);
+}
+buildMixer();
+$('mixReset').onclick = () => {
+  for (const [id, m] of Object.entries(MIX_DEFAULT())) { sfx.setMix(id, m); mixRefresh[id]?.(); }
+  saveMix(); const d = defaults(); tunEls.hit_fx_intensity.set(d.hit_fx_intensity); tunEls.hit_fx_variety.set(d.hit_fx_variety);
+  log('Mixer reset to the approved levels', 'ignored');
+};
 $('exportBtn').onclick = () => { const box = $('yamlBox'); box.hidden = false; $('yamlOut').value = exportYaml(cfg); };
 $('copyYaml').onclick = async () => { try { await navigator.clipboard.writeText($('yamlOut').value); $('copyYaml').textContent = 'Copied'; } catch { $('yamlOut').select(); } setTimeout(() => { $('copyYaml').textContent = 'Copy'; }, 1200); };
 $('resetBtn').onclick = () => { const d = defaults(); for (const t of TUNABLES) tunEls[t.key].set(d[t.key]); log('Tunables reset to config.yaml defaults', 'ignored'); };

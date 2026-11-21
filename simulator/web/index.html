@@ -20,9 +20,7 @@
       <span id="liveTag" class="liveTag" hidden title="Live hardware bridge">LIVE</span>
       <button id="connectBtn" class="btn small" hidden title="Open the simulator served by a device on your network (bridge or Pi)">Connect to device</button>
       <button id="micBtn" class="btn small" title="Use the microphone for shout detection">Enable mic</button>
-      <select id="impactSel" class="btn small" aria-label="Punch sound" title="Sound of each punch (Sound lab, impact families)"></select>
-      <select id="openSel" class="btn small" aria-label="Fight-start sound" title="Sound when the fight starts (Sound lab has them all)"></select>
-      <button id="soundBtn" class="btn small" title="Sound effects and fight music">Sound on</button>
+      <button id="soundBtn" class="btn small" title="All sound on/off (each sound has its own switch in the Mixer)">Sound on</button>
     </div>
   </header>
 
@@ -109,6 +107,15 @@
     </section>
 
     <aside class="side">
+      <div class="panel mixer" id="mixPanel">
+        <div class="panelHead"><h2>Mixer</h2><button class="btn small ghost" id="mixReset" type="button" title="Back to the approved levels (100 %)">Reset</button></div>
+        <div id="mixRows"></div>
+        <div hidden id="mixHold">
+          <select id="impactSel" aria-label="Punch sound" title="Sound of each punch (Sound lab, impact families)"></select>
+          <select id="openSel" aria-label="Fight-start sound" title="Sound when the fight starts (Sound lab has them all)"></select>
+        </div>
+        <p class="note">100 % is the approved level. Changes apply live and are remembered in this browser. ▶ plays the sound once.</p>
+      </div>
       <div class="panel connect" id="connectPanel" hidden>
         <div class="panelHead"><h2>Connect to device</h2><button class="btn small ghost" id="connectClose" aria-label="Close">&times;</button></div>
         <form id="connectForm" class="connectForm">

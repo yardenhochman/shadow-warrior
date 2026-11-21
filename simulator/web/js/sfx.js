@@ -14,8 +14,24 @@ export const OPEN_CHOICES = [
   ...['blast', 'bellcrowd', 'bell3', 'rustbell', 'pipe', 'alarm', 'blownbell', 'drum'].map((id) => FIGHT_STARTS.find((f) => f.id === id)).filter(Boolean)
     .map((f) => ({ id: f.id, name: f.rough ? `${f.name} (rough)` : f.name, build: f.build, loud: f.loud })),
 ];
+// Mixer (Yarden 21.11): every game sound has its own channel with on/off and a volume.
+// 100 % = the levels approved on 20.11; the slider goes to 150 %. 'loud' channels skip the 0.7 master.
+export const MIX_CHANNELS = [
+  { id: 'music', name: 'Fight music', group: 'Music', note: 'Playlist (or the synth loop)' },
+  { id: 'punch', name: 'Punch', group: 'Fight' },
+  { id: 'open', name: 'Fight start', group: 'Fight' },
+  { id: 'shout', name: 'Shout chime', group: 'Fight' },
+  { id: 'ko', name: 'K.O.', group: 'Fight' },
+  { id: 'victory', name: 'Victory fanfare', group: 'Fight' },
+  { id: 'defeat', name: 'Defeat stinger', group: 'Fight', note: 'Game ends with no K.O.' },
+  { id: 'wind', name: 'Night wind', group: 'Ambience', note: 'IDLE, nobody here' },
+  { id: 'heart', name: 'Heartbeat', group: 'Ambience', note: 'WARMING, grows with the shout meter' },
+];
+export const MIX_DEFAULT = () => Object.fromEntries(MIX_CHANNELS.map((c) => [c.id, { on: true, vol: 1 }]));
+export const MIX_MAX = 1.5;
+
 export class Sfx {
-  constructor() { this.ctx = null; this.enabled = true; this.music = null; this.noise = null; this.playlist = null; this.openId = 'blast'; this.impactId = 'current'; this.impactSeed = 1; }
+  constructor() { this.mix = MIX_DEFAULT(); this.buses = {}; this.ctx = null; this.enabled = true; this.music = null; this.noise = null; this.playlist = null; this.openId = 'blast'; this.impactId = 'current'; this.impactSeed = 1; }
 
   ensure() {
     if (!this.ctx) {
@@ -31,18 +47,35 @@ export class Sfx {
     return this.ctx;
   }
 
+  /** The channel's gain node (made on first use); loud = straight to the output, past the master. */
+  bus(id, loud = false) {
+    const c = this.ensure(), key = loud ? `${id}!` : id;
+    if (!this.buses[key]) { const g = c.createGain(); g.gain.value = this.level(id); g.connect(loud ? c.destination : this.master); this.buses[key] = g; }
+    return this.buses[key];
+  }
+  level(id) { const m = this.mix[id]; return m && m.on ? Math.max(0, Math.min(MIX_MAX, m.vol)) : 0; }
+  isOn(id) { return this.level(id) > 0; }
+  /** Change a channel live (short ramp, no clicks). */
+  setMix(id, patch) {
+    this.mix[id] = { ...(this.mix[id] || { on: true, vol: 1 }), ...patch };
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    for (const key of [id, `${id}!`]) { const g = this.buses[key]; if (g) { g.gain.cancelScheduledValues(t); g.gain.setTargetAtTime(this.level(id), t, 0.03); } }
+  }
+
   env(g, t, a, peak, dec) { g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(peak, t + a); g.gain.exponentialRampToValueAtTime(0.0001, t + a + dec); }
 
   punch(power, sig) {
     if (!this.enabled || !this.ctx) return;
+    this.out = this.bus('punch'); // noiseHit/tone below play on this.out
     const c = this.ctx, t = c.currentTime, p = power / 100;
     const look = sig?.look || sig?.kind;
     const nova = look === 'nova', t1 = nova ? t + 0.2 + 0.06 * (sig.esc || 0) : t; // nova: the hit lands after the blackout beat
-    if (this.impactId !== 'current') { buildImpact(this.impactId, c, this.master, t1, Math.max(1, Math.min(100, power)), this.impactSeed++); return; }
+    if (this.impactId !== 'current') { buildImpact(this.impactId, c, this.out, t1, Math.max(1, Math.min(100, power)), this.impactSeed++); return; }
     const o = c.createOscillator(), g = c.createGain();
     o.frequency.setValueAtTime(140 + 60 * p, t1); o.frequency.exponentialRampToValueAtTime(40, t1 + 0.18);
     this.env(g, t1, 0.004, 0.5 + 0.5 * p, 0.2 + 0.15 * p);
-    o.connect(g).connect(this.master); o.start(t1); o.stop(t1 + 0.5);
+    o.connect(g).connect(this.out); o.start(t1); o.stop(t1 + 0.5);
     this.noiseHit(t1, 'lowpass', 900 + 2500 * p, 0.25 + 0.4 * p, 0.09);
     if (!sig || sig.kind === 'classic') return;
     if (sig.tier === 'hook') { this.noiseHit(t + 0.01, 'bandpass', 1400 + 8 * sig.hue, 0.18, 0.06); return; }
@@ -50,7 +83,7 @@ export class Sfx {
     // Heavy: a sub drop under every signature, plus a layer of its own.
     const sub = c.createOscillator(), sg = c.createGain();
     sub.frequency.setValueAtTime(75, t1); sub.frequency.exponentialRampToValueAtTime(30, t1 + 0.55);
-    this.env(sg, t1, 0.006, 0.55, 0.6); sub.connect(sg).connect(this.master); sub.start(t1); sub.stop(t1 + 0.8);
+    this.env(sg, t1, 0.006, 0.55, 0.6); sub.connect(sg).connect(this.out); sub.start(t1); sub.stop(t1 + 0.8);
     switch (look) {
       case 'thunder': for (const d of [0, 0.08, 0.19, 0.31]) { this.noiseHit(t + d, 'highpass', 2500, 0.22, 0.05); this.noiseHit(t + d + 0.01, 'bandpass', 600, 0.15, 0.14); } break;
       case 'gold': [1320, 1760, 2637].forEach((f, i) => this.tone(t + 0.04 + i * 0.05, 'sine', f, 0.07, 0.7)); break;
@@ -58,11 +91,11 @@ export class Sfx {
       case 'strobe': [880, 1175, 1568, 1319, 988].slice(0, 3 + Math.round(2 * (sig.esc || 0))).forEach((f, i) => this.tone(t + i * 0.13, 'square', f, 0.04, 0.06)); break;
       case 'split': { const s2 = c.createOscillator(), g2 = c.createGain(), f2 = c.createBiquadFilter(); s2.type = 'sawtooth'; f2.type = 'bandpass'; f2.Q.value = 4;
         f2.frequency.setValueAtTime(300, t); f2.frequency.exponentialRampToValueAtTime(2400, t + 0.35); s2.frequency.value = 110;
-        this.env(g2, t, 0.01, 0.12, 0.4); s2.connect(f2).connect(g2).connect(this.master); s2.start(t); s2.stop(t + 0.5); break; }
+        this.env(g2, t, 0.01, 0.12, 0.4); s2.connect(f2).connect(g2).connect(this.out); s2.start(t); s2.stop(t + 0.5); break; }
       case 'nova': { // reverse whoosh into the hit
         const n = c.createBufferSource(); n.buffer = this.noise; const f = c.createBiquadFilter(); f.type = 'bandpass'; f.frequency.setValueAtTime(400, t); f.frequency.exponentialRampToValueAtTime(3000, t1);
         const g3 = c.createGain(); g3.gain.setValueAtTime(0.0001, t); g3.gain.exponentialRampToValueAtTime(0.25, t1 - 0.01); g3.gain.linearRampToValueAtTime(0, t1);
-        n.connect(f).connect(g3).connect(this.master); n.start(t); n.stop(t1 + 0.05); break; }
+        n.connect(f).connect(g3).connect(this.out); n.start(t); n.stop(t1 + 0.05); break; }
       default: break;
     }
   }
@@ -71,11 +104,11 @@ export class Sfx {
     const c = this.ctx, n = c.createBufferSource(); n.buffer = this.noise;
     const f = c.createBiquadFilter(); f.type = type; f.frequency.value = freq;
     const g = c.createGain(); this.env(g, t, 0.002, peak, dec);
-    n.connect(f).connect(g).connect(this.master); n.start(t); n.stop(t + dec + 0.1);
+    n.connect(f).connect(g).connect(this.out); n.start(t); n.stop(t + dec + 0.1);
   }
   tone(t, type, freq, peak, dec) {
     const c = this.ctx, o = c.createOscillator(), g = c.createGain(); o.type = type; o.frequency.value = freq;
-    this.env(g, t, 0.003, peak, dec); o.connect(g).connect(this.master); o.start(t); o.stop(t + dec + 0.05);
+    this.env(g, t, 0.003, peak, dec); o.connect(g).connect(this.out); o.start(t); o.stop(t + dec + 0.05);
   }
 
   shout(intensity) {
@@ -84,7 +117,7 @@ export class Sfx {
     for (const [fr, dl] of [[660, 0], [990, 0.05]]) {
       const o = c.createOscillator(), g = c.createGain(); o.type = 'triangle';
       o.frequency.value = fr * (1 + intensity * 0.25);
-      this.env(g, t + dl, 0.01, 0.12, 0.25); o.connect(g).connect(this.master); o.start(t + dl); o.stop(t + dl + 0.4);
+      this.env(g, t + dl, 0.01, 0.12, 0.25); o.connect(g).connect(this.bus('shout')); o.start(t + dl); o.stop(t + dl + 0.4);
     }
   }
 
@@ -94,7 +127,7 @@ export class Sfx {
     const o = c.createOscillator(), g = c.createGain(); o.type = 'sawtooth';
     o.frequency.setValueAtTime(80, t); o.frequency.exponentialRampToValueAtTime(30, t + 1.2);
     const f = c.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 400;
-    this.env(g, t, 0.01, 0.8, 1.3); o.connect(f).connect(g).connect(this.master); o.start(t); o.stop(t + 1.5);
+    this.env(g, t, 0.01, 0.8, 1.3); o.connect(f).connect(g).connect(this.bus('ko')); o.start(t); o.stop(t + 1.5);
   }
 
   /** FIGHT starts: the arena opens (riser -> impact at ARENA_HIT s, synced with the LED burst). Once per fight start. */
@@ -105,8 +138,8 @@ export class Sfx {
     this.lastOpen = now;
     const pick = OPEN_CHOICES.find((o) => o.id === this.openId);
     // 'loud' starts skip the master volume (0.7) so the blast lands at full scale over the music
-    if (pick && pick.build) pick.build(this.ctx, pick.loud ? this.ctx.destination : this.master, this.ctx.currentTime + 0.01);
-    else buildArenaOpen(this.ctx, this.master, this.ctx.currentTime + 0.01, this.noise);
+    if (pick && pick.build) pick.build(this.ctx, this.bus('open', pick.loud), this.ctx.currentTime + 0.01);
+    else buildArenaOpen(this.ctx, this.bus('open'), this.ctx.currentTime + 0.01, this.noise);
   }
 
   /** Play a recorded voice line (mp3/wav URL) over everything, through the master bus. */
@@ -123,13 +156,13 @@ export class Sfx {
   /** Game over without a single K.O.: three sinking notes and a tape-stop dive (sound lab Defeat stinger). */
   defeat() {
     if (!this.enabled || !this.ctx) return;
-    this.stopMusic(); buildDefeat(this.ctx, this.master, this.ctx.currentTime + 0.05);
+    this.stopMusic(); buildDefeat(this.ctx, this.bus('defeat'), this.ctx.currentTime + 0.05);
   }
 
   /** Shadow defeated: the victory fanfare (~6 s), its climax on VICTORY.climax with the LED finale. */
   victory() {
     if (!this.enabled || !this.ctx) return;
-    buildVictory(this.ctx, this.master, this.ctx.currentTime + 0.01, this.noise);
+    buildVictory(this.ctx, this.bus('victory'), this.ctx.currentTime + 0.01, this.noise);
   }
 
   ko() {
@@ -139,7 +172,7 @@ export class Sfx {
     [523, 659, 784, 1046].forEach((fr, i) => {
       const o = c.createOscillator(), g = c.createGain(); o.type = 'square';
       o.frequency.value = fr; this.env(g, t + i * 0.08, 0.01, 0.08, 0.3);
-      o.connect(g).connect(this.master); o.start(t + i * 0.08); o.stop(t + i * 0.08 + 0.4);
+      o.connect(g).connect(this.bus('ko')); o.start(t + i * 0.08); o.stop(t + i * 0.08 + 0.4);
     });
   }
 
@@ -155,26 +188,26 @@ export class Sfx {
         if (step % 4 === 0 || step % 16 === 10) { // kick
           const o = c.createOscillator(), g = c.createGain();
           o.frequency.setValueAtTime(110, t); o.frequency.exponentialRampToValueAtTime(42, t + 0.12);
-          this.env(g, t, 0.003, 0.45, 0.22); o.connect(g).connect(this.master); o.start(t); o.stop(t + 0.3);
+          this.env(g, t, 0.003, 0.45, 0.22); o.connect(g).connect(this.bus('music')); o.start(t); o.stop(t + 0.3);
         }
         if (step % 2 === 1) { // hat
           const n = c.createBufferSource(); n.buffer = this.noise;
           const f = c.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = 7000;
           const g = c.createGain(); this.env(g, t, 0.001, 0.05, 0.04);
-          n.connect(f).connect(g).connect(this.master); n.start(t); n.stop(t + 0.06);
+          n.connect(f).connect(g).connect(this.bus('music')); n.start(t); n.stop(t + 0.06);
         }
         if (step % 8 === 4) { // snare-ish
           const n = c.createBufferSource(); n.buffer = this.noise;
           const f = c.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 1800;
           const g = c.createGain(); this.env(g, t, 0.002, 0.18, 0.12);
-          n.connect(f).connect(g).connect(this.master); n.start(t); n.stop(t + 0.2);
+          n.connect(f).connect(g).connect(this.bus('music')); n.start(t); n.stop(t + 0.2);
         }
         if (step % 4 === 2) { // bass
           const o = c.createOscillator(), g = c.createGain(); o.type = 'sawtooth';
           const notes = [55, 55, 65.4, 49];
           o.frequency.value = notes[Math.floor(step / 16) % 4];
           const f = c.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 300;
-          this.env(g, t, 0.005, 0.12, beat * 0.9); o.connect(f).connect(g).connect(this.master); o.start(t); o.stop(t + beat);
+          this.env(g, t, 0.005, 0.12, beat * 0.9); o.connect(f).connect(g).connect(this.bus('music')); o.start(t); o.stop(t + beat);
         }
         next += beat / 4; step++;
       }

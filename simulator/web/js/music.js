@@ -67,7 +67,7 @@ export class Playlist {
 
   attach() {
     const ctx = this.sfx.ensure();
-    if (!this.node) { this.node = ctx.createMediaElementSource(this.audio); this.node.connect(this.sfx.master); }
+    if (!this.node) { this.node = ctx.createMediaElementSource(this.audio); this.node.connect(this.sfx.bus('music')); }
   }
 
   play() {
