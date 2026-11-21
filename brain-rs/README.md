@@ -213,6 +213,18 @@ cargo run
 cargo test
 ```
 
+### Recording raw audio for detector tuning
+Do not use Voice Memos or similar apps: they apply noise suppression/AGC and lossy compression,
+which makes the clips useless for tuning the shout detector. Use the recorder (needs `ffmpeg`):
+```bash
+just record yael              # -> clips/yael_1.wav, next run yael_2.wav, ...
+just record yael -d 0         # pick the input device (macOS avfoundation index; ALSA name on Linux)
+uv run deploy/record_clip.py --list   # list input devices
+```
+Raw 48 kHz mono 16-bit WAV. Enter stops; it prints duration, peak and clipped-sample count (back
+the mic off if it clips). ffmpeg needs ~1.5 s to open the mic: wait for the "recording" line.
+To record on the station itself through the brain's own pipeline, use `POST /api/audio/record/start`.
+
 ## API Endpoints
 
 ### Status API

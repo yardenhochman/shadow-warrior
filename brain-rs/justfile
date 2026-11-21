@@ -26,3 +26,7 @@ build-arm64-release:
 # Build and install on a station as a systemd service: `just deploy 10.0.0.28 --ssh-opt HostKeyAlias=x` (see deploy/deploy.py)
 deploy host *args:
     uv run deploy/deploy.py {{host}} {{args}}
+
+# Record a raw mono WAV for detector tuning: `just record yael` -> clips/yael_N.wav (Enter stops)
+record label="clip" *args:
+    uv run deploy/record_clip.py {{label}} {{args}}
