@@ -151,7 +151,7 @@ text(rx0 - 26, py["OUT"] + 4, "OUT: n/c", 10, "end", GRN)
 yt = 640
 poly([(ex0 - 12, left["5V"]), (400, left["5V"]), (400, yt), (745, yt), (745, py["VCC"]), (rx0 - 20, py["VCC"])], PWR)
 text(570, yt - 8, "5 V (devkit 5V pin) to radar VCC", 10, "middle", PWR)
-cap(600, yt, 1, "C3", "100 uF", 1)
+cap(600, yt, 1, "C3", "470 uF", 1)
 dot(600, yt, PWR)
 cap(660, yt, 1, "C4", "100 nF", 1)
 dot(660, yt, PWR)

@@ -48,7 +48,7 @@ WROOM module (a WROVER uses GPIO16/17 for PSRAM).
 | LRCL | GPIO25 -> R2 33 ohm | J_MIC_A pin 4; J_MIC_B pin 4 |
 | DOUT | J_MIC_A pin 5 and J_MIC_B pin 5 joined | GPIO33 (no series part) |
 | GND (mics) | J_MIC_A/B pins 2 and 6 | star ground point |
-| 5V_RADAR | devkit 5V pin | J_RADAR VCC; C3 100 uF + C4 100 nF to GND |
+| 5V_RADAR | devkit 5V pin | J_RADAR VCC; C3 470 uF + C4 100 nF to GND |
 | RADAR_TX | J_RADAR TX | GPIO16 (ESP RX) |
 | RADAR_RX | J_RADAR RX | GPIO17 (ESP TX) |
 | RADAR_OUT | J_RADAR OUT | GPIO27 (optional, unused by firmware) |
@@ -64,7 +64,7 @@ Put 100 nF across 3V/GND on each mic breakout. Keep each cable <= 10 cm, equal l
 - ESP32 38-pin devkit + 2x 19-pin female headers
 - 2x ICS-43434 breakouts (3V, GND, BCLK, DOUT, LRCL, SEL), LD2410 module (TX RX OUT GND VCC)
 - R1, R2: 33 ohm; R3: 22 ohm (1/4 W through hole is fine)
-- C1: 10 uF (ceramic or small electrolytic); C2, C4 + 2 at the mics: 100 nF; C3: 100 uF
+- C1: 10 uF (ceramic or small electrolytic); C2, C4 + 2 at the mics: 100 nF; C3: 470 uF (radar 5 V bulk, >= 10 V, mind polarity)
 - 2x 6-pin locking connectors (JST-XH or PH) for the mics, 1x 5-pin for the radar
 - Foam gasket, M2/M2.5 standoffs for the perfboard, 3D printed or plastic box
 
