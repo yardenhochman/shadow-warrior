@@ -25,8 +25,14 @@ use serde::{Deserialize, Serialize};
 /// Bumped on any incompatible change to [`Msg`] or the framing.
 pub const PROTO_VERSION: u8 = 1;
 
+/// Stereo frames per [`AudioChunk`] (10 ms at 16 kHz).
+pub const AUDIO_CHUNK_FRAMES: usize = 160;
+/// Sample bytes per full [`AudioChunk`]: frames x 2 channels x 2 bytes.
+pub const AUDIO_CHUNK_BYTES: usize = AUDIO_CHUNK_FRAMES * 2 * 2;
+
 /// Largest encoded [`Envelope`] (before CRC and COBS) this crate produces or accepts.
-pub const MAX_PAYLOAD: usize = 96;
+/// Sized for a full [`AudioChunk`] (640 sample bytes + at most 18 bytes of header).
+pub const MAX_PAYLOAD: usize = AUDIO_CHUNK_BYTES + 32;
 /// CRC trailer length.
 pub const CRC_LEN: usize = 4;
 /// Largest frame on the wire including both 0x00 delimiters.
@@ -112,7 +118,45 @@ pub struct Direction {
     pub rms_dbfs: f32,
 }
 
+/// A block of raw audio, sent only while the host has streaming switched on
+/// ([`Command::StartAudio`]). 16-bit PCM, little-endian, channels interleaved
+/// (`L0 R0 L1 R1 ...`, L = mic with SELECT to GND). Produced by decimating the 48 kHz
+/// 24-bit I2S stream by 3 behind a linear-phase anti-alias FIR (flat to 7 kHz, >= 64 dB
+/// down from 8 kHz) and rounding to 16 bits; no AGC, noise suppression or other filtering.
+///
+/// `samples` is a byte string rather than `[i16]` because postcard would varint-encode
+/// each i16; as bytes it is fixed-size and cheap to encode.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AudioChunk {
+    /// Output sample rate (16000).
+    pub rate_hz: u16,
+    /// Interleaved channels (2).
+    pub channels: u8,
+    /// Index of the first frame of this chunk since streaming started. A jump means the
+    /// station dropped chunks (UART could not keep up); the reader can pad with silence.
+    pub frame: u32,
+    /// Samples in this chunk that saturated i16 (input at or near full scale).
+    pub clipped: u16,
+    /// `frames x channels` little-endian i16 (at most [`AUDIO_CHUNK_BYTES`]).
+    pub samples: heapless::Vec<u8, AUDIO_CHUNK_BYTES>,
+}
+
+impl AudioChunk {
+    /// Number of stereo (or `channels`-wide) frames in the chunk.
+    pub fn frames(&self) -> usize {
+        self.samples.len() / 2 / (self.channels.max(1) as usize)
+    }
+
+    /// Iterate the samples as i16, interleaved.
+    pub fn iter_i16(&self) -> impl Iterator<Item = i16> + '_ {
+        self.samples.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]]))
+    }
+}
+
 /// Everything a station can send. Append new variants at the end only.
+// AudioChunk makes this ~670 bytes. Boxing needs alloc, which this crate avoids so it
+// stays usable without a heap; a message lives on the stack for one encode or decode.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Msg {
     Hello(Hello),
@@ -122,6 +166,8 @@ pub enum Msg {
     /// change the encoding of the others. A v1 reader that predates it rejects
     /// these frames as undecodable and keeps going.
     Direction(Direction),
+    /// Raw audio while streaming is on (see [`AudioChunk`]). Appended like `Direction`.
+    AudioChunk(AudioChunk),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -129,6 +175,27 @@ pub struct Envelope {
     /// Wraps at u16::MAX; a gap means frames were lost.
     pub seq: u16,
     pub msg: Msg,
+}
+
+/// Host -> station commands, framed like station frames (`0x00 COBS(postcard(CommandEnvelope)
+/// ++ crc32) 0x00`) and written to the station's serial RX. Append new variants at the end.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Command {
+    /// Start (or keep alive) the raw [`AudioChunk`] stream. The station stops on its own
+    /// when no `StartAudio` arrived for [`AUDIO_KEEPALIVE_MS`], so a host that dies does not
+    /// leave it streaming: re-send this about once a second.
+    StartAudio,
+    StopAudio,
+}
+
+/// The station stops streaming this long after the last [`Command::StartAudio`].
+pub const AUDIO_KEEPALIVE_MS: u32 = 5000;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CommandEnvelope {
+    /// Chosen by the host; echoed only in the station's log for now.
+    pub seq: u16,
+    pub cmd: Command,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -147,6 +214,25 @@ pub enum FrameError {
 
 /// Encode `env` as a delimited frame into `out`; returns the bytes written.
 pub fn encode_frame(env: &Envelope, out: &mut [u8]) -> Result<usize, FrameError> {
+    encode_any(env, out)
+}
+
+/// Decode one frame body: the bytes between two 0x00 delimiters (without them).
+pub fn decode_frame(cobs_bytes: &[u8]) -> Result<Envelope, FrameError> {
+    decode_any(cobs_bytes)
+}
+
+/// Encode a host -> station command frame.
+pub fn encode_command(env: &CommandEnvelope, out: &mut [u8]) -> Result<usize, FrameError> {
+    encode_any(env, out)
+}
+
+/// Decode a host -> station command frame body (between the 0x00 delimiters).
+pub fn decode_command(cobs_bytes: &[u8]) -> Result<CommandEnvelope, FrameError> {
+    decode_any(cobs_bytes)
+}
+
+fn encode_any<T: Serialize>(env: &T, out: &mut [u8]) -> Result<usize, FrameError> {
     let mut raw = [0u8; MAX_PAYLOAD + CRC_LEN];
     let n = postcard::to_slice(env, &mut raw[..MAX_PAYLOAD]).map_err(|_| FrameError::TooLarge)?.len();
     let crc = CRC32.checksum(&raw[..n]);
@@ -161,8 +247,7 @@ pub fn encode_frame(env: &Envelope, out: &mut [u8]) -> Result<usize, FrameError>
     Ok(m + 2)
 }
 
-/// Decode one frame body: the bytes between two 0x00 delimiters (without them).
-pub fn decode_frame(cobs_bytes: &[u8]) -> Result<Envelope, FrameError> {
+fn decode_any<T: serde::de::DeserializeOwned>(cobs_bytes: &[u8]) -> Result<T, FrameError> {
     let mut raw = [0u8; MAX_PAYLOAD + CRC_LEN];
     if cobs_bytes.len() > cobs_max(raw.len()) {
         return Err(FrameError::TooLarge);
@@ -189,6 +274,7 @@ pub struct StreamSplitter<const N: usize> {
     clear_next: bool,
 }
 
+#[allow(clippy::large_enum_variant)] // see Msg
 #[derive(Debug, PartialEq)]
 pub enum Chunk<'a> {
     Frame(Envelope),
@@ -254,7 +340,16 @@ mod tests {
         }
     }
 
-    fn all() -> [Envelope; 4] {
+    fn chunk(frames: usize) -> AudioChunk {
+        let mut samples = heapless::Vec::new();
+        for i in 0..frames * 2 {
+            let v = (i as i16).wrapping_mul(997).wrapping_sub(16000);
+            samples.extend_from_slice(&v.to_le_bytes()).unwrap();
+        }
+        AudioChunk { rate_hz: 16000, channels: 2, frame: 1_234_560, clipped: 3, samples }
+    }
+
+    fn all() -> [Envelope; 5] {
         [
             hello(),
             Envelope {
@@ -287,6 +382,7 @@ mod tests {
                     rms_dbfs: -31.5,
                 }),
             },
+            Envelope { seq: 2, msg: Msg::AudioChunk(chunk(AUDIO_CHUNK_FRAMES)) },
         ]
     }
 
@@ -354,6 +450,61 @@ mod tests {
     }
 
     #[test]
+    fn known_audio_chunk_layout() {
+        let mut samples = heapless::Vec::new();
+        for v in [1i16, -2, 0x1234, i16::MIN] {
+            samples.extend_from_slice(&v.to_le_bytes()).unwrap();
+        }
+        let env = Envelope {
+            seq: 5,
+            msg: Msg::AudioChunk(AudioChunk { rate_hz: 16000, channels: 2, frame: 300, clipped: 0, samples }),
+        };
+        let mut buf = [0u8; 32];
+        let b = postcard::to_slice(&env, &mut buf).unwrap();
+        // seq 5, variant 4, 16000 = 80 7D, 2, 300 = AC 02, 0, len 8, raw LE i16 bytes
+        assert_eq!(
+            b,
+            &[0x05, 0x04, 0x80, 0x7D, 0x02, 0xAC, 0x02, 0x00, 0x08, 0x01, 0x00, 0xFE, 0xFF, 0x34, 0x12, 0x00, 0x80]
+        );
+        let Msg::AudioChunk(c) = env.msg else { unreachable!() };
+        assert_eq!(c.frames(), 2);
+        assert_eq!(c.iter_i16().collect::<std::vec::Vec<_>>(), [1, -2, 0x1234, i16::MIN]);
+    }
+
+    #[test]
+    fn full_audio_chunk_fits() {
+        let env = Envelope {
+            seq: u16::MAX,
+            msg: Msg::AudioChunk(AudioChunk { frame: u32::MAX, clipped: u16::MAX, ..chunk(AUDIO_CHUNK_FRAMES) }),
+        };
+        let mut out = [0u8; MAX_FRAME];
+        let n = encode_frame(&env, &mut out).unwrap();
+        assert_eq!(decode_frame(&out[1..n - 1]).unwrap(), env);
+    }
+
+    #[test]
+    fn command_roundtrip_and_layout() {
+        for (cmd, variant) in [(Command::StartAudio, 0u8), (Command::StopAudio, 1)] {
+            let env = CommandEnvelope { seq: 9, cmd };
+            let mut buf = [0u8; 8];
+            assert_eq!(postcard::to_slice(&env, &mut buf).unwrap(), &[9, variant]);
+            let mut out = [0u8; 16];
+            let n = encode_command(&env, &mut out).unwrap();
+            assert_eq!(decode_command(&out[1..n - 1]).unwrap(), env);
+        }
+    }
+
+    #[test]
+    fn command_frame_bytes_match_python() {
+        // tools/station_monitor.py encode_command(1, 0) / (2, 1) produce exactly these.
+        let mut out = [0u8; 16];
+        let n = encode_command(&CommandEnvelope { seq: 1, cmd: Command::StartAudio }, &mut out).unwrap();
+        assert_eq!(&out[..n], &[0x00, 0x02, 0x01, 0x05, 0xbe, 0x23, 0xc2, 0x58, 0x00]);
+        let n = encode_command(&CommandEnvelope { seq: 2, cmd: Command::StopAudio }, &mut out).unwrap();
+        assert_eq!(&out[..n], &[0x00, 0x07, 0x02, 0x01, 0xeb, 0x40, 0xe8, 0x04, 0x00]);
+    }
+
+    #[test]
     fn splitter_separates_text_and_frames() {
         let mut stream = std::vec::Vec::new();
         stream.extend_from_slice(b"I (123) boot: hello\n");
@@ -366,7 +517,7 @@ mod tests {
         // garbage with a stray zero
         stream.extend_from_slice(&[0x55, 0x00, 0x13, 0x37, 0x00]);
 
-        let mut sp = StreamSplitter::<256>::new();
+        let mut sp = StreamSplitter::<MAX_FRAME>::new();
         let mut frames = std::vec::Vec::new();
         let mut texts = 0;
         for &b in &stream {
@@ -377,8 +528,8 @@ mod tests {
             }
         }
         assert_eq!(frames, all().to_vec());
-        // boot line, 4 log lines (the last one runs into the 0x55 garbage), [13 37]
-        assert_eq!(texts, 1 + 4 + 1);
+        // boot line, 5 log lines (the last one runs into the 0x55 garbage), [13 37]
+        assert_eq!(texts, 1 + 5 + 1);
     }
 
     #[test]

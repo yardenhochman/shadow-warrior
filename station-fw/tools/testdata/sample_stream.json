@@ -2,4 +2,5 @@
 {"seq": 1, "type": "radar", "present": true, "moving_dist_cm": 150, "static_dist_cm": 310, "moving_energy": 55, "static_energy": 9, "state": 3}
 {"seq": 2, "type": "audio", "rms_dbfs_l": -42.5, "rms_dbfs_r": -60.25, "peak_dbfs": -12.0, "frames": 4800}
 {"seq": 3, "type": "direction", "frame": 70000, "lag_samples": -9.125, "angle_deg": -30.0, "confidence": 123.5, "rms_dbfs": -27.75}
-{"seq": 4, "type": "audio", "rms_dbfs_l": -144.0, "rms_dbfs_r": -144.0, "peak_dbfs": -144.0, "frames": 4800}
+{"seq": 4, "type": "audiochunk", "rate_hz": 16000, "channels": 2, "frame": 480, "frames": 3, "clipped": 1, "peak_dbfs_l": 0.0, "rms_dbfs_l": -4.75, "peak_dbfs_r": 0.0, "rms_dbfs_r": -4.77}
+{"seq": 5, "type": "audio", "rms_dbfs_l": -144.0, "rms_dbfs_r": -144.0, "peak_dbfs": -144.0, "frames": 4800}

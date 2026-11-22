@@ -6,6 +6,7 @@ extern crate alloc;
 #[cfg(test)]
 extern crate std;
 
+pub mod decimate;
 pub mod doa;
 pub mod fft;
 pub mod ld2410;

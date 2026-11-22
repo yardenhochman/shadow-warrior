@@ -6,6 +6,8 @@ port := env_var_or_default("STATION_PORT", "")
 baud := env_var_or_default("STATION_BAUD", "115200")
 export STATION_BAUD := baud
 port_arg := if port == "" { "" } else { "--port " + port }
+# Raw audio needs the fast console; `just record` assumes 921600 unless STATION_BAUD says otherwise.
+record_baud := env_var_or_default("STATION_BAUD", "921600")
 esp_env := "source ~/export-esp.sh >/dev/null 2>&1;"
 
 default:
@@ -45,6 +47,14 @@ decode *args:
 # Live direction view / recording / histogram (see `uv run tools/doa_view.py --help`)
 doa *args:
     uv run tools/doa_view.py {{port_arg}} --baud {{baud}} {{args}}
+
+# Flash the 921600-baud build that raw audio recording needs
+flash-fast:
+    STATION_BAUD=921600 just flash
+
+# Record raw 16 kHz stereo audio to ../brain-rs/clips/station/<label>_<n>.wav (needs `just flash-fast`)
+record label="clip" *args:
+    uv run tools/station_record.py {{port_arg}} --baud {{record_baud}} {{label}} {{args}}
 
 # Install the Xtensa toolchain and flashing tools if missing
 setup:

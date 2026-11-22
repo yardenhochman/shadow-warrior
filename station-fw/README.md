@@ -9,17 +9,20 @@ Stage 1 is a bring-up binary with no Wi-Fi. It writes, on the USB serial port (U
 - human-readable log lines: L/R RMS dBFS and peak every 100 ms, one line per radar
   report (about 10 Hz), stats every 5 s;
 - `station-proto` binary frames for the same data (`Hello`, `RadarEvent`, `AudioLevel`,
-  and `Direction` from GCC-PHAT, see below), which `tools/station_monitor.py` decodes.
+  and `Direction` from GCC-PHAT, see below), which `tools/station_monitor.py` decodes;
+- on request from the host only, raw 16 kHz stereo audio (`AudioChunk`, see
+  [Raw audio recording](#raw-audio-recording)).
 
 ## Layout
 
 | Path | What | Builds for |
 |---|---|---|
 | `station-proto/` | `no_std` wire types + framing (postcard, CRC-32, COBS). Will be shared with brain-rs. | host + ESP |
-| `station-core/` | `no_std` + `alloc` pure logic: LD2410 frame parser and command builders, RMS/peak level meter, f32 FFT and GCC-PHAT direction finding. | host + ESP |
+| `station-core/` | `no_std` + `alloc` pure logic: LD2410 frame parser and command builders, RMS/peak level meter, f32 FFT and GCC-PHAT direction finding, 48 -> 16 kHz FIR decimator. | host + ESP |
 | `firmware/` | ESP32 binary `station-fw` (own Cargo project: `esp` toolchain, `build-std`, ESP-IDF v5.5.3). | ESP only |
 | `tools/station_monitor.py` | Serial reader / frame decoder (uv script, PEP 723). | host |
 | `tools/doa_view.py` | Direction view: one line per sound event, angle histogram, PNG plot, broadside calibration. | host |
+| `tools/station_record.py` | Raw audio recorder: WAV + JSON sidecar in `brain-rs/clips/station/`. | host |
 
 The top-level `Cargo.toml` is a host workspace with the two `no_std` crates, so
 `cargo test` runs on the Mac. `firmware/` is excluded from it because its
@@ -82,11 +85,22 @@ between the sound ports (the direction finder default; see `STATION_MIC_MM`).
 ## Wire protocol (`station-proto`)
 
 A frame is `0x00 | COBS( postcard(Envelope{seq: u16, msg: Msg}) ++ crc32_le ) | 0x00`.
-CRC-32 is ISO-HDLC (`zlib.crc32`). `Msg` is `Hello | Radar | Audio`. Variant and field order
-are part of the format: only append. `PROTO_VERSION` (now 1) goes in `Hello`, which is sent at
-boot, every 5 s and when the radar firmware is identified. `Msg::Direction` (variant 3) was
-appended without a version bump: the other variants encode exactly as before, and an older
-reader just fails to decode the new frames and skips them.
+CRC-32 is ISO-HDLC (`zlib.crc32`). `Msg` is `Hello | Radar | Audio | Direction | AudioChunk`.
+Variant and field order are part of the format: only append. `PROTO_VERSION` (now 1) goes in
+`Hello`, which is sent at boot, every 5 s and when the radar firmware is identified.
+`Msg::Direction` (variant 3) and `Msg::AudioChunk` (variant 4) were appended without a version
+bump: the other variants encode exactly as before, and an older reader just fails to decode
+the new frames and skips them. `MAX_PAYLOAD` is 672 bytes (a full `AudioChunk` is 658), so a
+frame is at most 681 bytes on the wire.
+
+The host can send commands the other way, on the same UART: `0x00 | COBS(
+postcard(CommandEnvelope{seq: u16, cmd: Command}) ++ crc32_le ) | 0x00`, with `Command` =
+`StartAudio | StopAudio` (append-only too). The station ignores anything else on its RX, so
+typing into a serial terminal is harmless. For this the firmware installs the IDF UART driver
+on UART0 at boot (16 KB TX ring, 1 KB RX ring) and routes the console through it. Log text
+and frames then go into the TX ring instead of busy-waiting on the FIFO. Each frame is one
+`uart_write_bytes` call, which holds the driver's TX lock, so log text can only land between
+frames.
 
 On UART0 the frames share the line with log text. A reader splits on `0x00`, keeps every chunk
 that decodes and passes the CRC, and treats the rest as text (`StreamSplitter` in Rust,
@@ -215,6 +229,64 @@ workarounds are commented in place:
 
 If a build fails with one of these messages after a change, look for the same patterns.
 
+## Raw audio recording
+
+Records the two ICS-43434 mics to WAV on the Mac, to judge whether they pick up shouts well
+enough or whether the arena needs the USB cardioid mic (beads `shadow-warrior-wnu`, `-c6y`).
+The brain's offline evaluator reads the files from `brain-rs/clips/station/`.
+
+```sh
+just flash-fast                      # = STATION_BAUD=921600 just flash; needed once
+just record shout                    # -> ../brain-rs/clips/station/shout_1.wav (+ shout_1.json); Enter stops
+just record shout --mono --split     # also shout_1_mono.wav ((L+R)/2), shout_1_L.wav, shout_1_R.wav
+just record idle -t 30               # stop after 30 s
+STATION_PORT=/dev/cu.usbserial-0001 just record clap
+```
+
+Opening the port resets this dev board (CP2102 on macOS), so a recording starts about 1 s after
+boot. The tool waits for the first chunk.
+
+**What is in the file.** 16 kHz, 16-bit, stereo, channels L (mic SEL = GND) and R (SEL = 3V3).
+Processing, all in `station-core/src/decimate.rs`: 24-bit I2S samples at 48 kHz -> linear-phase
+FIR low-pass (191 taps, Kaiser beta 6.2, -6 dB at 7.5 kHz, flat within +-0.01 dB to 7 kHz, >=
+64 dB down from 8 kHz) -> keep every third sample -> scale by 2^-8 and round to nearest
+(saturating) i16. No AGC, no noise suppression, no DC removal, no other filtering. dBFS keep
+their meaning (16-bit full scale = 24-bit full scale). The filter delays the audio by 2 ms.
+
+**Protocol.** The recorder sends `StartAudio` and repeats it every second. The station stops
+streaming 5 s after the last one (`AUDIO_KEEPALIVE_MS`), so a recorder that dies does not leave
+it streaming. `StopAudio` stops at once. Streaming is off at boot, and DOA, levels and radar
+run as usual while it is on. The 10 Hz `audio:` text line is muted while streaming. Each 10 ms
+I2S read yields one `AudioChunk` of 160 stereo frames (640 sample bytes, about 66 KB/s with
+framing; 921600 baud carries 92 KB/s). `AudioChunk.frame` is the index of its first frame
+since the stream started. When the TX ring has no room for a chunk, the station drops the
+chunk (counted) instead of blocking the audio thread, and the recorder fills the gap with
+silence so the WAV stays in real time. A build with the default 115200 baud refuses
+`StartAudio` with a warning in the log.
+
+**Recorder output.** Duration vs wall time, chunks, dropped chunks (from `frame` gaps), seq gaps
+and damaged frames (counted from the first chunk on, so the boot ROM noise is ignored),
+frame counts per type, and per channel: peak, clipped samples, noise floor (10th percentile of
+the 100 ms AC RMS over the clip), median and loudest 100 ms, DC. The `.json` sidecar holds the
+same numbers plus station id, firmware version, radar firmware, port, baud and the processing
+chain. WAV and JSON files in `brain-rs/clips/station/` are git-ignored.
+
+**Station stats while streaming.** An extra line every 5 s: `stream: on chunks_sent=...
+chunks_dropped=... clipped=... decim <avg>us avg <max>us max, cpu <%> cmds=<n>`.
+
+### Measured on the ESP32-WROOM (2026-11-22, breadboard mics, radar not powered)
+
+| What | Result |
+|---|---|
+| 30 s idle recording at 921600 | 3015 chunks, 0 dropped, 0 seq gaps, 0 damaged frames; WAV 30.15 s vs 30.13 s wall (+0.06 %) |
+| Idle level (quiet room) | noise floor -72 / -73 dBFS (L / R), median 100 ms -69 / -70 dBFS, DC 0 |
+| 1 kHz tone from the Mac's speakers (far away) | line at 999.7 Hz, -85 / -81 dBFS, about 33 dB over the local floor; -106 / -105 dBFS outside the tone |
+| Decimator cost | 1.68 ms per 10 ms read (16.8 % of one core) |
+| Worst case: streaming + GCC-PHAT on every frame (`STATION_DOA_GATE_DBFS=-200`) | i2s_errors 0, i2s_rate 48000/s, 0 dropped chunks over 30 s, CPU 26 % (DOA) + 17 % (decimator), heap 127.7 KB free and steady |
+
+Not checked yet: a close tone, a clap and shouts (needs a person at the bench), and
+streaming with the radar running.
+
 ## Toolchain setup (macOS, once)
 
 ```sh
@@ -242,6 +314,7 @@ just decode --json --only audio  # JSON lines
 just decode --csv levels.csv --quiet-text
 just doa                         # direction per sound event (tools/doa_view.py)
 STATION_BAUD=921600 just flash decode   # faster console after boot (bootloader stays 115200)
+just flash-fast && just record test     # raw audio to WAV (see "Raw audio recording")
 ```
 
 `firmware/` also works with plain cargo after `source ~/export-esp.sh`:

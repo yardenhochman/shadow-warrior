@@ -14,6 +14,10 @@ harness = false # no test harness on target; host tests live in ../station-core 
 [profile.release]
 opt-level = "s"
 
+# The DSP hot loops (FIR decimator, FFT) are worth the extra flash.
+[profile.release.package.station-core]
+opt-level = 3
+
 [profile.dev]
 debug = true    # symbols do not end up in flash
 opt-level = "z"

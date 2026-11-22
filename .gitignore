@@ -34,3 +34,7 @@ music/segments.tmp
 
 # Screenshots from simulator/web/test/e2e.mjs
 sim-shots/
+
+# Station raw-audio recordings (station-fw/tools/station_record.py): data, not committed
+brain-rs/clips/station/*.wav
+brain-rs/clips/station/*.json

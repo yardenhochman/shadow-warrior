@@ -16,14 +16,19 @@ that is not a valid frame is printed as text (unless --quiet-text).
     uv run tools/station_monitor.py --file capture.bin      # decode a saved capture
     uv run tools/station_monitor.py --save capture.bin      # tee raw bytes to a file
 
+Raw audio (AudioChunk, only while a host has sent StartAudio, see station_record.py) is
+summarised per chunk (frames, per-channel peak and RMS), never printed sample by sample.
+
 Exit with Ctrl-C; a summary (frames per type, CRC failures, seq gaps) is printed.
 """
 
 from __future__ import annotations
 
 import argparse
+import array
 import csv
 import json
+import math
 import struct
 import sys
 import time
@@ -51,6 +56,19 @@ def cobs_decode(data: bytes) -> bytes:
         i = end
         if code < 0xFF and i < n:
             out.append(0)
+    return bytes(out)
+
+
+def cobs_encode(data: bytes) -> bytes:
+    out = bytearray()
+    for block in data.split(b"\x00"):
+        while len(block) >= 254:
+            out.append(0xFF)
+            out += block[:254]
+            block = block[254:]
+        out.append(len(block) + 1)
+        out += block
+    # data.split adds one trailing (virtual) zero; COBS decoders drop it at the end.
     return bytes(out)
 
 
@@ -96,6 +114,14 @@ class Reader:
         self.i += n
         return s
 
+    def raw(self) -> bytes:
+        n = self.varint()
+        if self.i + n > len(self.b):
+            raise ValueError("bytes overrun")
+        v = self.b[self.i : self.i + n]
+        self.i += n
+        return v
+
     def done(self) -> bool:
         return self.i == len(self.b)
 
@@ -135,6 +161,43 @@ class Direction:
     rms_dbfs: float
 
 
+@dataclass
+class AudioChunk:
+    rate_hz: int
+    channels: int
+    frame: int
+    clipped: int
+    samples: bytes  # little-endian i16, interleaved
+
+    def pcm(self) -> array.array:
+        a = array.array("h")
+        a.frombytes(self.samples)
+        if sys.byteorder != "little":
+            a.byteswap()
+        return a
+
+    @property
+    def frames(self) -> int:
+        return len(self.samples) // 2 // max(self.channels, 1)
+
+    def summary(self) -> dict:
+        """Per-channel peak / RMS in dBFS (16-bit full scale); no sample values."""
+        a = self.pcm()
+        d: dict = {"rate_hz": self.rate_hz, "channels": self.channels, "frame": self.frame,
+                   "frames": self.frames, "clipped": self.clipped}
+        for c in range(self.channels):
+            ch = a[c :: self.channels]
+            peak = max((abs(v) for v in ch), default=0)
+            ms = sum(v * v for v in ch) / max(len(ch), 1)
+            name = "lr"[c] if self.channels == 2 else str(c)
+            d[f"peak_dbfs_{name}"] = round(20 * math.log10(max(peak, 1) / 32768), 2) + 0.0
+            d[f"rms_dbfs_{name}"] = round(10 * math.log10(max(ms, 1e-9) / 32768**2), 2) + 0.0
+        return d
+
+    def __str__(self) -> str:
+        return "AudioChunk(" + ", ".join(f"{k}={v}" for k, v in self.summary().items()) + ")"
+
+
 CSV_COLUMNS = {
     "audio": ["rms_dbfs_l", "rms_dbfs_r", "peak_dbfs", "frames"],
     "direction": ["frame", "lag_samples", "angle_deg", "confidence", "rms_dbfs"],
@@ -158,6 +221,8 @@ def decode_envelope(body: bytes) -> tuple[int, object]:
         msg = Audio(r.f32(), r.f32(), r.f32(), r.varint())
     elif variant == 3:
         msg = Direction(r.varint(), r.f32(), r.f32(), r.f32(), r.f32())
+    elif variant == 4:
+        msg = AudioChunk(r.varint(), r.u8(), r.varint(), r.varint(), r.raw())
     else:
         raise ValueError(f"unknown variant {variant}")
     if not r.done():
@@ -173,6 +238,42 @@ def decode_frame(chunk: bytes) -> tuple[int, object]:
     if zlib.crc32(body) != crc:
         raise ValueError("crc")
     return decode_envelope(body)
+
+
+# ---- host -> station commands -------------------------------------------------
+
+CMD_START_AUDIO = 0
+CMD_STOP_AUDIO = 1
+
+
+def encode_varint(v: int) -> bytes:
+    out = bytearray()
+    while True:
+        b = v & 0x7F
+        v >>= 7
+        if v:
+            out.append(b | 0x80)
+        else:
+            out.append(b)
+            return bytes(out)
+
+
+def encode_command(seq: int, cmd: int) -> bytes:
+    """A framed station_proto::CommandEnvelope{seq, cmd} (unit variants only)."""
+    body = encode_varint(seq & 0xFFFF) + encode_varint(cmd)
+    raw = body + zlib.crc32(body).to_bytes(4, "little")
+    return b"\x00" + cobs_encode(raw) + b"\x00"
+
+
+def looks_binary(chunk: bytes) -> bool:
+    if not any(32 <= c < 127 for c in chunk[:8]):
+        return True
+    odd = sum(1 for c in chunk if c < 9 or 13 < c < 32 and c != 27 or c == 127)
+    return odd * 8 > len(chunk)
+
+
+def msg_dict(msg: object) -> dict:
+    return msg.summary() if isinstance(msg, AudioChunk) else asdict(msg)
 
 
 # ---- stream -----------------------------------------------------------------
@@ -194,17 +295,22 @@ def chunks(src: Iterator[bytes]) -> Iterator[bytes]:
             buf.clear()
 
 
-def serial_source(port: str, baud: int, save: BinaryIO | None) -> Iterator[bytes]:
+def open_serial(port: str, baud: int, timeout: float = 0.1):
     import serial  # pyserial
 
     # dsrdtr/rtscts off and DTR/RTS low so opening the port does not reset the ESP32.
-    with serial.Serial() as s:
-        s.port = port
-        s.baudrate = baud
-        s.timeout = 0.1
-        s.dtr = False
-        s.rts = False
-        s.open()
+    s = serial.Serial()
+    s.port = port
+    s.baudrate = baud
+    s.timeout = timeout
+    s.dtr = False
+    s.rts = False
+    s.open()
+    return s
+
+
+def serial_source(port: str, baud: int, save: BinaryIO | None) -> Iterator[bytes]:
+    with open_serial(port, baud) as s:
         while True:
             data = s.read(4096)
             if data:
@@ -242,7 +348,7 @@ def main() -> None:
         "--csv", help="append rows to this CSV: audio levels, or directions with --only direction (t, seq, fields...)"
     )
     ap.add_argument("--quiet-text", action="store_true", help="do not echo log text")
-    ap.add_argument("--only", choices=["hello", "radar", "audio", "direction"], help="print only this frame type")
+    ap.add_argument("--only", choices=["hello", "radar", "audio", "direction", "audiochunk"], help="print only this frame type")
     ap.add_argument("--check", action="store_true", help="exit 1 if any frame failed to decode (for tests)")
     args = ap.parse_args()
     csv_kind = "direction" if args.only == "direction" else "audio"
@@ -265,8 +371,8 @@ def main() -> None:
             try:
                 seq, msg = decode_frame(chunk)
             except Exception as e:  # not a frame: text, or a damaged frame
-                # Looks binary (no printable text) -> count as a bad frame.
-                if not any(32 <= c < 127 for c in chunk[:8]) and len(chunk) < 200:
+                # Looks binary -> count as a bad frame (do not dump a damaged audio chunk as text).
+                if looks_binary(chunk):
                     counts[f"bad:{e}"] += 1
                 elif not args.quiet_text:
                     sys.stdout.write(chunk.decode("utf-8", "replace"))
@@ -283,7 +389,7 @@ def main() -> None:
             if args.only and kind != args.only:
                 continue
             if args.json:
-                print(json.dumps({"seq": seq, "type": kind, **asdict(msg)}), flush=True)
+                print(json.dumps({"seq": seq, "type": kind, **msg_dict(msg)}), flush=True)
             else:
                 print(f"<< #{seq:5d} {msg}", flush=True)
     except KeyboardInterrupt:

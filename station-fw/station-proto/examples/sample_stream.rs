@@ -30,6 +30,14 @@ fn main() {
             confidence: 123.5,
             rms_dbfs: -27.75,
         }),
+        Msg::AudioChunk(AudioChunk {
+            rate_hz: 16000,
+            channels: 2,
+            frame: 480,
+            clipped: 1,
+            // L: 1000, -2000, 32767; R: -1, 0, -32768
+            samples: [1000i16, -1, -2000, 0, 32767, -32768].iter().flat_map(|v| v.to_le_bytes()).collect(),
+        }),
     ];
     let mut out = std::io::stdout().lock();
     let mut buf = [0u8; MAX_FRAME];
@@ -42,7 +50,7 @@ fn main() {
     // trailing frame so the last text chunk is delimited
     let n = encode_frame(
         &Envelope {
-            seq: 4,
+            seq: 5,
             msg: Msg::Audio(AudioLevel { rms_dbfs_l: -144.0, rms_dbfs_r: -144.0, peak_dbfs: -144.0, frames: 4800 }),
         },
         &mut buf,

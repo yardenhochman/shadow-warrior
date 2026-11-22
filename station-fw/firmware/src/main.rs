@@ -3,16 +3,23 @@
 //! Output on UART0 (the USB serial console): human-readable log lines plus
 //! `station-proto` frames (`0x00 <COBS> 0x00`). No Wi-Fi yet.
 //!
+//! UART0 runs the IDF UART driver (16 KB TX ring, so writes do not busy-wait) and
+//! its RX carries host commands (`station-proto` `CommandEnvelope` frames).
+//!
 //! Threads:
 //! - audio: reads I2S DMA buffers, emits an `AudioLevel` every 100 ms and a
 //!   `Direction` (GCC-PHAT) for every 1024-sample frame above the level gate.
+//!   While the host keeps raw streaming on (`Command::StartAudio`), it also
+//!   decimates to 16 kHz / 16-bit and sends an `AudioChunk` every 10 ms; chunks
+//!   that do not fit in the TX ring are dropped and counted, never waited for.
+//! - cmd: reads host command frames from UART0 RX.
 //! - radar: identifies the LD2410 (enable config, read version, end config),
 //!   then parses its reports and emits a `RadarEvent` per report. A missing
 //!   radar is logged and retried; it never stops the station.
 //! - main: periodic `Hello` and diagnostics.
 
 use std::io::Write as _;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -30,9 +37,13 @@ use esp_idf_svc::sys;
 use log::{info, warn};
 
 use station_core::ld2410::{self, Frame, FwVersion, Parser};
+use station_core::decimate::{self, Decimator};
 use station_core::doa::{DoaConfig, DoaEstimator, FRAME_LEN as DOA_FRAME};
 use station_core::level::LevelMeter;
-use station_proto::{encode_frame, Direction, Envelope, Hello, Msg, MAX_FRAME, PROTO_VERSION};
+use station_proto::{
+    decode_command, encode_frame, AudioChunk, Command, Direction, Envelope, Hello, Msg, AUDIO_CHUNK_BYTES,
+    AUDIO_KEEPALIVE_MS, MAX_FRAME, PROTO_VERSION,
+};
 
 const SAMPLE_RATE: u32 = 48_000;
 /// 100 ms windows.
@@ -47,6 +58,13 @@ const RADAR_IDENTIFY_RETRY: Duration = Duration::from_secs(10);
 const RADAR_ACK_TIMEOUT: Duration = Duration::from_millis(300);
 
 const DOA_LOG_EVERY: Duration = Duration::from_millis(100);
+
+/// Console UART (UART0) driver ring buffers. 16 KB of TX is about 180 ms at 921600 baud.
+const CONSOLE_UART: sys::uart_port_t = 0;
+const CONSOLE_TX_RING: i32 = 16 * 1024;
+const CONSOLE_RX_RING: i32 = 1024;
+/// 16 kHz stereo 16-bit is 64 KB/s plus framing; 921600 baud carries 92 KB/s.
+const MIN_STREAM_BAUD: u32 = 500_000;
 
 /// Build-time f32 setting, e.g. `STATION_DOA_BIAS=0.8 just flash`.
 fn env_f32(v: Option<&'static str>, default: f32) -> f32 {
@@ -74,26 +92,50 @@ fn console_baud() -> u32 {
 }
 
 /// Serialises frame writes and owns the sequence counter.
+///
+/// Every frame goes to the UART driver in one `uart_write_bytes` call, which holds the
+/// driver's TX lock for the whole buffer, so a frame is never split. Log text goes
+/// through the VFS (newlib stdout) into the same driver and can only land between
+/// frames; readers split on 0x00 and treat non-frames as text.
 struct FrameTx {
     seq: u16,
     sent: u32,
+    /// Set once the UART0 driver is installed; before that frames go through stdout.
+    driver: bool,
 }
 
 impl FrameTx {
-    fn send(&mut self, msg: Msg) {
+    /// Encode and write `msg`. With `droppable`, the frame is skipped (returns false,
+    /// no seq consumed) when the TX ring has no room for it, instead of blocking.
+    fn send(&mut self, msg: Msg, droppable: bool) -> bool {
         let env = Envelope { seq: self.seq, msg };
-        self.seq = self.seq.wrapping_add(1);
         let mut buf = [0u8; MAX_FRAME];
-        match encode_frame(&env, &mut buf) {
-            Ok(n) => {
-                // One write call so the UART VFS lock keeps the frame contiguous.
-                let mut out = std::io::stdout().lock();
-                let _ = out.write_all(&buf[..n]);
-                let _ = out.flush();
-                self.sent = self.sent.wrapping_add(1);
+        let n = match encode_frame(&env, &mut buf) {
+            Ok(n) => n,
+            Err(e) => {
+                warn!("frame encode failed: {e:?}");
+                return false;
             }
-            Err(e) => warn!("frame encode failed: {e:?}"),
+        };
+        if self.driver {
+            if droppable {
+                let mut free = 0usize;
+                // SAFETY: driver installed on CONSOLE_UART; `free` is a valid out pointer.
+                let rc = unsafe { sys::uart_get_tx_buffer_free_size(CONSOLE_UART, &mut free) };
+                if rc != sys::ESP_OK || free < n {
+                    return false;
+                }
+            }
+            // SAFETY: buf[..n] is initialised; the driver copies it into its ring.
+            unsafe { sys::uart_write_bytes(CONSOLE_UART, buf.as_ptr().cast(), n) };
+        } else {
+            let mut out = std::io::stdout().lock();
+            let _ = out.write_all(&buf[..n]);
+            let _ = out.flush();
         }
+        self.seq = self.seq.wrapping_add(1);
+        self.sent = self.sent.wrapping_add(1);
+        true
     }
 }
 
@@ -102,7 +144,50 @@ type Tx = Arc<Mutex<FrameTx>>;
 fn send(tx: &Tx, msg: Msg) {
     // A poisoned lock only means another thread panicked mid-write; keep going.
     let mut g = tx.lock().unwrap_or_else(|p| p.into_inner());
-    g.send(msg);
+    g.send(msg, false);
+}
+
+fn try_send(tx: &Tx, msg: Msg) -> bool {
+    let mut g = tx.lock().unwrap_or_else(|p| p.into_inner());
+    g.send(msg, true)
+}
+
+/// Install the IDF UART driver on the console UART and route stdout/stdin through it.
+fn install_console_driver() -> Result<(), sys::EspError> {
+    let _ = std::io::stdout().flush();
+    // SAFETY: UART0 has no driver yet (the console uses the polling VFS); the ring sizes
+    // are valid; no event queue is requested.
+    unsafe {
+        sys::uart_wait_tx_idle_polling(CONSOLE_UART);
+        sys::esp!(sys::uart_driver_install(
+            CONSOLE_UART,
+            CONSOLE_RX_RING,
+            CONSOLE_TX_RING,
+            0,
+            std::ptr::null_mut(),
+            0
+        ))?;
+        sys::uart_vfs_dev_use_driver(CONSOLE_UART as i32);
+    }
+    Ok(())
+}
+
+fn now_ms() -> u32 {
+    (now_us() / 1000) as u32
+}
+
+/// Raw-audio stream switch, set by the cmd thread, read by the audio thread.
+struct StreamCtl {
+    on: AtomicBool,
+    /// `now_ms()` after which the stream stops unless another StartAudio arrives.
+    until_ms: AtomicU32,
+}
+
+impl StreamCtl {
+    fn active(&self) -> bool {
+        self.on.load(Ordering::Relaxed)
+            && (self.until_ms.load(Ordering::Relaxed).wrapping_sub(now_ms()) as i32) > 0
+    }
 }
 
 struct Shared {
@@ -118,6 +203,15 @@ struct Shared {
     /// Time spent in reads that ran GCC-PHAT, since the last stats line (us).
     doa_us_sum: AtomicU32,
     doa_us_max: AtomicU32,
+    stream: StreamCtl,
+    /// Raw-audio stream counters since boot / since the last stats line.
+    chunks_sent: AtomicU32,
+    chunks_dropped: AtomicU32,
+    chunk_clipped: AtomicU32,
+    dec_us_sum: AtomicU32,
+    dec_us_max: AtomicU32,
+    dec_reads: AtomicU32,
+    cmds_ok: AtomicU32,
 }
 
 fn now_us() -> i64 {
@@ -162,8 +256,13 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
+    let tx: Tx = Arc::new(Mutex::new(FrameTx { seq: 0, sent: 0, driver: false }));
+    match install_console_driver() {
+        Ok(()) => tx.lock().unwrap_or_else(|p| p.into_inner()).driver = true,
+        Err(e) => warn!("console: UART0 driver install failed ({e}); no host commands, no raw audio"),
+    }
+
     let p = Peripherals::take()?;
-    let tx: Tx = Arc::new(Mutex::new(FrameTx { seq: 0, sent: 0 }));
     let shared = Arc::new(Shared {
         radar_fw: Mutex::new(None),
         radar_frames: AtomicU32::new(0),
@@ -174,6 +273,14 @@ fn main() -> anyhow::Result<()> {
         doa_frames: AtomicU32::new(0),
         doa_us_sum: AtomicU32::new(0),
         doa_us_max: AtomicU32::new(0),
+        stream: StreamCtl { on: AtomicBool::new(false), until_ms: AtomicU32::new(0) },
+        chunks_sent: AtomicU32::new(0),
+        chunks_dropped: AtomicU32::new(0),
+        chunk_clipped: AtomicU32::new(0),
+        dec_us_sum: AtomicU32::new(0),
+        dec_us_max: AtomicU32::new(0),
+        dec_reads: AtomicU32::new(0),
+        cmds_ok: AtomicU32::new(0),
     });
     send(&tx, hello(&shared, id));
 
@@ -191,7 +298,12 @@ fn main() -> anyhow::Result<()> {
     {
         let tx = tx.clone();
         let shared = shared.clone();
-        thread::Builder::new().name("audio".into()).stack_size(8192).spawn(move || audio_task(i2s, tx, shared))?;
+        // 12 KB: the audio thread builds AudioChunk frames (about 2 KB) on its stack.
+        thread::Builder::new().name("audio".into()).stack_size(12288).spawn(move || audio_task(i2s, tx, shared))?;
+    }
+    if tx.lock().unwrap_or_else(|p| p.into_inner()).driver {
+        let shared = shared.clone();
+        thread::Builder::new().name("cmd".into()).stack_size(4096).spawn(move || cmd_task(shared, baud))?;
     }
 
     // --- radar: UART2 256000 8N1, TX 17, RX 16, OUT 27 ---
@@ -229,6 +341,21 @@ fn main() -> anyhow::Result<()> {
         let doa_frames = shared.doa_frames.swap(0, Ordering::Relaxed);
         let us_sum = shared.doa_us_sum.swap(0, Ordering::Relaxed);
         let us_max = shared.doa_us_max.swap(0, Ordering::Relaxed);
+        let dec_sum = shared.dec_us_sum.swap(0, Ordering::Relaxed);
+        let dec_max = shared.dec_us_max.swap(0, Ordering::Relaxed);
+        let dec_reads = shared.dec_reads.swap(0, Ordering::Relaxed);
+        if dec_reads > 0 || shared.chunks_sent.load(Ordering::Relaxed) > 0 {
+            info!(
+                "stream: {} chunks_sent={} chunks_dropped={} clipped={} decim {}us avg {dec_max}us max, cpu {:.1}% cmds={}",
+                if shared.stream.active() { "on" } else { "off" },
+                shared.chunks_sent.load(Ordering::Relaxed),
+                shared.chunks_dropped.load(Ordering::Relaxed),
+                shared.chunk_clipped.load(Ordering::Relaxed),
+                dec_sum.checked_div(dec_reads).unwrap_or(0),
+                dec_sum as f32 * 100.0 / window_us,
+                shared.cmds_ok.load(Ordering::Relaxed),
+            );
+        }
         info!(
             "stats: frames_sent={sent} radar_frames={} i2s_reads={} i2s_errors={} i2s_rate={:.0}/s \
              doa {dirs}/{doa_frames} frames, {}us avg {us_max}us max, cpu {:.1}% heap_free={} heap_min={}",
@@ -261,16 +388,23 @@ fn audio_task(mut i2s: I2sDriver<'static, I2sRx>, tx: Tx, shared: Arc<Shared>) {
     let mut last_doa_log = Instant::now() - DOA_LOG_EVERY;
     let mut buf = vec![0u8; I2S_READ_FRAMES * 2 * 4];
     let timeout = TickType::new_millis(1000).ticks();
+    let mut raw = RawStream::new();
     loop {
         match i2s.read(&mut buf, timeout) {
             Ok(n) => {
                 shared.audio_reads.fetch_add(1, Ordering::Relaxed);
                 shared.audio_frames.fetch_add((n / 8) as u32, Ordering::Relaxed);
+                // Raw stream first: it is the most timing-sensitive consumer of the TX ring.
+                raw.push(&buf[..n], &tx, &shared);
+                let quiet = raw.on;
                 meter.push_bytes(&buf[..n], |lvl| {
-                    info!(
-                        "audio: L {:7.1} dBFS  R {:7.1} dBFS  peak {:7.1} dBFS",
-                        lvl.rms_dbfs_l, lvl.rms_dbfs_r, lvl.peak_dbfs
-                    );
+                    // The 10 Hz level line is muted while streaming to keep text off the link.
+                    if !quiet {
+                        info!(
+                            "audio: L {:7.1} dBFS  R {:7.1} dBFS  peak {:7.1} dBFS",
+                            lvl.rms_dbfs_l, lvl.rms_dbfs_r, lvl.peak_dbfs
+                        );
+                    }
                     send(&tx, Msg::Audio(lvl));
                 });
                 // A 480-frame read completes at most one 1024-sample frame; keep room for 2.
@@ -309,6 +443,136 @@ fn audio_task(mut i2s: I2sDriver<'static, I2sRx>, tx: Tx, shared: Arc<Shared>) {
                     warn!("i2s read error ({} so far): {e}", n + 1);
                 }
                 thread::sleep(Duration::from_millis(100));
+            }
+        }
+    }
+}
+
+/// Raw 16 kHz stream state, owned by the audio thread.
+struct RawStream {
+    on: bool,
+    dec: Option<Decimator>,
+    /// Output frames since the stream started (index of the next frame).
+    frame: u32,
+    chunk: heapless::Vec<u8, AUDIO_CHUNK_BYTES>,
+    chunk_frame: u32,
+    pcm: [i16; Decimator::out_len(I2S_READ_FRAMES)],
+}
+
+impl RawStream {
+    fn new() -> Self {
+        Self {
+            on: false,
+            dec: None,
+            frame: 0,
+            chunk: heapless::Vec::new(),
+            chunk_frame: 0,
+            pcm: [0; Decimator::out_len(I2S_READ_FRAMES)],
+        }
+    }
+
+    fn push(&mut self, bytes: &[u8], tx: &Tx, shared: &Shared) {
+        let want = shared.stream.active();
+        if want != self.on {
+            self.on = want;
+            if want {
+                // Allocated on first use (about 3 KB), kept afterwards.
+                let dec = self.dec.get_or_insert_with(Decimator::new);
+                dec.reset();
+                self.frame = 0;
+                self.chunk.clear();
+                self.chunk_frame = 0;
+                info!("stream: raw audio on, {} Hz stereo i16, {} taps", decimate::OUTPUT_RATE_HZ, decimate::TAPS);
+            } else {
+                info!(
+                    "stream: raw audio off after {} frames, chunks sent {} dropped {}",
+                    self.frame,
+                    shared.chunks_sent.load(Ordering::Relaxed),
+                    shared.chunks_dropped.load(Ordering::Relaxed)
+                );
+            }
+        }
+        if !self.on {
+            return;
+        }
+        let Some(dec) = self.dec.as_mut() else { return };
+        let t0 = now_us();
+        let k = dec.push_bytes(bytes, &mut self.pcm);
+        let dt = (now_us() - t0).clamp(0, u32::MAX as i64) as u32;
+        shared.dec_us_sum.fetch_add(dt, Ordering::Relaxed);
+        shared.dec_reads.fetch_add(1, Ordering::Relaxed);
+        let _ = shared.dec_us_max.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |m| (dt > m).then_some(dt));
+        for lr in self.pcm[..k].chunks_exact(2) {
+            let _ = self.chunk.extend_from_slice(&lr[0].to_le_bytes());
+            let _ = self.chunk.extend_from_slice(&lr[1].to_le_bytes());
+            self.frame = self.frame.wrapping_add(1);
+            if self.chunk.is_full() {
+                // A 480-frame read yields exactly one 160-frame chunk, so the clip count
+                // taken here belongs to this chunk.
+                let clipped = dec.take_clipped();
+                shared.chunk_clipped.fetch_add(clipped, Ordering::Relaxed);
+                let msg = Msg::AudioChunk(AudioChunk {
+                    rate_hz: decimate::OUTPUT_RATE_HZ as u16,
+                    channels: 2,
+                    frame: self.chunk_frame,
+                    clipped: clipped.min(u16::MAX as u32) as u16,
+                    samples: core::mem::take(&mut self.chunk),
+                });
+                let ctr = if try_send(tx, msg) { &shared.chunks_sent } else { &shared.chunks_dropped };
+                ctr.fetch_add(1, Ordering::Relaxed);
+                self.chunk_frame = self.frame;
+            }
+        }
+    }
+}
+
+/// Host commands on UART0 RX: `0x00 COBS(CommandEnvelope ++ crc) 0x00`. Anything else
+/// (stray keystrokes from a terminal) is ignored.
+fn cmd_task(shared: Arc<Shared>, baud: u32) {
+    let mut frame: heapless::Vec<u8, 64> = heapless::Vec::new();
+    let mut overflow = false;
+    let mut buf = [0u8; 64];
+    let mut warned_baud = false;
+    loop {
+        // SAFETY: driver installed on CONSOLE_UART; buf is valid for its length.
+        let n = unsafe {
+            sys::uart_read_bytes(CONSOLE_UART, buf.as_mut_ptr().cast(), buf.len() as u32, TickType::new_millis(100).ticks())
+        };
+        if n <= 0 {
+            continue;
+        }
+        for &b in &buf[..n as usize] {
+            if b != 0 {
+                overflow |= frame.push(b).is_err();
+                continue;
+            }
+            if frame.is_empty() {
+                continue;
+            }
+            let ok = !core::mem::take(&mut overflow);
+            let cmd = if ok { decode_command(&frame).ok() } else { None };
+            frame.clear();
+            let Some(env) = cmd else { continue };
+            shared.cmds_ok.fetch_add(1, Ordering::Relaxed);
+            match env.cmd {
+                Command::StartAudio if baud < MIN_STREAM_BAUD => {
+                    if !warned_baud {
+                        warned_baud = true;
+                        warn!("stream: StartAudio ignored, console is {baud} baud; build with STATION_BAUD=921600");
+                    }
+                }
+                Command::StartAudio => {
+                    let st = &shared.stream;
+                    st.until_ms.store(now_ms().wrapping_add(AUDIO_KEEPALIVE_MS), Ordering::Relaxed);
+                    if !st.on.swap(true, Ordering::Relaxed) {
+                        info!("stream: StartAudio (cmd seq {})", env.seq);
+                    }
+                }
+                Command::StopAudio => {
+                    if shared.stream.on.swap(false, Ordering::Relaxed) {
+                        info!("stream: StopAudio (cmd seq {})", env.seq);
+                    }
+                }
             }
         }
     }
