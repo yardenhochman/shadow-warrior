@@ -23,7 +23,7 @@ import cadquery as cq
 
 # ---- parts (MEASURE) ---------------------------------------------------------------
 MIC_PITCH = 130.0  # centre to centre, firmware d_mm
-MIC_W, MIC_H = 20.0, 18.0  # mic breakout board outline
+MIC_W, MIC_H = 16.0, 13.0  # mic breakout outline (photo estimate ~15 x 12, MEASURE)
 MIC_PORT_DX, MIC_PORT_DY = 0.0, 0.0  # port hole centre relative to board centre
 MIC_PORT_D = 2.4  # through-hole diameter (>= the port, keep >= 2 mm)
 GASKET = 1.0  # foam gasket thickness between breakout and front wall
