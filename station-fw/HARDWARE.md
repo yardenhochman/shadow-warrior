@@ -74,10 +74,17 @@ Put 100 nF across 3V/GND on each mic breakout. Keep each cable <= 10 cm, equal l
   between the header rows. Connectors at the edge nearest the front panel.
 - One star-ground pad; run mic returns and radar return to it separately.
 
-## Measurements still needed for the box model
+## Measured parts (photos with a tape, +-1 mm; re-check with calipers)
 
-Devkit length/width and header row spacing, radar module size and hole pattern, mic
-breakout size and port position (and hole size), perfboard thickness, USB port height.
+- Devkit: ESP32-DevKitC clone, WROOM-32D, micro-USB. Pinout confirmed against the silkscreen
+  (left 3V3..5V, right GND..CLK, as in the table above). PCB about 50 x 31.5 mm, module antenna
+  overhangs about 6 mm. Header row spacing about 28.6 mm, which is 11 holes (27.94 mm):
+  put the two female headers 11 holes apart and test fit before soldering.
+  Micro-USB stands about 3 mm above the PCB, centred across the width.
+- Mic breakout: about 16.5 x 12 mm, header along the long edge, bottom-port mic (PCB hole about
+  1.3 mm, about 0.7 mm from centre, on the face opposite the header).
+- Radar: HLK-LD2410C V1.1, about 21 x 16 mm. Antenna patches and the TX/RX/OUT/GND/VCC
+  labels on the front; the header pins point out of the back.
 
 ## Enclosure (enclosure/box.py)
 
