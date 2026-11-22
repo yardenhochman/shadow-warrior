@@ -264,7 +264,8 @@ chunk (counted) instead of blocking the audio thread, and the recorder fills the
 silence so the WAV stays in real time. A build with the default 115200 baud refuses
 `StartAudio` with a warning in the log.
 
-**Recorder output.** Duration vs wall time, chunks, dropped chunks (from `frame` gaps), seq gaps
+**Recorder output.** Duration vs wall time, the station's sample rate measured against the
+host clock (least-squares slope of frames vs chunk arrival time), chunks, dropped chunks (from `frame` gaps), seq gaps
 and damaged frames (counted from the first chunk on, so the boot ROM noise is ignored),
 frame counts per type, and per channel: peak, clipped samples, noise floor (10th percentile of
 the 100 ms AC RMS over the clip), median and loudest 100 ms, DC. The `.json` sidecar holds the
@@ -278,7 +279,7 @@ chunks_dropped=... clipped=... decim <avg>us avg <max>us max, cpu <%> cmds=<n>`.
 
 | What | Result |
 |---|---|
-| 30 s idle recording at 921600 | 3015 chunks, 0 dropped, 0 seq gaps, 0 damaged frames; WAV 30.15 s vs 30.13 s wall (+0.06 %) |
+| 30 s idle recording at 921600 (3 runs) | 3015 chunks, 0 dropped, 0 seq gaps, 0 damaged frames; WAV 30.15 s vs 30.13-30.18 s wall (within 0.1 %); measured rate 16000.2 Hz |
 | Idle level (quiet room) | noise floor -72 / -73 dBFS (L / R), median 100 ms -69 / -70 dBFS, DC 0 |
 | 1 kHz tone from the Mac's speakers (far away) | line at 999.7 Hz, -85 / -81 dBFS, about 33 dB over the local floor; -106 / -105 dBFS outside the tone |
 | Decimator cost | 1.68 ms per 10 ms read (16.8 % of one core) |

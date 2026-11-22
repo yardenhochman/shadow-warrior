@@ -80,6 +80,7 @@ class Recorder:
         self.t_last: float | None = None
         self.station_log: list[str] = []
         self.kinds: dict[str, int] = {}
+        self.arrivals: list[tuple[float, int]] = []  # (host time, frames so far) per chunk
 
     def run(self) -> None:
         def src():
@@ -135,6 +136,7 @@ class Recorder:
             self.pcm += c.samples
             self.next_frame = c.frame + c.frames
             self.chunks += 1
+            self.arrivals.append((now, len(self.pcm) // 4))
             self.clipped_reported += c.clipped
             if self.t_first is None:
                 self.t_first = now - c.frames / c.rate_hz
@@ -254,6 +256,12 @@ def main() -> int:
             extra.append(p)
 
     dur = len(x) / rate
+    # Station sample rate as seen by the host clock: slope of frames vs arrival time.
+    # Robust to USB/UART burst jitter, unlike first-to-last arrival.
+    measured_rate = None
+    if len(rec.arrivals) > 100:
+        t, f = (np.array(v, dtype=np.float64) for v in zip(*rec.arrivals))
+        measured_rate = round(float(np.polyfit(t - t[0], f, 1)[0]), 1)
     wall = (rec.t_last - rec.t_first) if rec.t_first is not None and rec.t_last is not None else 0.0
     st = stats(x, rate)
     h = rec.hello
@@ -275,6 +283,7 @@ def main() -> int:
                       ">=64 dB from 8 kHz) -> decimate 3 -> round to 16-bit. No AGC, NS or DC removal.",
         "duration_s": round(dur, 3),
         "wall_s": round(wall, 3),
+        "measured_rate_hz": measured_rate,
         "frames": len(x),
         "chunks": rec.chunks,
         "dropped_frames": rec.dropped_frames,
@@ -293,8 +302,9 @@ def main() -> int:
     side.write_text(json.dumps(meta, indent=2) + "\n")
 
     drift = (dur / wall - 1) * 100 if wall > 0 else float("nan")
-    print(f"{path}: {dur:.2f}s ({wall:.2f}s wall, {drift:+.2f}%) {rate}Hz stereo, "
-          f"{rec.chunks} chunks, dropped {dropped_chunks:g} chunks, seq gaps {rec.seq_gaps}, bad frames {rec.bad}"
+    print(f"{path}: {dur:.2f}s ({wall:.2f}s wall, {drift:+.2f}%) {rate}Hz stereo"
+          + (f", measured rate {measured_rate} Hz ({(measured_rate / rate - 1) * 100:+.2f}%)" if measured_rate else "")
+          + f", {rec.chunks} chunks, dropped {dropped_chunks:g} chunks, seq gaps {rec.seq_gaps}, bad frames {rec.bad}"
           + (f", stream restarts {rec.restarts}" if rec.restarts else ""))
     print("  frames: " + ", ".join(f"{k} {v}" for k, v in sorted(rec.kinds.items())))
     for name in "LR":
