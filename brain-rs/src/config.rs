@@ -596,6 +596,19 @@ impl Config {
         Self::from_sources(Figment::from(Yaml::file("config.yaml")).merge(Env::prefixed("BRAIN_")))
     }
 
+    /// Like `load`, from `path` (a missing file means defaults), then `overrides`: dotted keys
+    /// (`audio.shout_margin_db`) with YAML scalar values, applied last. Used by `eval-wav`.
+    pub fn load_with(
+        path: &std::path::Path,
+        overrides: &[(String, serde_yaml::Value)],
+    ) -> Result<Self, Box<figment::Error>> {
+        let mut user = Figment::from(Yaml::file(path)).merge(Env::prefixed("BRAIN_"));
+        for (k, v) in overrides {
+            user = user.merge(Serialized::default(k, v));
+        }
+        Self::from_sources(user)
+    }
+
     /// Defaults overlaid with `user` (YAML + env). A WLED effect the user configures replaces
     /// the default effect as a whole: merging key by key leaked defaults the user left out
     /// (e.g. the default idle `palette: ocean` under an idle effect with no palette).

@@ -14,6 +14,7 @@ pub mod speaker_manager;
 pub mod schedule_manager;
 pub mod shout_detector;
 pub mod tasmota_manager;
+pub mod wav_eval;
 pub mod wled_manager;
 
 pub use arena_manager::ArenaManager;

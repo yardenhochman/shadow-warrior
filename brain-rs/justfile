@@ -30,3 +30,7 @@ deploy host *args:
 # Record a raw mono WAV for detector tuning: `just record yael` -> clips/yael_N.wav (Enter stops)
 record label="clip" *args:
     uv run deploy/record_clip.py {{label}} {{args}}
+
+# Offline shout evaluation with the live front-end + detector: `just eval clips/a.wav clips/b.wav [--csv f.csv --json r.json --set shout_margin_db=12]`
+eval +args:
+    cargo run -q -- eval-wav {{args}}

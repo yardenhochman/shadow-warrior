@@ -32,6 +32,12 @@ use crate::services::{
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Offline shout evaluation over WAV files: no services, no hardware.
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("eval-wav") {
+        return services::wav_eval::cli(&args[2..]);
+    }
+
     // Load configuration
     let config = Config::load()?;
 

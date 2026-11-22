@@ -17,9 +17,29 @@
 
 use super::audio_frontend::{FrameFeatures, FRAME_SECS};
 use crate::config::AudioConfig;
+use serde::Serialize;
+
+/// Outcome of every per-frame check (what `ShoutDetector` decided and why).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
+pub struct FrameVerdict {
+    /// VAD gate (with hangover) open.
+    pub gate_open: bool,
+    /// Required dB above floor for this frame (includes the playback margin).
+    pub margin_db: f32,
+    pub above_margin: bool,
+    /// Pitch confidence and F0 in range.
+    pub voiced: bool,
+    pub centroid_ok: bool,
+    pub tilt_ok: bool,
+    pub flatness_ok: bool,
+    /// How many of voiced/centroid/tilt/flatness passed.
+    pub features_passed: u32,
+    /// Counted towards the score.
+    pub shouty: bool,
+}
 
 /// A detected shout.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ShoutDetection {
     /// 0.25..1.0, grows with how far above the margin the shout was.
     pub intensity: f32,
@@ -49,18 +69,30 @@ impl ShoutDetector {
     /// Feed one frame. Frames skipped by a lossy channel (index gaps, up to 8)
     /// are credited with the same features so timing stays correct.
     pub fn push(&mut self, f: &FrameFeatures, cfg: &AudioConfig) -> Option<ShoutDetection> {
+        self.push_verbose(f, cfg).0
+    }
+
+    /// `push` plus the per-check verdict for this frame (offline evaluation / diagnostics).
+    pub fn push_verbose(
+        &mut self,
+        f: &FrameFeatures,
+        cfg: &AudioConfig,
+    ) -> (Option<ShoutDetection>, FrameVerdict) {
         let missed = match self.last_index {
             Some(last) if f.index > last => ((f.index - last) as usize).clamp(1, 8),
             _ => 1,
         };
         self.last_index = Some(f.index);
         let mut out = None;
+        let mut verdict = FrameVerdict::default();
         for _ in 0..missed {
-            if let Some(d) = self.step(f, cfg) {
-                out = Some(d);
+            let (d, v) = self.step(f, cfg);
+            verdict = v;
+            if d.is_some() {
+                out = d;
             }
         }
-        out
+        (out, verdict)
     }
 
     /// VAD gate with hangover.
@@ -76,33 +108,38 @@ impl ShoutDetector {
         }
     }
 
-    /// Returns Some(strength 1..2) when the frame looks like a near shout.
-    fn frame_is_shouty(&mut self, f: &FrameFeatures, cfg: &AudioConfig) -> Option<f32> {
-        let gate = self.gate_open(f, cfg);
-        let margin = cfg.shout_margin_db
+    /// Evaluate every check for one frame. `strength` (1..2) is Some when the frame
+    /// looks like a near shout.
+    fn frame_verdict(&mut self, f: &FrameFeatures, cfg: &AudioConfig) -> (FrameVerdict, Option<f32>) {
+        let gate_open = self.gate_open(f, cfg);
+        let margin_db = cfg.shout_margin_db
             + if f.playback_active { cfg.shout_playback_margin_db } else { 0.0 };
-        if !gate || f.db_above_floor < margin {
-            return None;
-        }
         let voiced = f.pitch_conf >= cfg.shout_pitch_conf_min
             && (cfg.shout_f0_min_hz..=cfg.shout_f0_max_hz).contains(&f.pitch_hz);
-        let passed = [
+        let centroid_ok = f.spectral_centroid_hz >= cfg.shout_centroid_min_hz;
+        let tilt_ok = f.spectral_tilt_db_per_khz >= cfg.shout_tilt_min_db_per_khz;
+        let flatness_ok = f.spectral_flatness <= cfg.shout_flatness_max;
+        let features_passed = [voiced, centroid_ok, tilt_ok, flatness_ok].iter().filter(|&&b| b).count() as u32;
+        let above_margin = f.db_above_floor >= margin_db;
+        let shouty = gate_open && above_margin && features_passed >= cfg.shout_min_features;
+        let v = FrameVerdict {
+            gate_open,
+            margin_db,
+            above_margin,
             voiced,
-            f.spectral_centroid_hz >= cfg.shout_centroid_min_hz,
-            f.spectral_tilt_db_per_khz >= cfg.shout_tilt_min_db_per_khz,
-            f.spectral_flatness <= cfg.shout_flatness_max,
-        ]
-        .iter()
-        .filter(|&&b| b)
-        .count() as u32;
-        if passed < cfg.shout_min_features {
-            return None;
-        }
-        Some(((f.db_above_floor - margin) / 10.0 + 1.0).min(2.0))
+            centroid_ok,
+            tilt_ok,
+            flatness_ok,
+            features_passed,
+            shouty,
+        };
+        let strength = shouty.then(|| ((f.db_above_floor - margin_db) / 10.0 + 1.0).min(2.0));
+        (v, strength)
     }
 
-    fn step(&mut self, f: &FrameFeatures, cfg: &AudioConfig) -> Option<ShoutDetection> {
-        match self.frame_is_shouty(f, cfg) {
+    fn step(&mut self, f: &FrameFeatures, cfg: &AudioConfig) -> (Option<ShoutDetection>, FrameVerdict) {
+        let (verdict, strength) = self.frame_verdict(f, cfg);
+        match strength {
             Some(strength) => {
                 self.gap = 0;
                 self.run_frames += 1;
@@ -118,7 +155,7 @@ impl ShoutDetector {
                     };
                     self.reset_run();
                     self.score = 0.0;
-                    return Some(det);
+                    return (Some(det), verdict);
                 }
             }
             None => {
@@ -132,7 +169,7 @@ impl ShoutDetector {
                 }
             }
         }
-        None
+        (None, verdict)
     }
 
     fn reset_run(&mut self) {

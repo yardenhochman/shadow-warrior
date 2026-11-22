@@ -225,6 +225,41 @@ Raw 48 kHz mono 16-bit WAV. Enter stops; it prints duration, peak and clipped-sa
 the mic off if it clips). ffmpeg needs ~1.5 s to open the mic: wait for the "recording" line.
 To record on the station itself through the brain's own pipeline, use `POST /api/audio/record/start`.
 
+### Evaluating WAV files offline (comparing microphones)
+`just eval` runs the brain's own front-end and shout detector (`src/services/wav_eval.rs`, the
+same `FrontEnd` + earshot VAD + `ShoutDetector` code the live brain runs) over WAV files, with
+the `audio:` settings from `config.yaml` (plus `BRAIN_*` env):
+```bash
+just eval clips/a.wav clips/b.wav                       # per-second table + every detection
+just eval clips/a.wav --set shout_margin_db=12 --set vad_threshold=0.4   # try other tunables
+just eval clips/a.wav --csv /tmp/frames.csv --json /tmp/report.json      # per-frame features
+just eval clips/a.wav --playback                         # as if our speakers were playing
+```
+Input: 16/24/32-bit PCM or float WAV at any rate. Stereo is evaluated as `left`, `right` and `mix`
+separately. Per file and channel it prints peak/clipping, then one row per second (max band level,
+adaptive noise floor, max margin over the floor, mean VAD, VAD-gate %, frames above the margin,
+centroid/tilt/flatness of the loudest quarter of frames, median voiced F0, % shouty frames,
+detections), every `SHOUT` with its time, and a summary that counts, among frames loud enough,
+which check failed (gate, voiced, centroid, tilt, flatness): that is what stopped a missed shout.
+Time is the frame index, not the wall clock, so runs are deterministic.
+
+Caveats: the noise floor and the VAD start fresh at the start of each file, so the first seconds
+differ from a long-running brain (give each file a few seconds of room tone before the first
+shout). A file that starts with digital silence makes the floor start at -100 dB and noise then
+reads as shouting (bead shadow-warrior-aei).
+
+To compare two microphones (e.g. station I2S ICS-43434 vs BOMGE U202 + cardioid):
+1. Record both at the same time from the same shouts, at the same spot and distance: either one
+   stereo file with one mic per channel (macOS: an Aggregate Device in Audio MIDI Setup, or
+   `ffmpeg -f avfoundation -i ":1" -f avfoundation -i ":2" -filter_complex amerge=inputs=2 both.wav`),
+   or one raw file per mic from the same session (`just record`, `POST /api/audio/record/start`).
+   Start with 5 s of room tone, then shouts at the distances that matter (player spot, arena edge),
+   plus talking, music at game volume and bag punches as negatives.
+2. `just eval both.wav` (or `just eval stationmic.wav bomge.wav`).
+3. Compare per mic: detections on the shouts (hit rate) and on the negatives (false alarms), the
+   margin over the floor on the same shout (higher = more headroom, better distance rejection),
+   the floor level (self-noise), clipping on the loudest shouts, and the blocker counts.
+
 ## API Endpoints
 
 ### Status API
