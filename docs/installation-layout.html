@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Installation layout</title>
+<style>
+  :root { --bg:#fafaf7; --fg:#1d1d1b; --mute:#6b6b66; --grid:#e4e4de; --accent:#d9480f; --led:#f59f00;
+          --brain:#1971c2; --power:#c92a2a; --bag:#5f3dc4; --radar:#0ca678; --panel:#fff; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#16161a; --fg:#ececea; --mute:#9a9a94; --grid:#2a2a30;
+          --accent:#ff8a4c; --led:#ffc83d; --brain:#5aa9ff; --power:#ff6b6b; --bag:#a58bff; --radar:#38d9a9; --panel:#1f1f25; } }
+  * { box-sizing:border-box }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.45 system-ui,sans-serif; padding:16px; }
+  h1 { font-size:20px; margin:0 0 4px } p.sub { margin:0 0 12px; color:var(--mute) }
+  .wrap { display:grid; grid-template-columns:minmax(0,1fr) 260px; gap:16px; max-width:1100px }
+  @media (max-width:800px) { .wrap { grid-template-columns:1fr } }
+  .panel { background:var(--panel); border:1px solid var(--grid); border-radius:8px; padding:12px }
+  label { display:block; margin:10px 0 2px; font-size:13px; color:var(--mute) }
+  input[type=range] { width:100% }
+  b { font-variant-numeric:tabular-nums }
+  svg { width:100%; height:auto; display:block; background:var(--panel); border:1px solid var(--grid); border-radius:8px }
+  svg text { fill:var(--fg); font:12px system-ui,sans-serif }
+  svg .m { fill:var(--mute) }
+  ul { padding-left:18px; margin:8px 0 0; font-size:13px }
+</style>
+</head>
+<body>
+<h1>Installation layout — top view</h1>
+<p class="sub">Draft v10. Arc span 75°.</p>
+<div class="wrap">
+  <svg id="s" viewBox="0 0 700 560" role="img" aria-label="Top-down installation layout"></svg>
+  <div class="panel">
+    <b>Parameters</b>
+    <label>Player → bag: <b id="vp"></b> m</label>
+    <input id="pd" type="range" min="0.6" max="1.4" step="0.05" value="0.75">
+    <label>Bag → centre column: <b id="vb"></b> m</label>
+    <input id="bc" type="range" min="1" max="3" step="0.05" value="2">
+    <label>Bag fall radius: <b id="vh"></b> m</label>
+    <input id="h" type="range" min="1.2" max="2.5" step="0.05" value="2">
+    <label>Columns: <b id="vn"></b></label>
+    <input id="n" type="range" min="4" max="5" step="1" value="5">
+    <label>Arc span seen by player: <b id="va"></b>°</label>
+    <input id="a" type="range" min="40" max="180" step="5" value="75">
+    <label>Radar field (total): <b id="vf"></b>°</label>
+    <input id="fv" type="range" min="40" max="120" step="10" value="60">
+    <ul id="facts"></ul>
+  </div>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+const NS = 'http://www.w3.org/2000/svg';
+const S = 100, OX = 350, OY = 450;      // px per metre; origin = centre column
+function el(tag, attrs, text) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (text !== undefined) e.textContent = text;
+  $('s').appendChild(e); return e;
+}
+const X = x => OX + x * S, Y = y => OY - y * S;   // world: x right, y toward player
+const SLACK = 1.2;
+
+function draw() {
+  const pd = +$('pd').value, bc = +$('bc').value, hb = +$('h').value, n = +$('n').value;
+  const spanDeg = +$('a').value, span = spanDeg*Math.PI/180, fov = +$('fv').value;
+  $('vp').textContent = pd.toFixed(2); $('vb').textContent = bc.toFixed(2); $('vh').textContent = hb.toFixed(2);
+  $('vn').textContent = n; $('va').textContent = spanDeg; $('vf').textContent = fov;
+  $('s').innerHTML = '';
+  const R = bc + pd;                 // player -> columns
+  const py = R, by = R - pd;         // player, bag (centre column at y=0)
+  const sp = 2*R*Math.sin(span/(n-1)/2);
+
+  for (let i = -3.5; i <= 3.5; i += 0.5) el('line', {x1:X(i), y1:Y(-1), x2:X(i), y2:Y(3.4), stroke:'var(--grid)'});
+  for (let j = -1; j <= 3.4; j += 0.5) el('line', {x1:X(-3.5), y1:Y(j), x2:X(3.5), y2:Y(j), stroke:'var(--grid)'});
+
+  // columns on arc around player
+  const cols = [];
+  for (let i = 0; i < n; i++) {
+    const t = -span/2 + span*i/(n-1);
+    cols.push({i, t, x:R*Math.sin(t), y:py - R*Math.cos(t), ux:Math.sin(t), uy:-Math.cos(t)}); // u = player->column
+  }
+  const L = cols[0], Rr = cols[n-1], C = cols[n>>1];
+  el('circle', {cx:X(0), cy:Y(by), r:hb*S, fill:'var(--power)', 'fill-opacity':.06, stroke:'var(--power)', 'stroke-dasharray':'6 4'});
+  el('text', {x:X(0)-hb*S+6, y:Y(by)-4, style:'fill:var(--power)'}, 'fall zone ' + hb.toFixed(2) + ' m');
+  el('path', {d:`M${X(L.x)},${Y(L.y)} A${R*S},${R*S} 0 ${span>Math.PI?1:0} 0 ${X(Rr.x)},${Y(Rr.y)}`, fill:'none', stroke:'var(--led)', 'stroke-width':2});
+
+  // parts
+  const tan = c => ({x:Math.cos(c.t), y:Math.sin(c.t)});          // outward-right tangent
+  const left = cols[0], right = cols[n-1];
+  const brain = {x:0, y:-0.2};
+  const hubC  = {x:-0.9, y:-0.2};
+  const away = (c, d) => ({x:c.x + c.ux*(-d), y:c.y + c.uy*(-d)});  // behind column (away from player)
+  const hubL = {x:left.x + left.ux*0.5, y:left.y + left.uy*0.5};
+  const hubR = {x:right.x + right.ux*0.5, y:right.y + right.uy*0.5};
+  const spkL = {x:left.x  - Math.abs(tan(left).x)*0.65,  y:left.y  + tan(left).y*0.65*-1 };
+  const spkR = {x:right.x + Math.abs(tan(right).x)*0.65, y:right.y + tan(right).y*0.65};
+  // radar: next to right column, on the inside, aimed at player
+  const radar = {x:right.x - tan(right).x*0.5 + right.ux*0.0*-1 - right.ux*0.0, y:right.y - tan(right).y*0.5};
+  const aim = Math.atan2(0 - radar.x, py - radar.y), fa = fov/2*Math.PI/180, rr = 3.6;
+  const pt = a => `${X(radar.x + rr*Math.sin(a))},${Y(radar.y + rr*Math.cos(a))}`;
+  el('path', {d:`M${X(radar.x)},${Y(radar.y)} L${pt(aim-fa)} A${rr*S},${rr*S} 0 0 1 ${pt(aim+fa)} Z`, fill:'var(--radar)', 'fill-opacity':.09, stroke:'var(--radar)', 'stroke-dasharray':'4 4'});
+
+  // cables (power)
+  const cable = [];
+  const run = (name, a, b) => { cable.push({name, len:Math.hypot(a.x-b.x, a.y-b.y)});
+    el('line', {x1:X(a.x), y1:Y(a.y), x2:X(b.x), y2:Y(b.y), stroke:'var(--power)', 'stroke-width':1.6, 'stroke-dasharray':name.startsWith('Hub')?'':'5 3'}); };
+  const inner = cols.slice(1, n-1);
+  run('Hub C ⇒ Hub L', hubC, hubL); run('Hub C ⇒ Hub R', hubC, hubR);
+  run('Hub C → Brain', hubC, brain);
+  inner.forEach(c => run('Hub C → column ' + c.i, hubC, c));
+  run('Hub L → column 0', hubL, left); run('Hub L → speaker L', hubL, spkL);
+  run('Hub R → column ' + (n-1), hubR, right); run('Hub R → speaker R', hubR, spkR); run('Hub R → radar', hubR, radar);
+  // hubs flow label
+  el('text', {x:X(hubC.x)-70, y:Y(hubC.y)+52, class:'m'}, 'mains in');
+
+  // columns drawn
+  cols.forEach(c => {
+    el('circle', {cx:X(c.x), cy:Y(c.y), r:9, fill:'var(--led)', stroke:'var(--fg)', 'stroke-width':1.5});
+    el('text', {x:X(c.x)-4, y:Y(c.y)+4, style:'fill:#000;font-weight:600'}, c.i);
+  });
+  // brain, hubs, speakers, radar
+  const box = (p, w, h, fill, label, lx, ly) => { el('rect', {x:X(p.x)-w/2, y:Y(p.y)-h/2, width:w, height:h, rx:4, fill, stroke:'var(--fg)'}); if (label) el('text', {x:X(p.x)+lx, y:Y(p.y)+ly}, label); };
+  box(brain, 30, 20, 'var(--brain)', 'Brain', -16, 26);
+  box(hubC, 56, 24, 'var(--power)', 'Hub C = power source', -70, 38);
+  box(hubL, 24, 18, 'var(--power)', 'Hub L', -20, 22);
+  box(hubR, 24, 18, 'var(--power)', 'Hub R', -14, 22);
+  box(spkL, 16, 36, 'var(--mute)', 'Boom 2 L', -30, -26);
+  box(spkR, 16, 36, 'var(--mute)', 'Boom 2 R', -22, -26);
+  box(radar, 16, 12, 'var(--radar)', 'Radar', -16, -12);
+
+  // bag, player
+  el('circle', {cx:X(0), cy:Y(by), r:14, fill:'var(--bag)', 'fill-opacity':.85, stroke:'var(--fg)'});
+  el('text', {x:X(0)+20, y:Y(by)+4}, 'Bag');
+  el('circle', {cx:X(0), cy:Y(py), r:10, fill:'none', stroke:'var(--fg)', 'stroke-width':2});
+  el('path', {d:`M${X(0)-8},${Y(py)-16} L${X(0)},${Y(py)-30} L${X(0)+8},${Y(py)-16}`, fill:'none', stroke:'var(--fg)', 'stroke-width':2});
+  el('text', {x:X(0)+16, y:Y(py)+4}, 'Player');
+  el('text', {x:X(0)+14, y:Y(by/2)+4, class:'m'}, bc.toFixed(2) + ' m');
+  el('line', {x1:X(0.3), y1:Y(by), x2:X(0.3), y2:Y(py), stroke:'var(--mute)'});
+  el('text', {x:X(0.3)+4, y:Y((by+py)/2)+4, class:'m'}, pd.toFixed(2) + ' m');
+  el('line', {x1:X(0.0), y1:Y(0), x2:X(0.0), y2:Y(by), stroke:'var(--mute)', 'stroke-dasharray':'2 3'});
+  // width dim
+  const wy = -0.85;
+  el('line', {x1:X(L.x), y1:Y(wy), x2:X(Rr.x), y2:Y(wy), stroke:'var(--mute)'});
+  el('text', {x:X(0)-70, y:Y(wy)+16, class:'m'}, `width ${(Rr.x-L.x).toFixed(2)} m (arc ${(R*span).toFixed(2)} m)`);
+
+  // facts
+  const dist = p => Math.hypot(p.x, p.y - by);
+  const inZ = v => v < hb - 1e-6;
+  const chip = (name, p) => { const v = dist(p); return `<li>${name}: <b style="color:${inZ(v)?'var(--power)':'inherit'}">${v.toFixed(2)} m</b> ${inZ(v)?'⚠ inside':'ok'}</li>`; };
+  const vAng = (Math.atan(1.4/R)+Math.atan(1.6/R))*180/Math.PI;
+  const inCone = Math.abs(((Math.atan2(0-radar.x, py-radar.y)-aim+Math.PI*3)%(2*Math.PI))-Math.PI) < fa;
+  const tot = cable.reduce((a,c)=>a+c.len*SLACK,0);
+  $('facts').innerHTML =
+    `<li><b>Player</b></li>` +
+    `<li>Player → bag ${pd.toFixed(2)} m · Player → LEDs ${R.toFixed(2)} m</li>` +
+    `<li>LED field: <b>${spanDeg}°</b> wide × <b>${vAng.toFixed(0)}°</b> tall (3 m strips, eye 1.6 m)</li>` +
+    `<li>Total arc width: <b>${(Rr.x-L.x).toFixed(2)} m</b> straight, ${(R*span).toFixed(2)} m along arc</li>` +
+    `<li>Column spacing: <b>${(sp*100).toFixed(0)} cm</b> straight</li>` +
+    `<li style="margin-top:6px"><b>Fall clearance (radius ${hb.toFixed(2)} m)</b></li>` +
+    chip('Centre column', C) + chip('Edge column', L) + chip('Radar', radar) + chip('Speaker', spkR) + chip('Hub L/R', hubR) + chip('Brain', brain) + chip('Hub C', hubC) +
+    `<li style="margin-top:6px"><b>Radar</b></li>` +
+    `<li>Radar → player: <b>${Math.hypot(radar.x, py-radar.y).toFixed(2)} m</b> · player in field: <b>${inCone?'yes':'NO'}</b></li>` +
+    `<li style="margin-top:6px"><b>Power cables</b> (straight; ×${SLACK} slack)</li>` +
+    cable.map(c => `<li>${c.name}: ${c.len.toFixed(2)} m → <b>${(c.len*SLACK).toFixed(1)} m</b></li>`).join('') +
+    `<li>Total cable: <b>${tot.toFixed(1)} m</b></li>`;
+}
+['pd','bc','h','n','a','fv'].forEach(i => $(i).addEventListener('input', draw));
+draw();
+</script>
+</body>
+</html>
