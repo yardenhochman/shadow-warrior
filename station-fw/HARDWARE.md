@@ -60,7 +60,7 @@ Wiring by net, not by pin order: use single Dupont wires (or reorder the housing
 on the breakout pin with the same label; the header order on the breakout does not matter, only the net.
 SEL does not go through the cable: on each breakout, tie SEL to a pin of the right net with a short jumper
 wire or solder bridge: mic A SEL to its GND (left), mic B SEL to its 3V (right). Check with
-`just direction` that positive angle is toward mic B; if reversed, swap the two SEL ties.
+`just doa` that a clap on the mic B side gives a positive angle; if reversed, swap the two SEL ties.
 
 Mic cable (6 wires, same on both sides): 1 VMIC, 2 GND, 3 BCLK, 4 LRCL, 5 DOUT, 6 GND.
 Twist 2+3 (GND with BCLK) and 5+6 (DOUT with GND); LRCL runs beside them. SEL is wired at the
