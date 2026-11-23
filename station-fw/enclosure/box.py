@@ -28,7 +28,7 @@ MIC_PORT_DX, MIC_PORT_DY = 0.0, -0.7  # PCB port hole (~1.3 mm) is ~0.7 mm from 
 MIC_PORT_D = 2.4  # through-hole diameter (>= the port, keep >= 2 mm)
 GASKET = 1.0  # foam gasket thickness between breakout and front wall
 RADAR_W, RADAR_H = 22.0, 16.0  # LD2410 board; pin header along the bottom (-y) edge
-PB_W, PB_H = 70.0, 50.0  # perfboard (x by y)
+PB_W, PB_H = 70.0, 50.0  # perfboard PY-5CM*7CM, 24 x 18 holes, 4 corner mounting holes about 3 mm in
 PB_HOLE_INSET = 3.0  # corner hole inset on the perfboard (for the posts)
 DEVKIT_L = 55.0  # devkit length, USB end flush with the perfboard right edge
 USB_SLOT_W, USB_SLOT_H = 13.0, 9.0  # cut-out for the plug overmould
@@ -42,7 +42,7 @@ W_IN, H_IN, D_IN = 156.0, 56.0, 32.0  # interior (cavity) size
 POST_D, SCREW_PILOT, SCREW_CLR = 7.0, 2.6, 3.2  # M3 self tapping in the body posts
 LID_T, LIP_H, LIP_T = 2.4, 2.0, 1.2
 STANDOFF_H, STANDOFF_D = 6.0, 5.0  # perfboard standoffs on the lid
-PB_CX = 40.0  # perfboard centre x (offset right so the devkit USB end meets the wall)
+PB_CX = 42.0  # perfboard centre x: its USB-side edge sits 1 mm from the wall (interior half width 78)
 USB_Z_FROM_LID = 19.2  # USB connector centre below the lid face (standoff + headers + pcb)
 
 W, H, D = W_IN + 2 * WALL, H_IN + 2 * WALL, FRONT + D_IN
@@ -109,7 +109,7 @@ def build_lid() -> cq.Workplane:
     lid = lid.union(ring)
     for x, y in corners():
         lid = lid.cut(cyl(SCREW_CLR, LID_T, x, y, 0))
-        cs = cq.Solid.makeCone(SCREW_CLR / 2, 3.2, 1.6, cq.Vector(x, y, LID_T - 1.6), cq.Vector(0, 0, 1))
+        cs = cq.Solid.makeCone(3.2, SCREW_CLR / 2, 1.6, cq.Vector(x, y, 0), cq.Vector(0, 0, 1))  # countersink on the OUTER face (bed side)
         lid = lid.cut(cq.Workplane("XY").add(cs))
     # perfboard standoffs (corner holes) with small pilots for M2 self tapping
     for sx in (-1, 1):
@@ -123,7 +123,16 @@ def build_lid() -> cq.Workplane:
 def main() -> None:
     out = Path(__file__).parent / "out"
     out.mkdir(exist_ok=True)
-    body, lid = build_body(), build_lid()
+    # build_body() puts the USB slot at +x. Seen from the arena (outside the front panel) +x is on the
+    # LEFT, which would put mic A (left channel) on the right. Mirror the body so that, seen from the
+    # front, mic A (SEL = GND, left channel, negative angles) is on the LEFT, mic B on the RIGHT, and the
+    # USB slot is in the RIGHT side wall. Mics are symmetric, so only the USB slot and the perfboard move.
+    body, lid = build_body().mirror("YZ"), build_lid()
+    # The lid is flipped about y when assembled (x -> -x), so standoffs at lid x = +PB_CX land at
+    # body x = -PB_CX: on the same side as the mirrored USB slot (-x wall). Check it.
+    usb_x = -(W / 2)
+    standoff_x_in_body = -PB_CX
+    assert usb_x * standoff_x_in_body > 0, "perfboard standoffs and USB slot are on opposite sides"
     cq.exporters.export(body, str(out / "body.stl"))
     cq.exporters.export(lid, str(out / "lid.stl"))
     cq.exporters.export(body.intersect(box(W, H, FRONT + 5.0)), str(out / "panel_test.stl"))  # fit check: mic seats + radar window
@@ -132,6 +141,7 @@ def main() -> None:
     for name, shape, view in (("front", body, (0, 0, -1)), ("top", body, (0, -1, 0)), ("lid", lid, (0, 0, 1))):
         cq.exporters.export(shape, str(out / f"{name}.svg"), opt={"projectionDir": view, "showHidden": False, "width": 1200, "height": 500})
     bb = body.val().BoundingBox()
+    print(f"USB slot wall x={usb_x:+.1f}; perfboard centre x={standoff_x_in_body:+.1f} (body frame, +x = left seen from the arena)")
     print(f"body {bb.xlen:.1f} x {bb.ylen:.1f} x {bb.zlen:.1f} mm; interior {W_IN} x {H_IN} x {D_IN}")
     print(f"mic centres x = {mic_x[0]:+.1f}, {mic_x[1]:+.1f} (pitch {mic_x[1] - mic_x[0]:.1f}); outputs in {out}")
 
