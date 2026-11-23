@@ -47,7 +47,9 @@ def gnd(x, y, d=1):
 
 def resistor_h(x, y, label, val):
     rect(x, y - 8, 44, 16, "var(--bg)")
-    text(x + 22, y - 13, f"{label} {val}", 11, "middle")
+    text(x + 22, y - 13, label, 11, "middle")
+    if val:
+        text(x + 22, y + 24, val, 10, "middle", GRN)
 
 
 def cap(x, y, d, ref, val, side=1):
@@ -91,7 +93,7 @@ for name, y0 in conns.items():
         text(26, y + 4, pn, 10)
         line(84, y, rails[rn], y, rail_col[rn])
         dot(rails[rn], y, rail_col[rn])
-text(30, 74, "Mics: A has SEL to GND (left), B has SEL to 3V (right); 100 nF 3V/GND at each mic; cables <= 10 cm.", 12, c=GRN)
+text(30, 74, "Mics: A has SEL to GND (left channel), B has SEL to 3V (right channel); cables <= 10 cm. Series resistors on BCLK/LRCL not fitted.", 12, c=GRN)
 
 # rails (vertical)
 top = {"GND": 170, "VMIC": 140, "BCLK": 170, "LRCL": 170, "DOUT": 170}
@@ -105,23 +107,22 @@ text(rails["GND"] + 16, 580, "star GND pad", 10, "middle", GRN)
 # ---- 3V3 filter: devkit 3V3 -> R3 -> VMIC rail ----------------------------------------
 y = left["3V3"]
 poly([(ex0 - 12, y), (404, y)], PWR)
-resistor_h(360, y, "R3", "22 ohm")
+resistor_h(350, y, "R3", "2 x 100 ohm parallel")
 poly([(360, y), (140, y)], PWR)
 dot(140, y, PWR)
 cap(320, y, -1, "C1", "10 uF", -1)
 dot(320, y, PWR)
 cap(270, y, -1, "C2", "100 nF", -1)
 dot(270, y, PWR)
-text(330, 190, "mic supply RC filter, fc ~ 700 Hz", 10, "middle", GRN)
+text(330, 190, "mic supply RC filter (50 ohm + 10 uF), fc ~ 300 Hz", 10, "middle", GRN)
 
 # ---- I2S signals from devkit -----------------------------------------------------------
-for pin, rail, val, ref in (("GPIO33", "DOUT", None, None), ("GPIO25", "LRCL", "33 ohm", "R2"), ("GPIO26", "BCLK", "33 ohm", "R1")):
+for pin, rail, val, ref in (("GPIO33", "DOUT", None, None), ("GPIO25", "LRCL", None, None), ("GPIO26", "BCLK", None, None)):
     y = left[pin]
     x_end = rails[rail]
     poly([(ex0 - 12, y), (x_end, y)], SIG)
     dot(x_end, y, SIG)
-    if val:
-        resistor_h(330, y, ref, val)
+    # no series resistor (not fitted)
 text(ex0 - 20, left["GPIO33"] - 8, "data in (both mics, tri-state)", 10, "end", GRN)
 
 # GND pin of devkit to star pad
@@ -153,7 +154,7 @@ poly([(ex0 - 12, left["5V"]), (400, left["5V"]), (400, yt), (745, yt), (745, py[
 text(570, yt - 8, "5 V (devkit 5V pin) to radar VCC", 10, "middle", PWR)
 cap(600, yt, 1, "C3", "470 uF", 1)
 dot(600, yt, PWR)
-cap(660, yt, 1, "C4", "100 nF", 1)
+cap(660, yt, 1, "C4", "100 nF (optional)", 1)
 dot(660, yt, PWR)
 # radar GND: its own wire to the star pad
 poly([(rx0 - 20, py["GND"]), (725, py["GND"]), (725, 725), (110, 725), (110, 590)], GRN)
