@@ -64,9 +64,9 @@ NET_DESC = {
 }
 
 # ---- devkit (ESP32-DevKitC clone, WROOM-32D, 38 pins, USB at the right) -------------------------
-DK_TOP = "GND 23 22 TX0 RX0 21 GND 19 18 5 17 16 4 0 2 15 D1 D0 CLK".split()  # row 4, cols 6..24
+DK_TOP = "GND 23 22 TX0 RX0 21 GND 19 18 5 17 16 4 0 2 15 D1 D0 CLK".split()  # row 5, cols 6..24
 DK_BOT = "3V3 EN VP VN 34 35 32 33 25 26 27 14 12 GND 13 D2 D3 CMD 5V".split()  # row 15, cols 6..24
-DK_ROW_T, DK_ROW_B, DK_COL0 = 4, 15, 6
+DK_ROW_T, DK_ROW_B, DK_COL0 = 5, 15, 6  # the user's devkit sockets are 10 holes apart (25.4 mm), measured on the real board
 # what the firmware expects (README.md pin table); checked against the devkit lead nets below
 GPIO_EXPECT = {"B:3V3": "3V3", "B:33": "DOUT", "B:25": "LRCL", "B:26": "BCLK", "B:GND": "GND", "B:5V": "5V", "T:16": "RADAR_TX", "T:17": "RADAR_RX"}
 DK_PCB = (5.15, 3.3, 24.85, 15.7)  # devkit PCB outline (50 x 31.5 mm), grid rect
@@ -184,18 +184,18 @@ CONNS: list[Conn] = [
     wire("W9", "GND", [(18, 1), (18, 2), (20, 2)], "R01 down to R02, right to T02 (radar GND to C4)", (19, 2)),
     wire("W10", "GND", [(20, 2), (22, 2)], "T02 right to V02 (C4 to C3 -)", (21, 2)),
     wire("W11", "GND", [(22, 2), (22, 3), (23.5, 3), (23.5, 16), (19, 16)],
-         "V02 down to V03, right to between W and X, down between the header pins W04/X04 and W15/X15, left along row 16 to the star S16", (23.5, 9.5)),
-    wire("W12", "RADAR_RX", [(16, 1), (16, 4)], "straight down column P (J2 RX to GPIO17)"),
-    wire("W13", "RADAR_TX", [(15, 1), (15, 2.5), (17, 2.5), (17, 4)], "O01 down, right between rows 2 and 3 (crosses W12), down into Q04 (J2 TX to GPIO16)"),
+         "V02 down to V03, right to between W and X, down between the header pins W05/X05 and W15/X15, left along row 16 to the star S16", (23.5, 9.5)),
+    wire("W12", "RADAR_RX", [(16, 1), (16, 5)], "straight down column P (J2 RX to GPIO17)"),
+    wire("W13", "RADAR_TX", [(15, 1), (15, 2.5), (17, 2.5), (17, 5)], "O01 down, right between rows 2 and 3 (crosses W12), down into Q05 (J2 TX to GPIO16)"),
 ]
 
 # ---- build steps: (title, parts, connections, instructions, beep pairs, must-not-beep pairs) ----------------------
 STEPS = [
     ("Devkit sockets", ["X1", "X2"], [],
-     "Plug both 19-pin female headers onto the devkit, put them through rows 04 and 15, columns F..X "
-     "(F04 and F15 are pin 1 at the antenna end, X04/X15 at the USB end). Check from the component side that the "
+     "Plug both 19-pin female headers onto the devkit, put them through rows 05 and 15, columns F..X "
+     "(F05 and F15 are pin 1 at the antenna end, X05/X15 at the USB end). Check from the component side that the "
      "USB end is toward column X. Solder the four end pins, unplug the devkit (heat), then solder the rest.",
-     [], [((19, 15), (18, 15)), ((19, 15), (20, 15)), ((24, 15), (23, 15)), ((6, 15), (7, 15)), ((16, 4), (17, 4))]),
+     [], [((19, 15), (18, 15)), ((19, 15), (20, 15)), ((24, 15), (23, 15)), ((6, 15), (7, 15)), ((16, 5), (17, 5))]),
     ("Star ground", [], ["bridge:GND:(19, 15)", "bridge:GND:(19, 16)"],
      "Solder blobs S15-S16 and S16-S17. S16 is the star: later W4 (mics) and W11 (radar) end here. Keep R16/T16 clean.",
      [((19, 15), (19, 17))], [((19, 16), (18, 15)), ((19, 16), (20, 15)), ((19, 16), (18, 16)), ((19, 16), (20, 16))]),
@@ -221,9 +221,9 @@ STEPS = [
      [((24, 15), (19, 1)), ((24, 15), (22, 1)), ((18, 1), (19, 16)), ((22, 2), (19, 15))],
      [((19, 1), (18, 1)), ((20, 1), (20, 2)), ((22, 1), (22, 2)), ((24, 15), (19, 15))]),
     ("Radar UART", [], ["W12", "W13"],
-     "W12 P01 to P04 (J2 RX to GPIO17), W13 O01 to Q04 (J2 TX to GPIO16). They cross once: both insulated.",
-     [((16, 1), (16, 4)), ((15, 1), (17, 4))],
-     [((15, 1), (16, 1)), ((16, 1), (17, 1)), ((16, 4), (17, 4)), ((15, 1), (16, 4))]),
+     "W12 P01 to P05 (J2 RX to GPIO17), W13 O01 to Q05 (J2 TX to GPIO16). They cross once: both insulated.",
+     [((16, 1), (16, 5)), ((15, 1), (17, 5))],
+     [((15, 1), (16, 1)), ((16, 1), (17, 1)), ((16, 5), (17, 5)), ((15, 1), (16, 5))]),
 ]
 FINAL_ISOLATION = [  # power nets pairwise, devkit NOT plugged in, no mics/radar
     ("3V3", (6, 15), "GND", (19, 15), "open (no beep)"),
@@ -237,9 +237,9 @@ FINAL_ISOLATION = [  # power nets pairwise, devkit NOT plugged in, no mics/radar
     ("DOUT", (13, 15), "GND", (19, 15), "open"),
     ("BCLK", (15, 15), "LRCL", (14, 15), "open"),
     ("LRCL", (14, 15), "DOUT", (13, 15), "open"),
-    ("RADAR_TX", (17, 4), "RADAR_RX", (16, 4), "open"),
-    ("RADAR_TX", (17, 4), "GND", (19, 15), "open"),
-    ("RADAR_RX", (16, 4), "5V", (24, 15), "open"),
+    ("RADAR_TX", (17, 5), "RADAR_RX", (16, 5), "open"),
+    ("RADAR_TX", (17, 5), "GND", (19, 15), "open"),
+    ("RADAR_RX", (16, 5), "5V", (24, 15), "open"),
 ]
 
 
@@ -350,8 +350,8 @@ def validate():
     used_dk = {f"{pin[0]}:{dk.pin_names[pin]}" for pin, n in dk.nets.items() if n}
     if used_dk != set(GPIO_EXPECT):
         rep.err(f"devkit pins used {sorted(used_dk)} != expected {sorted(GPIO_EXPECT)}")
-    if dk.leads["B8"] != (13, 15) or dk.leads["T12"] != (17, 4) or dk.leads["B19"] != (24, 15):
-        rep.err("devkit pin positions moved (GPIO33 must be M15, GPIO16 Q04, 5V X15)")
+    if dk.leads["B8"] != (13, 15) or dk.leads["T12"] != (17, 5) or dk.leads["B19"] != (24, 15):
+        rep.err("devkit pin positions moved (GPIO33 must be M15, GPIO16 Q05, 5V X15)")
 
     # connections
     uf: dict[Hole, Hole] = {}
@@ -645,7 +645,7 @@ def render(info) -> str:
     sv.text(gx(DK_ANT[2]) - 6, gy(9.5), "WROOM antenna overhang", 9, "middle", "#0f766e", rot=-90, halo=True)
     sv.text(gx(15), gy(8.5) + 4, "U1  ESP32-DevKitC (WROOM-32D) on two 19-pin female sockets", 12, "middle", "#0f766e", bold=True, halo=True)
     sv.text(gx(15), gy(9.5) + 4, "antenna end at the left (over the keep-out), micro-USB at the right (column X)", 10, "middle", "#0f766e", halo=True)
-    sv.text(gx(15), gy(10.5) + 4, "rows 05-14 under the devkit stay empty (low parts up to 6 mm would fit)", 10, "middle", "#0f766e", italic=True, halo=True)
+    sv.text(gx(15), gy(10) + 4, "rows 06-14 under the devkit stay empty (low parts up to 6 mm would fit)", 10, "middle", "#0f766e", italic=True, halo=True)
     sv.text(gx(25.55), gy(9.5), "USB end", 10, "middle", "#0f766e", bold=True, rot=-90, halo=True)
 
     # devkit pin names (vertical, into the devkit area)
@@ -788,7 +788,7 @@ def render(info) -> str:
     y += 18
     key = [
         "3V3 F15, IO33 M15, IO25 N15, IO26 O15",
-        "GND S15, 5V X15, IO17 P04, IO16 Q04",
+        "GND S15, 5V X15, IO17 P05, IO16 Q05",
         "S16 = star: W4 (mics), W11 (radar), devkit GND",
         "C1: + T18, - T17.   C3: + V01, - V02",
     ]
@@ -875,14 +875,14 @@ def render_md(rep: Report, info) -> str:
     a("  30 AWG wire-wrap (or thin hookup) wire, stripped 2-3 mm at each end. GND: the two GND rails (L2, and the")
     a("  bridges S15-S16-S17) are bare; every longer GND run (W3, W4, W9, W10, W11) is insulated.")
     a("- Antenna keep-out: columns A-E, rows 03-16 stay empty (the WROOM antenna overhangs there).")
-    a("- Nothing is under the devkit (rows 05-14). Tall parts (C1, C3, headers) are only in rows 01-02 and 17-18.")
+    a("- Nothing is under the devkit (rows 06-14). Tall parts (C1, C3, headers) are only in rows 01-02 and 17-18.")
     a("")
     a("## Bill of materials")
     a("")
     a("| Ref | Part | Value / type | Holes | Height |")
     a("|---|---|---|---|---|")
-    a("| U1 | ESP32-DevKitC clone, WROOM-32D, 38 pin, micro-USB | plugs into X1/X2 | rows 04 and 15, F..X | - |")
-    a("| X1, X2 | 1x19 female header (2.54 mm) | devkit sockets, 11 holes apart (27.94 mm) | F04..X04, F15..X15 | 8.5 mm |")
+    a("| U1 | ESP32-DevKitC clone, WROOM-32D, 38 pin, micro-USB | plugs into X1/X2 | rows 05 and 15, F..X | - |")
+    a("| X1, X2 | 1x19 female header (2.54 mm) | devkit sockets, 10 holes apart (25.4 mm) | F05..X05, F15..X15 | 8.5 mm |")
     for p in PARTS[1:]:
         holes = ", ".join(f"{pin}={hole(*h)}" for pin, h in p.leads.items()) if p.ref != "J1" else "L17..Q18"
         kind = {"resistor": "resistor 1/4 W, lying flat, leads 4 holes apart (10.16 mm)", "ceramic": "ceramic, 2.54 mm leads", "electrolytic": "electrolytic, radial",
