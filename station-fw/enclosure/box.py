@@ -5,7 +5,7 @@
 # ///
 """Parametric enclosure for the sensor station (front shell + back lid).
 
-    uv run enclosure/box.py            # writes enclosure/out/{body,lid}.stl, station.step, *.svg
+    uv run enclosure/box.py            # writes enclosure/out/{body,lid,panel_test}.stl, station.step, *.svg
 
 Coordinates: x = width (mic A at -x, mic B at +x), y = height, z = depth.
 z = 0 is the OUTSIDE of the front panel (faces the arena); the cavity opens at z = D
@@ -35,7 +35,8 @@ USB_SLOT_W, USB_SLOT_H = 13.0, 9.0  # cut-out for the plug overmould
 
 # ---- box ----------------------------------------------------------------------------
 WALL = 2.4  # side walls
-FRONT = 2.0  # front panel thickness (mic holes go through this)
+FRONT = 3.0  # front panel thickness (mic holes go through this)
+FOAM_D, FOAM_T = 12.0, 1.5  # recess on the outside of each mic hole for a foam windscreen disc
 RADAR_WINDOW = 1.2  # front panel thickness over the radar antenna
 W_IN, H_IN, D_IN = 156.0, 56.0, 32.0  # interior (cavity) size
 POST_D, SCREW_PILOT, SCREW_CLR = 7.0, 2.6, 3.2  # M3 self tapping in the body posts
@@ -80,8 +81,7 @@ def build_body() -> cq.Workplane:
         body = body.union(frame)
         px, py = x + MIC_PORT_DX, MIC_PORT_DY
         body = body.cut(cyl(MIC_PORT_D, FRONT + 1, px, py, -0.5))
-        cone = cq.Solid.makeCone(3.2, MIC_PORT_D / 2, 1.0, cq.Vector(px, py, 0), cq.Vector(0, 0, 1))
-        body = body.cut(cq.Workplane("XY").add(cone))
+        body = body.cut(cyl(FOAM_D, FOAM_T, px, py, -0.01))  # foam windscreen pocket
 
     # radar seat: thin window in the front panel, frame with a notch for the header edge
     win = box(RADAR_W - 2, RADAR_H - 2, FRONT - RADAR_WINDOW + 0.01, 0, 0, RADAR_WINDOW)
@@ -126,6 +126,7 @@ def main() -> None:
     body, lid = build_body(), build_lid()
     cq.exporters.export(body, str(out / "body.stl"))
     cq.exporters.export(lid, str(out / "lid.stl"))
+    cq.exporters.export(body.intersect(box(W, H, FRONT + 5.0)), str(out / "panel_test.stl"))  # fit check: mic seats + radar window
     asm = body.union(lid.rotate((0, 0, 0), (0, 1, 0), 180).translate((0, 0, D + LID_T)))
     cq.exporters.export(asm, str(out / "station.step"))
     for name, shape, view in (("front", body, (0, 0, -1)), ("top", body, (0, -1, 0)), ("lid", lid, (0, 0, 1))):
