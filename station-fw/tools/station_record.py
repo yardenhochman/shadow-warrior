@@ -25,6 +25,7 @@ gap is filled with silence so the WAV stays in real time; the count is reported.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import datetime as dt
 import json
 import re
@@ -81,6 +82,7 @@ class Recorder:
         self.station_log: list[str] = []
         self.kinds: dict[str, int] = {}
         self.arrivals: list[tuple[float, int]] = []  # (host time, frames so far) per chunk
+        self.events: list[dict] = []  # Radar and Direction frames stamped with the audio clock (seconds)
 
     def run(self) -> None:
         def src():
@@ -105,6 +107,10 @@ class Recorder:
                 self.hello = msg
             elif isinstance(msg, sm.AudioChunk):
                 self.audio(msg)
+            elif type(msg).__name__ in ("Radar", "Direction") and self.t_first is not None:
+                with self.lock:
+                    t = len(self.pcm) // 4 / self.rate  # position of the audio stream when it arrived
+                self.events.append({"t": round(t, 3), "type": type(msg).__name__.lower(), **dataclasses.asdict(msg)})
             if self.t_first is not None:
                 k = type(msg).__name__.lower()
                 self.kinds[k] = self.kinds.get(k, 0) + 1
@@ -245,6 +251,10 @@ def main() -> int:
         rate = rec.rate
     write_wav(path, x, rate)
     extra = []
+    if rec.events:
+        ev = path.with_suffix(".events.jsonl")
+        ev.write_text("".join(json.dumps(e) + "\n" for e in rec.events))
+        extra.append(ev)
     if a.mono:
         p = path.with_name(path.stem + "_mono.wav")
         write_wav(p, ((x[:, 0].astype(np.int32) + x[:, 1]) // 2).astype(np.int16), rate)
