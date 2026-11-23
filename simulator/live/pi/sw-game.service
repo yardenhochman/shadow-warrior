@@ -1,0 +1,17 @@
+[Unit]
+Description=Shadow Warrior game (headless Chromium, kiosk page)
+After=sw-bridge.service pipewire-pulse.service
+Requires=sw-bridge.service
+
+[Service]
+ExecStartPre=/bin/sh -c 'until curl -sf http://127.0.0.1:8090/live/status >/dev/null; do sleep 1; done'
+ExecStart=/usr/bin/chromium --headless=new --user-data-dir=%h/.cache/sw-chromium --remote-debugging-port=9333 \
+  --autoplay-policy=no-user-gesture-required --use-fake-ui-for-media-stream --no-first-run \
+  --disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows \
+  --disable-features=CalculateNativeWinOcclusion,IntensiveWakeUpThrottling --window-size=1280,800 \
+  http://127.0.0.1:8090/simulator/web/index.html?live=1&kiosk=1
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

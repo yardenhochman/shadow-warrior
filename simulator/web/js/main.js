@@ -218,6 +218,9 @@ document.querySelectorAll('#brainStates button').forEach((b) => { b.onclick = ()
 
 // ------------------------------------------------------------------ punches
 let pendingHit = null;
+// Pi kiosk (?kiosk): nobody clicks this page. The mic starts by itself when the Pi has one; with no mic,
+// a punch while WARMING also counts as a shout (energy 10-20 per punch, so 5-10 punches wake the shadow).
+const KIOSK = new URLSearchParams(location.search).has('kiosk');
 function punch(power, info) {
   sfx.ensure();
   power = Math.max(1, Math.min(100, power));
@@ -228,6 +231,9 @@ function punch(power, info) {
     return;
   }
   bus.publish({ type: 'PunchDetected', power });
+  if (KIOSK && !feats.micActive && sm.currentState === S.Warming) {
+    bus.publish({ type: 'ShoutDetected', intensity: 1 + power / 100, duration_sec: 0.4, level_db: 0 });
+  }
   landPunch(power, info, sm.currentState);
 }
 
@@ -915,3 +921,8 @@ window.sim = {
   get cfg() { return cfg; }, get errors() { return errors; }, get lastFeat() { return lastFeat; }, get detector() { return detector; },
   rig, scene, hitPicker, punch: (p) => punch(p), previewStage, setOverride, setFxParam, nextRound, setSensor, get live() { return live; }, get brain() { return brain; }, brainFrame, shoutDown, shoutUp, shoutFor: (ms) => feats.pulse(ms), skip: (sec) => { simNow += sec; presence.tick(simNow, sensorOn); arena.tick(simNow); }, arena, presence, sm,
 };
+
+if (KIOSK && !BRAIN) {
+  log('Kiosk mode: starting the mic; without one, punches in WARMING count as shouts', 'presence');
+  $('micBtn').onclick();
+}

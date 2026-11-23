@@ -1,0 +1,25 @@
+#!/bin/bash
+# Shadow Warrior on the installation Pi.
+#   sw status | start | stop | restart | log | pair-speaker | test-punch [power]
+ENV="$HOME/.config/shadow-warrior/pi.env"
+U="systemctl --user"
+case "${1:-status}" in
+  start)   $U start sw-bridge sw-game ;;
+  stop)    $U stop sw-game sw-bridge ;;
+  restart) $U restart sw-bridge sw-game ;;
+  log)     journalctl --user -u sw-bridge -u sw-game -u sw-speaker -n 80 -f ;;
+  test-punch) curl -s -X POST "http://127.0.0.1:8090/live/punch?power=${2:-70}"; echo ;;
+  pair-speaker)
+    echo "Put the speaker in pairing mode, scanning 20 s..."
+    bluetoothctl --timeout 20 scan on >/dev/null
+    MAC=$(bluetoothctl devices | grep -i -E "soundcore|boom" | head -1 | awk '{print $2}')
+    [ -n "$MAC" ] || { echo "no Soundcore speaker found"; exit 1; }
+    bluetoothctl pair "$MAC"; bluetoothctl trust "$MAC"; bluetoothctl connect "$MAC"
+    sed -i "s/^SPEAKER_MAC=.*/SPEAKER_MAC=$MAC/" "$ENV"; $U restart sw-speaker
+    echo "speaker $MAC saved" ;;
+  status|*)
+    for s in sw-bridge sw-game sw-speaker; do printf '%-11s %s\n' "$s" "$($U is-active $s)"; done
+    curl -s http://127.0.0.1:8090/live/status | python3 -c 'import json,sys; d=json.load(sys.stdin); w,b=d["wled"],d["bag"]; print(f"strip  {w[\"host\"]} {\"streaming\" if w[\"streaming\"] else \"idle\"} {w[\"fps\"]} fps"); print(f"bag    {b[\"state\"]} {b.get(\"detail\",\"\")}  punches {b[\"punches\"]}"); print(f"pages  {d[\"clients\"]}")' 2>/dev/null || echo "bridge not answering"
+    . "$ENV" 2>/dev/null; [ -n "$SPEAKER_MAC" ] && echo "speaker $(bluetoothctl info "$SPEAKER_MAC" | grep -o 'Connected: .*')" || echo "speaker not paired (sw pair-speaker)"
+    echo "audio  $(pactl get-default-sink 2>/dev/null)" ;;
+esac

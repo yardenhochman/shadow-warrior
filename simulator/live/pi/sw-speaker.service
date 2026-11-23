@@ -1,0 +1,11 @@
+[Unit]
+Description=Shadow Warrior: keep the Bluetooth speaker connected
+After=bluetooth.target wireplumber.service
+
+[Service]
+EnvironmentFile=%h/.config/shadow-warrior/pi.env
+ExecStart=/bin/sh -c 'while true; do if [ -n "$SPEAKER_MAC" ] && ! bluetoothctl info "$SPEAKER_MAC" | grep -q "Connected: yes"; then bluetoothctl connect "$SPEAKER_MAC" >/dev/null 2>&1; fi; sleep 10; done'
+Restart=always
+
+[Install]
+WantedBy=default.target

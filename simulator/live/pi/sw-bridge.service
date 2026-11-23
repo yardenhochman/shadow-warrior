@@ -1,0 +1,13 @@
+[Unit]
+Description=Shadow Warrior bridge (strip, bag, web on :8090)
+After=network-online.target
+
+[Service]
+EnvironmentFile=%h/.config/shadow-warrior/pi.env
+# No strip on the network: run without it (the game still plays); `sw restart` once the strip is on.
+ExecStart=/bin/sh -c 'W=; getent hosts "$WLED_HOST" >/dev/null && W="--wled $WLED_HOST"; exec %h/.local/bin/uv run --quiet --script %h/shadow-warrior/simulator/live/bridge.py --host 0.0.0.0 $$W'
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target
