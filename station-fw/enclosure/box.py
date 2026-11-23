@@ -43,7 +43,7 @@ POST_D, SCREW_PILOT, SCREW_CLR = 7.0, 2.6, 3.2  # M3 self tapping in the body po
 LID_T, LIP_H, LIP_T = 2.4, 2.0, 1.2
 STANDOFF_H, STANDOFF_D = 6.0, 5.0  # perfboard standoffs on the lid
 PB_CX = 42.0  # perfboard centre x: its USB-side edge sits 1 mm from the wall (interior half width 78)
-USB_Z_FROM_LID = 19.2  # USB connector centre below the lid face (standoff + headers + pcb)
+USB_Z_FROM_LID = 18.7  # USB centre below the lid face: standoff 6 + perfboard 1.6 + female header 8.0 (measured) + devkit pcb 1.6 + half the connector 1.5
 
 W, H, D = W_IN + 2 * WALL, H_IN + 2 * WALL, FRONT + D_IN
 FIT = 0.2  # printing clearance per side

@@ -110,7 +110,7 @@ Outside size about 161 x 61 x 34 mm; interior 156 x 56 x 32. Mic hole centres at
 +65 mm (130.0 mm pitch), radar window at the centre, USB slot in the +x wall, four M3 corner posts.
 
 - The values marked MEASURE at the top of `box.py` are assumptions (mic board 17 x 12.5 mm (photo estimate 16.5 x 12),
-  radar 22 x 16 mm, port at the board centre, USB slot 13 x 9 mm, perfboard corner holes 3 mm in).
+  radar 22 x 16 mm, port at the board centre, USB slot 13 x 9 mm (centre 18.7 mm below the lid face, 8 mm female headers), perfboard corner holes 3 mm in).
   Measure your parts and edit them before printing; reprint a test panel first.
 - Print the shell front-face-down and the lid plate-down. PLA or PETG, 0.2 mm layers, no supports.
 - Mics: glue each breakout face-down in its frame on the inside of the front panel, a 1 mm foam
