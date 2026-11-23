@@ -19,7 +19,7 @@ No GPIO wiring: the Pi talks to everything over the air.
 
 | Part | Connection |
 |---|---|
-| Pi 4 | SD card in, USB-C power (5 V 3 A). Joins the home Wi-Fi from the card. |
+| Pi 3 | SD card in, micro-USB power (5 V 2.5 A). Joins the home Wi-Fi from the card. |
 | LED strip | On its WLED controller (`wled-sw`, 192.168.1.203), controller on USB-C power. The Pi sends UDP. |
 | Bag sensor (XIAO nRF52840 Sense) | Any USB power; BLE `ShadowWarriorPunchingBag`. A charge-only cable is enough here (data is only for flashing). |
 | Speaker | Bluetooth: `sw pair-speaker` with the speaker in pairing mode, once. `sw-speaker` reconnects it. |
@@ -43,3 +43,8 @@ Punch POST → LED frame out of the bridge: median 22 ms (6–58 ms; the page st
 ~34 ms. Not yet measured on the Pi. On top: the bag samples at 10 Hz with an EMA (`punching_bag.ino`,
 `delay(100)`), so 0–100 ms before a punch is even seen, plus the BLE interval; Bluetooth speakers add
 roughly 150–250 ms, so the sound lands after the light.
+
+## Pi 3 caveats
+
+1 GB RAM and one combined Wi-Fi/Bluetooth chip: headless Chromium renders the whole sim page, and BLE (bag) +
+A2DP (speaker) + Wi-Fi (strip) share one radio, which can stutter the sound. Measure on the Pi before trusting it.
