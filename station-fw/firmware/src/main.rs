@@ -18,7 +18,10 @@
 //!   radar is logged and retried; it never stops the station.
 //! - main: periodic `Hello` and diagnostics.
 
+mod net;
+
 use std::io::Write as _;
+use std::net::UdpSocket;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -111,6 +114,8 @@ struct FrameTx {
     sent: u32,
     /// Set once the UART0 driver is installed; before that frames go through stdout.
     driver: bool,
+    /// Connected UDP socket to the brain while Wi-Fi is up.
+    udp: Option<UdpSocket>,
 }
 
 impl FrameTx {
@@ -126,21 +131,38 @@ impl FrameTx {
                 return false;
             }
         };
+        // Wi-Fi first (never blocks: the socket is non-blocking), then the USB serial link.
+        let mut udp_ok = false;
+        if let Some(s) = &self.udp {
+            match s.send(&buf[..n]) {
+                Ok(_) => {
+                    udp_ok = true;
+                    net::UDP_SENT.fetch_add(1, Ordering::Relaxed);
+                }
+                Err(_) => {
+                    net::UDP_DROPPED.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
+        let mut serial_ok = true;
         if self.driver {
             if droppable {
                 let mut free = 0usize;
                 // SAFETY: driver installed on CONSOLE_UART; `free` is a valid out pointer.
                 let rc = unsafe { sys::uart_get_tx_buffer_free_size(CONSOLE_UART, &mut free) };
-                if rc != sys::ESP_OK || free < n {
-                    return false;
-                }
+                serial_ok = rc == sys::ESP_OK && free >= n;
             }
-            // SAFETY: buf[..n] is initialised; the driver copies it into its ring.
-            unsafe { sys::uart_write_bytes(CONSOLE_UART, buf.as_ptr().cast(), n) };
+            if serial_ok {
+                // SAFETY: buf[..n] is initialised; the driver copies it into its ring.
+                unsafe { sys::uart_write_bytes(CONSOLE_UART, buf.as_ptr().cast(), n) };
+            }
         } else {
             let mut out = std::io::stdout().lock();
             let _ = out.write_all(&buf[..n]);
             let _ = out.flush();
+        }
+        if droppable && !serial_ok && !udp_ok {
+            return false;
         }
         self.seq = self.seq.wrapping_add(1);
         self.sent = self.sent.wrapping_add(1);
@@ -272,7 +294,7 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    let tx: Tx = Arc::new(Mutex::new(FrameTx { seq: 0, sent: 0, driver: false }));
+    let tx: Tx = Arc::new(Mutex::new(FrameTx { seq: 0, sent: 0, driver: false, udp: None }));
     match install_console_driver() {
         Ok(()) => tx.lock().unwrap_or_else(|p| p.into_inner()).driver = true,
         Err(e) => warn!("console: UART0 driver install failed ({e}); no host commands, no raw audio"),
@@ -348,6 +370,33 @@ fn main() -> anyhow::Result<()> {
             .spawn(move || radar_task(uart, out_pin, tx, shared, id))?;
     }
 
+    // --- Wi-Fi: UDP frames to the brain, commands on UDP 4211 (off without an SSID) ---
+    match (esp_idf_svc::eventloop::EspSystemEventLoop::take(), esp_idf_svc::nvs::EspDefaultNvsPartition::take()) {
+        (Ok(sysloop), Ok(nvs)) => {
+            if let Some(cfg) = net::load_cfg(&nvs) {
+                let txp = tx.clone();
+                let started = net::spawn(p.modem, sysloop, nvs, cfg, move |sock| {
+                    txp.lock().unwrap_or_else(|e| e.into_inner()).udp = sock;
+                });
+                match started {
+                    Ok(()) => {
+                        let sh = shared.clone();
+                        let mut warned = false;
+                        if let Err(e) = net::spawn_cmd_rx(move |f| {
+                            if let Ok(env) = decode_command(f) {
+                                handle_command(&env, &sh, None, &mut warned);
+                            }
+                        }) {
+                            warn!("net: command port failed: {e}");
+                        }
+                    }
+                    Err(e) => warn!("net: Wi-Fi start failed: {e}; USB only"),
+                }
+            }
+        }
+        (a, b) => warn!("net: event loop/NVS unavailable ({:?}, {:?}); USB only", a.err(), b.err()),
+    }
+
     // --- main: self test, hello + diagnostics ---
     let mut last_selftest = String::new();
     run_selftest(&shared, &mut last_selftest, true);
@@ -385,6 +434,14 @@ fn main() -> anyhow::Result<()> {
                 shared.cmds_ok.load(Ordering::Relaxed),
             );
         }
+        info!(
+            "net: {} rssi {} dBm udp_sent={} udp_dropped={} connects={}",
+            if net::UP.load(Ordering::Relaxed) { "up" } else { "down" },
+            net::RSSI.load(Ordering::Relaxed),
+            net::UDP_SENT.load(Ordering::Relaxed),
+            net::UDP_DROPPED.load(Ordering::Relaxed),
+            net::CONNECTS.load(Ordering::Relaxed),
+        );
         info!(
             "stats: frames_sent={sent} radar_frames={} i2s_reads={} i2s_errors={} i2s_rate={:.0}/s \
              doa {dirs}/{doa_frames} frames, {}us avg {us_max}us max, cpu {:.1}% heap_free={} heap_min={}",
@@ -671,6 +728,35 @@ impl RawStream {
     }
 }
 
+/// Apply one decoded host command. `via_uart` commands are checked against the console baud
+/// (raw audio does not fit 115200); UDP commands are not.
+fn handle_command(env: &station_proto::CommandEnvelope, shared: &Shared, uart_baud: Option<u32>, warned_baud: &mut bool) {
+    shared.cmds_ok.fetch_add(1, Ordering::Relaxed);
+    match env.cmd {
+        Command::StartAudio if uart_baud.is_some_and(|b| b < MIN_STREAM_BAUD) => {
+            if !*warned_baud {
+                *warned_baud = true;
+                warn!(
+                    "stream: StartAudio ignored, console is {} baud; build with STATION_BAUD=921600",
+                    uart_baud.unwrap_or(0)
+                );
+            }
+        }
+        Command::StartAudio => {
+            let st = &shared.stream;
+            st.until_ms.store(now_ms().wrapping_add(AUDIO_KEEPALIVE_MS), Ordering::Relaxed);
+            if !st.on.swap(true, Ordering::Relaxed) {
+                info!("stream: StartAudio (cmd seq {})", env.seq);
+            }
+        }
+        Command::StopAudio => {
+            if shared.stream.on.swap(false, Ordering::Relaxed) {
+                info!("stream: StopAudio (cmd seq {})", env.seq);
+            }
+        }
+    }
+}
+
 /// Host commands on UART0 RX: `0x00 COBS(CommandEnvelope ++ crc) 0x00`. Anything else
 /// (stray keystrokes from a terminal) is ignored.
 fn cmd_task(shared: Arc<Shared>, baud: u32) {
@@ -698,27 +784,7 @@ fn cmd_task(shared: Arc<Shared>, baud: u32) {
             let cmd = if ok { decode_command(&frame).ok() } else { None };
             frame.clear();
             let Some(env) = cmd else { continue };
-            shared.cmds_ok.fetch_add(1, Ordering::Relaxed);
-            match env.cmd {
-                Command::StartAudio if baud < MIN_STREAM_BAUD => {
-                    if !warned_baud {
-                        warned_baud = true;
-                        warn!("stream: StartAudio ignored, console is {baud} baud; build with STATION_BAUD=921600");
-                    }
-                }
-                Command::StartAudio => {
-                    let st = &shared.stream;
-                    st.until_ms.store(now_ms().wrapping_add(AUDIO_KEEPALIVE_MS), Ordering::Relaxed);
-                    if !st.on.swap(true, Ordering::Relaxed) {
-                        info!("stream: StartAudio (cmd seq {})", env.seq);
-                    }
-                }
-                Command::StopAudio => {
-                    if shared.stream.on.swap(false, Ordering::Relaxed) {
-                        info!("stream: StopAudio (cmd seq {})", env.seq);
-                    }
-                }
-            }
+            handle_command(&env, &shared, Some(baud), &mut warned_baud);
         }
     }
 }

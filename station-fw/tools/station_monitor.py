@@ -326,6 +326,16 @@ def file_source(path: str) -> Iterator[bytes]:
             yield data
 
 
+def udp_source(port: int) -> Iterator[bytes]:
+    """Datagrams from the station over Wi-Fi: each one is a whole `0x00 COBS 0x00` frame."""
+    import socket
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(("0.0.0.0", port))
+    while True:
+        yield sock.recv(4096)
+
+
 def pick_port() -> str:
     from serial.tools import list_ports
 
@@ -342,6 +352,7 @@ def main() -> None:
     ap.add_argument("-p", "--port", help="serial port (default: first USB serial)")
     ap.add_argument("-b", "--baud", type=int, default=115200)
     ap.add_argument("--file", help="decode a raw capture instead of a port")
+    ap.add_argument("--udp", type=int, metavar="PORT", help="listen for station frames over Wi-Fi on this UDP port (default station target 4210)")
     ap.add_argument("--save", help="also write raw bytes to this file")
     ap.add_argument("--json", action="store_true", help="print frames as JSON lines")
     ap.add_argument(
@@ -354,7 +365,7 @@ def main() -> None:
     csv_kind = "direction" if args.only == "direction" else "audio"
 
     save = open(args.save, "ab") if args.save else None
-    src = file_source(args.file) if args.file else serial_source(args.port or pick_port(), args.baud, save)
+    src = udp_source(args.udp) if args.udp else file_source(args.file) if args.file else serial_source(args.port or pick_port(), args.baud, save)
     csv_w = None
     if args.csv:
         f = open(args.csv, "a", newline="")
