@@ -129,10 +129,32 @@ async fn main() -> Result<()> {
     let _speaker = services::speaker_manager::spawn(config.speaker.clone(), event_bus.clone());
     // A missing/unsupported microphone must not take the whole brain down
     // (BLE, LEDs, plugs still work); report it through the health registry.
-    if let Err(e) = audio_manager.start().await {
+    let station_audio = config.station.enabled && config.station.stream_audio;
+    if station_audio {
+        // The station's raw stream replaces the local microphone.
+        audio_manager.attach_external("sensor station", services::station_manager::AUDIO_RATE).await;
+    } else if let Err(e) = audio_manager.start().await {
         tracing::error!("Audio manager failed to start, continuing without audio input: {e:#}");
         event_bus.publish(core::Event::AudioError { error: format!("start: {e:#}") });
     }
+    let _station = if config.station.enabled {
+        match services::station_manager::spawn(
+            config.station.clone(),
+            event_bus.clone(),
+            station_audio.then(|| audio_manager.clone()),
+        )
+        .await
+        {
+            Ok(h) => Some(h),
+            Err(e) => {
+                tracing::error!("Station link failed to start: {e:#}");
+                event_bus.publish(core::Event::StationError { error: format!("start: {e:#}") });
+                None
+            }
+        }
+    } else {
+        None
+    };
     audio_manager.clone().start_shout_clip_trigger();
     let presence_manual = if config.presence.enabled {
         let svc = Arc::new(services::presence::PresenceService::new(

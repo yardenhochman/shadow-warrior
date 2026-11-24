@@ -88,6 +88,8 @@ music:
 LED modes per arena state (idle/cooldown built-in effects, warming/fight UDP realtime): see
 [docs/LEDS.md](docs/LEDS.md).
 
+Sensor station (radar presence, remote microphones, levels): see [docs/STATION.md](docs/STATION.md).
+
 A WLED controller `ip` may carry an HTTP port (`"192.168.1.5:8090"`); realtime UDP still goes
 to that host's port 21324. The browser simulator's bridge uses this to stand in for WLED
 (see `simulator/web/README.md`, "Brain mode"). Any key can be overridden from the environment
@@ -198,6 +200,8 @@ The same three libraries are needed **for the target architecture** (e.g. `libdb
 just image       # build the podman image once
 just build-arm64   # aarch64
 ```
+
+The container mounts the repository root (not just `brain-rs/`) because `station-proto` is a path dependency in `../station-fw`.
 
 `Cross.toml` holds the equivalent package list for [`cross`](https://github.com/cross-rs/cross) (`cross build --target <triple>`).
 

@@ -45,6 +45,11 @@ futures = "0.3"
 rand = "0.8"
 libc = "0.2"
 
+# Sensor station wire protocol (no_std crate, std feature) and its USB serial link.
+# serialport without default features: no libudev, so the aarch64 cross build needs nothing extra.
+station-proto = { path = "../station-fw/station-proto", features = ["std"] }
+serialport = { version = "4", default-features = false }
+
 # Date/Time
 chrono = { version = "0.4", features = ["serde"] }
 

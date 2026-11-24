@@ -24,6 +24,47 @@ pub struct Config {
     pub speaker: SpeakerConfig,
     #[serde(default)]
     pub sound: SoundConfig,
+    #[serde(default)]
+    pub station: StationConfig,
+}
+
+/// Sensor station link (services/station_manager.rs). Off unless `enabled`.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(default)]
+pub struct StationConfig {
+    pub enabled: bool,
+    /// UDP address the brain listens on for station frames (one frame per datagram).
+    /// Unset (null) = no UDP transport.
+    pub udp_bind: Option<String>,
+    /// Where command frames go (`ip:4211`). Unset = the source address of the last datagram, port 4211.
+    pub station_cmd_addr: Option<String>,
+    /// USB serial device of the station (`/dev/ttyUSB0`, `/dev/cu.usbserial-0001`). Unset = no serial.
+    /// Reopened every few seconds after unplugging.
+    pub serial_port: Option<String>,
+    /// 115200 for the default firmware, 921600 for the raw-audio build.
+    pub serial_baud: u32,
+    /// Ask the station for raw 16 kHz stereo audio and feed it to the shout detector
+    /// (replaces the local microphone: `audio.input` capture is skipped).
+    pub stream_audio: bool,
+    /// Seconds without any frame before the station is reported disconnected.
+    pub link_timeout_sec: f32,
+    /// Seconds between link statistics events.
+    pub stats_interval_sec: f32,
+}
+
+impl Default for StationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            udp_bind: Some("0.0.0.0:4210".into()),
+            station_cmd_addr: None,
+            serial_port: None,
+            serial_baud: 115_200,
+            stream_audio: false,
+            link_timeout_sec: 3.0,
+            stats_interval_sec: 5.0,
+        }
+    }
 }
 
 /// Keeps one paired+trusted Bluetooth speaker connected (services/speaker_manager.rs).
@@ -535,6 +576,10 @@ pub struct PresenceConfig {
     pub mic_vad_threshold: f32,
     /// Punch: evidence units one punch is worth (before the source weight).
     pub punch_units: f32,
+    /// Radar: evidence units per `StationRadar` event while the station reports a target
+    /// (those events come at most every 500 ms). The thresholds live on the station's own
+    /// presence bool; the energies are not used.
+    pub radar_units: f32,
     /// Per-source multiplier on evidence. Unknown sources (radar, motion...) use
     /// `default_weight`.
     pub source_weights: std::collections::HashMap<String, f32>,
@@ -558,7 +603,12 @@ impl Default for PresenceConfig {
             mic_playback_margin_db: 8.0,
             mic_vad_threshold: 0.5,
             punch_units: 1.0,
-            source_weights: [("mic".to_string(), 1.0), ("punch".to_string(), 1.0)]
+            radar_units: 0.5,
+            source_weights: [
+                ("mic".to_string(), 1.0),
+                ("punch".to_string(), 1.0),
+                ("radar".to_string(), 1.0),
+            ]
                 .into_iter()
                 .collect(),
             default_weight: 1.0,
@@ -748,6 +798,7 @@ impl Default for Config {
             ble_status: BleStatusConfig::default(),
             speaker: SpeakerConfig::default(),
             sound: SoundConfig::default(),
+            station: StationConfig::default(),
         }
     }
 }

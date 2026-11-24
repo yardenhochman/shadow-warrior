@@ -338,8 +338,11 @@ Same code. Change:
 
 - Turn Wi-Fi power save off (`esp_wifi_set_ps(WIFI_PS_NONE)`). The default modem sleep adds
   100+ ms of latency and jitter to UDP, and this matters for shout and level timing.
-- Transport: the same `station-proto` frames, one per UDP datagram to the brain. The USB serial
-  path stays for development and recording.
+- Transport: the same `station-proto` frames, one per UDP datagram to the brain (port 4210), commands
+  from the brain on UDP 4211. The USB serial path stays for development and recording.
+- Brain side: `brain-rs/src/services/station_manager.rs` (`station` config section, see
+  `brain-rs/docs/STATION.md`) reads both transports, feeds radar into presence and raw audio into the
+  shout detector. It sends `StartAudio` every second while `station.stream_audio` is on.
 - Planned work is tracked in bd (`bd list | rg -i station`), not here.
 
 ## Hardware verification status

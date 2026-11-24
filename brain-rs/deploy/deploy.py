@@ -46,7 +46,7 @@ def main():
     rsh = "ssh " + " ".join(shlex.quote(o) for o in ssh_opts)
 
     if not a.no_build:
-        run(["podman", "run", "--rm", "-v", f"{ROOT}:/project", "-w", "/project", a.image,
+        run(["podman", "run", "--rm", "-v", f"{ROOT.parent}:/project", "-w", "/project/brain-rs", a.image,
              "cargo", "build", "--release", "--target", "aarch64-unknown-linux-gnu"])
     if not BIN.exists():
         sys.exit(f"missing {BIN}; build first")

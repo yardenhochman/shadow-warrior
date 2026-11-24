@@ -130,6 +130,24 @@ impl AudioManager {
         Ok(())
     }
 
+    /// Use an external audio feed (the sensor station's 16 kHz stream) instead of a
+    /// local microphone: same front-end and shout detector, fed through
+    /// [`push_external`](Self::push_external). Replaces `start()`.
+    pub async fn attach_external(&self, source_name: &str, sample_rate: u32) {
+        *self.actual_sample_rate.write().await = sample_rate;
+        *self.actual_channels.write().await = 1;
+        *self.frontend.lock().unwrap() =
+            Some(FrontEnd::new(sample_rate, FrontEndConfig::default(), Box::new(Detector::default())));
+        self.connected.store(true, Ordering::Relaxed);
+        self.event_bus.publish(Event::AudioDeviceConnected { device_name: source_name.to_string() });
+        self.start_shout_detector();
+    }
+
+    /// Feed mono samples (-1..1, at the rate given to `attach_external`).
+    pub fn push_external(&self, mono: &[f32]) {
+        Self::process_audio_sync(mono, 1, &self.frontend, &self.features_tx);
+    }
+
     /// Translate a cpal stream error into health events. Device loss / invalidated
     /// streams also publish `AudioDeviceDisconnected`; glitches only publish `AudioError`.
     fn report_stream_error(bus: &SharedEventBus, connected: &AtomicBool, err: &cpal::StreamError) {

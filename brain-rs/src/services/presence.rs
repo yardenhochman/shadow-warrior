@@ -1,6 +1,6 @@
 //! Fused presence detection.
 //!
-//! Sources (mic, punches, later radar / motion) turn raw observations into
+//! Sources (mic, punches, station radar, later motion) turn raw observations into
 //! [`Evidence`] (weighted "evidence-seconds"). [`PresenceFusion`] is a pure
 //! state machine: a leaky accumulator with an enter threshold and a leave
 //! timeout. [`PresenceService`] wires it to the audio feature stream, the event
@@ -31,6 +31,7 @@ use tracing::info;
 
 pub const SOURCE_MIC: &str = "mic";
 pub const SOURCE_PUNCH: &str = "punch";
+pub const SOURCE_RADAR: &str = "radar";
 
 /// One piece of presence evidence. `units` are evidence-seconds before the
 /// source weight: 1.0 ~ one second of unambiguous presence.
@@ -86,6 +87,23 @@ impl PresenceSource for PunchSource {
 
     fn observe(&mut self, _power: &f32, cfg: &PresenceConfig) -> Option<f32> {
         Some(cfg.punch_units)
+    }
+}
+
+/// Station radar source: the station's own presence bool, nothing else (static energy falls
+/// with distance, so no energy threshold here). Fed by `Event::StationRadar`.
+#[derive(Debug, Default)]
+pub struct RadarSource;
+
+impl PresenceSource for RadarSource {
+    type Input = bool; // radar presence bool
+
+    fn name(&self) -> &'static str {
+        SOURCE_RADAR
+    }
+
+    fn observe(&mut self, present: &bool, cfg: &PresenceConfig) -> Option<f32> {
+        present.then_some(cfg.radar_units)
     }
 }
 
@@ -230,7 +248,7 @@ impl PresenceService {
     }
 
     /// Handle for additional sensors (radar, motion...) to report evidence.
-    #[allow(dead_code)] // reserved for additional sensors (radar, motion)
+    #[allow(dead_code)] // reserved for additional sensors (motion)
     pub fn evidence_sender(&self) -> mpsc::UnboundedSender<Evidence> {
         self.tx.clone()
     }
@@ -259,6 +277,7 @@ impl PresenceService {
             let mut fusion = PresenceFusion::new();
             let mut mic = MicSource;
             let mut punch = PunchSource;
+            let mut radar = RadarSource;
             let mut last_index: Option<u64> = None;
             let mut ticker = tokio::time::interval(Duration::from_millis(250));
             let mut features_open = true;
@@ -287,6 +306,11 @@ impl PresenceService {
                             Ok(Event::PunchDetected { power, .. }) => {
                                 if let Some(u) = punch.observe(&power, &cfg) {
                                     st.evidence.push(Evidence { source: punch.name(), units: u });
+                                }
+                            }
+                            Ok(Event::StationRadar { present, .. }) => {
+                                if let Some(u) = radar.observe(&present, &cfg) {
+                                    st.evidence.push(Evidence { source: radar.name(), units: u });
                                 }
                             }
                             Ok(Event::ScheduleChanged { active: true }) => st.schedule_resumed = true,
@@ -355,6 +379,56 @@ mod tests {
 
     fn frames_for(s: f32) -> u64 {
         (s / FRAME_SECS) as u64
+    }
+
+    #[test]
+    fn radar_presence_enters_and_leaves() {
+        let c = cfg();
+        let mut radar = RadarSource;
+        let mut f = PresenceFusion::new();
+        assert_eq!(radar.observe(&false, &c), None, "no target, no evidence");
+        let mut entered = None;
+        // Station radar events arrive about every 500 ms while a target is seen.
+        for i in 0..8 {
+            let now = Duration::from_millis(500 * i);
+            let u = radar.observe(&true, &c).unwrap();
+            if f.add(now, &Evidence { source: SOURCE_RADAR, units: u }, &c) == Some(true) {
+                entered = Some(now);
+            }
+        }
+        assert!(entered.is_some_and(|t| t <= Duration::from_secs(3)), "{entered:?}");
+        assert!(f.present());
+        // Radar stops reporting a target: leaves after the timeout.
+        assert_eq!(f.tick(Duration::from_secs(3 + 30), &c), None);
+        assert_eq!(f.tick(Duration::from_secs(3 + 61), &c), Some(false));
+    }
+
+    #[tokio::test]
+    async fn station_radar_event_drives_presence_service() {
+        let bus: SharedEventBus = Arc::new(crate::core::EventBus::new(100));
+        let mut rx = bus.subscribe();
+        let svc = Arc::new(PresenceService::new(PresenceConfig::default(), bus.clone()));
+        let (_ftx, frx) = tokio::sync::watch::channel(None);
+        svc.start(frx);
+        tokio::task::yield_now().await;
+        for _ in 0..4 {
+            bus.publish(Event::StationRadar {
+                present: true,
+                distance_cm: Some(300),
+                moving_energy: 0,
+                static_energy: 25,
+            });
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let got = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let Ok(Event::PresenceDetected { detected }) = rx.recv().await {
+                    return detected;
+                }
+            }
+        })
+        .await;
+        assert_eq!(got, Ok(true));
     }
 
     #[test]
@@ -459,7 +533,7 @@ mod tests {
         let mut c = cfg();
         c.default_weight = 2.0;
         let mut f = PresenceFusion::new();
-        let e = Evidence { source: "radar", units: 0.5 };
+        let e = Evidence { source: "motion", units: 0.5 };
         assert_eq!(f.add(Duration::ZERO, &e, &c), Some(true));
     }
 

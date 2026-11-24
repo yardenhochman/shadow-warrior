@@ -79,6 +79,20 @@ pub enum Event {
     },
     AudioLevelChanged { level_db: f32 },
 
+    // Sensor station (services/station_manager.rs). Sensor values only: the brain
+    // decides what they mean. Radar, level and direction are throttled (about 2 / 2 / 5 Hz).
+    /// First frame after a (re)connect, and again when the station's Hello arrives.
+    StationConnected { station_id: Option<u32>, fw_version: Option<String> },
+    StationDisconnected { reason: String },
+    StationError { error: String },
+    /// `present` is the radar's own bool (targets 1..=3); distance is of the nearest
+    /// reported target (moving if the moving bit is set, else static), cm.
+    StationRadar { present: bool, distance_cm: Option<u16>, moving_energy: u8, static_energy: u8 },
+    StationLevel { rms_dbfs_l: f32, rms_dbfs_r: f32, peak_dbfs: f32 },
+    /// GCC-PHAT angle, positive = toward mic B (right). Not used for game decisions.
+    StationDirection { angle_deg: f32, confidence: f32, rms_dbfs: f32 },
+    StationLinkStats { frames: u64, seq_gaps: u64, frames_lost: u64, bad_frames: u64, audio_gap_frames: u64 },
+
     // BLE events
     BleDeviceConnected {
         device_name: String,
@@ -193,6 +207,13 @@ impl Event {
             Event::AudioError { .. } => "AudioError",
             Event::ShoutDetected { .. } => "ShoutDetected",
             Event::AudioLevelChanged { .. } => "AudioLevelChanged",
+            Event::StationConnected { .. } => "StationConnected",
+            Event::StationDisconnected { .. } => "StationDisconnected",
+            Event::StationError { .. } => "StationError",
+            Event::StationRadar { .. } => "StationRadar",
+            Event::StationLevel { .. } => "StationLevel",
+            Event::StationDirection { .. } => "StationDirection",
+            Event::StationLinkStats { .. } => "StationLinkStats",
             Event::BleDeviceConnected { .. } => "BleDeviceConnected",
             Event::BleDeviceDisconnected { .. } => "BleDeviceDisconnected",
             Event::BleAlive => "BleAlive",

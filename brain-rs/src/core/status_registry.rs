@@ -69,6 +69,23 @@ impl DeviceHealth {
     }
 }
 
+/// Sensor station: link health plus the latest sensor values for the dashboard.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct StationHealth {
+    #[serde(flatten)]
+    pub link: DeviceHealth,
+    pub radar_present: Option<bool>,
+    pub radar_distance_cm: Option<u16>,
+    pub rms_dbfs_l: Option<f32>,
+    pub rms_dbfs_r: Option<f32>,
+    pub direction_deg: Option<f32>,
+    pub direction_confidence: Option<f32>,
+    pub frames: u64,
+    pub frames_lost: u64,
+    pub bad_frames: u64,
+    pub audio_gap_frames: u64,
+}
+
 /// Snapshot of every device, serialized in the status API.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct HardwareHealth {
@@ -78,6 +95,9 @@ pub struct HardwareHealth {
     /// The paired Bluetooth speaker (only reported once `speaker.address` is configured).
     #[serde(default)]
     pub speaker: DeviceHealth,
+    /// The sensor station (only meaningful once `station.enabled`).
+    #[serde(default)]
+    pub station: StationHealth,
     /// keyed by controller IP
     pub wled: BTreeMap<String, DeviceHealth>,
     /// keyed by plug name
@@ -86,7 +106,7 @@ pub struct HardwareHealth {
 
 impl HardwareHealth {
     fn devices_mut(&mut self) -> impl Iterator<Item = &mut DeviceHealth> {
-        [&mut self.ble, &mut self.audio, &mut self.music, &mut self.speaker]
+        [&mut self.ble, &mut self.audio, &mut self.music, &mut self.speaker, &mut self.station.link]
             .into_iter()
             .chain(self.wled.values_mut())
             .chain(self.tasmota.values_mut())
@@ -150,6 +170,38 @@ impl StatusRegistry {
             }
             Event::AudioError { error } => h.audio.fail(now, error.clone()),
             Event::AudioLevelChanged { .. } | Event::ShoutDetected { .. } => h.audio.seen(now),
+            Event::StationConnected { station_id, fw_version } => {
+                let l = &mut h.station.link;
+                if let Some(id) = station_id {
+                    l.name = Some(format!("station-{id:08x}"));
+                }
+                l.detail = fw_version.as_ref().map(|v| format!("fw {v}")).or(l.detail.take());
+                l.up(now);
+            }
+            Event::StationDisconnected { reason } => h.station.link.down(now, Some(reason.clone())),
+            Event::StationError { error } => h.station.link.fail(now, error.clone()),
+            Event::StationRadar { present, distance_cm, .. } => {
+                h.station.radar_present = Some(*present);
+                h.station.radar_distance_cm = *distance_cm;
+                h.station.link.seen(now);
+            }
+            Event::StationLevel { rms_dbfs_l, rms_dbfs_r, .. } => {
+                h.station.rms_dbfs_l = Some(*rms_dbfs_l);
+                h.station.rms_dbfs_r = Some(*rms_dbfs_r);
+                h.station.link.seen(now);
+            }
+            Event::StationDirection { angle_deg, confidence, .. } => {
+                h.station.direction_deg = Some(*angle_deg);
+                h.station.direction_confidence = Some(*confidence);
+                h.station.link.seen(now);
+            }
+            Event::StationLinkStats { frames, frames_lost, bad_frames, audio_gap_frames, .. } => {
+                let s = &mut h.station;
+                s.frames = *frames;
+                s.frames_lost = *frames_lost;
+                s.bad_frames = *bad_frames;
+                s.audio_gap_frames = *audio_gap_frames;
+            }
             Event::BleDeviceConnected { device_name, address } => {
                 h.ble.name = Some(device_name.clone());
                 h.ble.address = Some(address.clone());
