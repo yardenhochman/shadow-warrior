@@ -119,3 +119,15 @@ Outside size about 161 x 61 x 34 mm; interior 156 x 56 x 32. Mic hole centres at
 - Radar: antenna face against the panel behind the 1.2 mm window, header edge at the bottom notch.
 - Perfboard: on the four lid standoffs, devkit USB end flush with the right edge, so the USB plug
   meets the slot. Screws: M3 x 8 self tapping through the lid into the posts.
+
+## Self test
+
+The firmware tests itself about 2 s after boot and every 60 s after that (logging again only when the result
+changes). `just selftest` resets the board and prints the result; exit code 0 PASS, 1 WARN, 2 FAIL.
+
+- Each mic: 1 s of I2S. FAIL for all zero (3V, GND, DOUT, SEL, BCLK or LRCL wire), a constant value or a
+  railed DC level (DOUT shorted/floating). WARN near full scale, large DC, quieter than -105 dBFS, louder than -35 dBFS.
+- Balance: WARN if the two mics differ by more than 10 dB in RMS.
+- Radar: frames over 3 s. FAIL with no frames (5V/GND/TX wiring, or garbage bytes: baud or floating TX), WARN below
+  5 frames/s or when the version read got no answer (radar RX to GPIO17).
+- Also warns on I2S read errors and low heap. The thresholds and hints are in `station-core/src/selftest.rs`.

@@ -40,6 +40,7 @@ use station_core::ld2410::{self, Frame, FwVersion, Parser};
 use station_core::decimate::{self, Decimator};
 use station_core::doa::{DoaConfig, DoaEstimator, FRAME_LEN as DOA_FRAME};
 use station_core::level::LevelMeter;
+use station_core::selftest::{self, ChannelStats, Level, MicProbe, RadarStats};
 use station_proto::{
     decode_command, encode_frame, AudioChunk, Command, Direction, Envelope, Hello, Msg, AUDIO_CHUNK_BYTES,
     AUDIO_KEEPALIVE_MS, MAX_FRAME, PROTO_VERSION,
@@ -58,6 +59,14 @@ const RADAR_IDENTIFY_RETRY: Duration = Duration::from_secs(10);
 const RADAR_ACK_TIMEOUT: Duration = Duration::from_millis(300);
 
 const DOA_LOG_EVERY: Duration = Duration::from_millis(100);
+
+/// Self test: runs once at boot, then every `SELFTEST_EVERY` (logs again only when the result changes).
+/// The mic probe skips 0.5 s after the request (I2S settling), then reads 1 s.
+const SELFTEST_EVERY: Duration = Duration::from_secs(60);
+const PROBE_SKIP_READS: u32 = 50;
+const PROBE_READS: u32 = 100;
+/// Radar observation window of the self test.
+const SELFTEST_RADAR_WINDOW: Duration = Duration::from_secs(3);
 
 /// Console UART (UART0) driver ring buffers. 16 KB of TX is about 180 ms at 921600 baud.
 const CONSOLE_UART: sys::uart_port_t = 0;
@@ -212,6 +221,13 @@ struct Shared {
     dec_us_max: AtomicU32,
     dec_reads: AtomicU32,
     cmds_ok: AtomicU32,
+    /// Self test: set by main to ask the audio thread for a probe; the result lands in `probe_result`.
+    probe_req: AtomicBool,
+    probe_result: Mutex<Option<[ChannelStats; 2]>>,
+    /// Radar parser counters, copied by the radar thread.
+    radar_dropped: AtomicU32,
+    radar_bad: AtomicU32,
+    radar_identified: AtomicBool,
 }
 
 fn now_us() -> i64 {
@@ -281,6 +297,11 @@ fn main() -> anyhow::Result<()> {
         dec_us_max: AtomicU32::new(0),
         dec_reads: AtomicU32::new(0),
         cmds_ok: AtomicU32::new(0),
+        probe_req: AtomicBool::new(true), // boot self test
+        probe_result: Mutex::new(None),
+        radar_dropped: AtomicU32::new(0),
+        radar_bad: AtomicU32::new(0),
+        radar_identified: AtomicBool::new(false),
     });
     send(&tx, hello(&shared, id));
 
@@ -327,10 +348,18 @@ fn main() -> anyhow::Result<()> {
             .spawn(move || radar_task(uart, out_pin, tx, shared, id))?;
     }
 
-    // --- main: hello + diagnostics ---
+    // --- main: self test, hello + diagnostics ---
+    let mut last_selftest = String::new();
+    run_selftest(&shared, &mut last_selftest, true);
+    let mut next_selftest = Instant::now() + SELFTEST_EVERY;
     let mut last = now_us();
     loop {
         thread::sleep(HELLO_EVERY);
+        if Instant::now() >= next_selftest {
+            next_selftest = Instant::now() + SELFTEST_EVERY;
+            shared.probe_req.store(true, Ordering::Relaxed);
+            run_selftest(&shared, &mut last_selftest, false);
+        }
         send(&tx, hello(&shared, id));
         let sent = tx.lock().unwrap_or_else(|p| p.into_inner()).sent;
         let t = now_us();
@@ -371,6 +400,108 @@ fn main() -> anyhow::Result<()> {
     }
 }
 
+/// Power-on self test: both mics (1 s probe of the I2S stream), the radar (frames over a window).
+/// Logs one `selftest:` line per check and a `selftest: PASS|WARN|FAIL` summary. A repeat run
+/// (`boot == false`) logs only when the summary differs from the previous one.
+fn run_selftest(shared: &Shared, last: &mut String, boot: bool) {
+    let r0 = shared.radar_frames.load(Ordering::Relaxed);
+    let t0 = Instant::now();
+    // Wait for the probe: 1.5 s of audio, with a timeout in case the I2S thread is stuck.
+    let probe = loop {
+        if let Some(p) = shared.probe_result.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            break Some(p);
+        }
+        if t0.elapsed() > Duration::from_secs(5) {
+            break None;
+        }
+        thread::sleep(Duration::from_millis(50));
+    };
+    if let Some(rest) = SELFTEST_RADAR_WINDOW.checked_sub(t0.elapsed()) {
+        thread::sleep(rest);
+    }
+    let radar = RadarStats {
+        identified: shared.radar_identified.load(Ordering::Relaxed),
+        frames: shared.radar_frames.load(Ordering::Relaxed).wrapping_sub(r0),
+        window_ms: t0.elapsed().as_millis() as u32,
+        dropped_bytes: shared.radar_dropped.load(Ordering::Relaxed),
+        bad_frames: shared.radar_bad.load(Ordering::Relaxed),
+    };
+
+    let mut lines: Vec<(Level, String)> = Vec::new();
+    match probe {
+        Some(st) => {
+            let names = ["mic A (left, SEL=GND)", "mic B (right, SEL=3V3)"];
+            let vs = [selftest::mic_verdict(&st[0]), selftest::mic_verdict(&st[1])];
+            for i in 0..2 {
+                lines.push((
+                    vs[i].level,
+                    format!(
+                        "{}: {} rms {:.1} dBFS peak {:.1} dBFS dc {:.1} dBFS{}{}",
+                        names[i],
+                        vs[i].level.as_str(),
+                        st[i].ac_rms_dbfs,
+                        st[i].peak_dbfs,
+                        st[i].dc_dbfs,
+                        if vs[i].msg.is_empty() { "" } else { " - " },
+                        vs[i].msg
+                    ),
+                ));
+            }
+            if vs.iter().all(|v| v.level != Level::Fail) {
+                if let Some(b) = selftest::balance_verdict(&st[0], &st[1]) {
+                    lines.push((b.level, format!("balance: {} - {}", b.level.as_str(), b.msg)));
+                }
+            }
+        }
+        None => lines.push((Level::Fail, "i2s: no audio probe result (I2S thread stuck?)".to_string())),
+    }
+    let errs = shared.audio_errors.load(Ordering::Relaxed);
+    if errs > 0 {
+        lines.push((Level::Warn, format!("i2s: {errs} read errors since boot")));
+    }
+    let rv = selftest::radar_verdict(&radar);
+    lines.push((
+        rv.level,
+        format!(
+            "radar: {} {:.1} frames/s, version read {}, dropped bytes {}{}{}",
+            rv.level.as_str(),
+            radar.frames as f32 * 1000.0 / radar.window_ms.max(1) as f32,
+            if radar.identified { "ok" } else { "no" },
+            radar.dropped_bytes,
+            if rv.msg.is_empty() { "" } else { " - " },
+            rv.msg
+        ),
+    ));
+    let heap = unsafe { sys::esp_get_free_heap_size() };
+    if heap < 40_000 {
+        lines.push((Level::Warn, format!("heap: only {heap} bytes free")));
+    }
+
+    let worst = selftest::worst(&lines.iter().map(|l| l.0).collect::<Vec<_>>());
+    let summary = match worst {
+        Level::Ok => "PASS",
+        Level::Warn => "WARN",
+        Level::Fail => "FAIL",
+    };
+    let sig: String = lines.iter().map(|l| l.1.split_once(" rms").map_or(l.1.as_str(), |x| x.0).to_string() + &format!("{:?}", l.0)).collect();
+    if !boot && sig == *last {
+        return;
+    }
+    *last = sig;
+    for (lvl, text) in &lines {
+        if *lvl == Level::Ok {
+            info!("selftest: {text}");
+        } else {
+            warn!("selftest: {text}");
+        }
+    }
+    if worst == Level::Ok {
+        info!("selftest: {summary}");
+    } else {
+        warn!("selftest: {summary}");
+    }
+}
+
 fn audio_task(mut i2s: I2sDriver<'static, I2sRx>, tx: Tx, shared: Arc<Shared>) {
     let mut meter = LevelMeter::new(LEVEL_WINDOW);
     let cfg = doa_config();
@@ -389,9 +520,23 @@ fn audio_task(mut i2s: I2sDriver<'static, I2sRx>, tx: Tx, shared: Arc<Shared>) {
     let mut buf = vec![0u8; I2S_READ_FRAMES * 2 * 4];
     let timeout = TickType::new_millis(1000).ticks();
     let mut raw = RawStream::new();
+    let mut probe: Option<(MicProbe, u32)> = None;
     loop {
         match i2s.read(&mut buf, timeout) {
             Ok(n) => {
+                if shared.probe_req.swap(false, Ordering::Relaxed) {
+                    probe = Some((MicProbe::new(), 0));
+                }
+                if let Some((p, reads)) = probe.as_mut() {
+                    *reads += 1;
+                    if *reads > PROBE_SKIP_READS {
+                        p.push_bytes(&buf[..n]);
+                    }
+                    if *reads >= PROBE_SKIP_READS + PROBE_READS {
+                        *shared.probe_result.lock().unwrap_or_else(|e| e.into_inner()) = Some(p.stats());
+                        probe = None;
+                    }
+                }
                 shared.audio_reads.fetch_add(1, Ordering::Relaxed);
                 shared.audio_frames.fetch_add((n / 8) as u32, Ordering::Relaxed);
                 // Raw stream first: it is the most timing-sensitive consumer of the TX ring.
@@ -649,6 +794,7 @@ fn radar_task(uart: UartDriver<'static>, out_pin: PinDriver<'static, Input>, tx:
                 *shared.radar_fw.lock().unwrap_or_else(|p| p.into_inner()) = Some(s);
                 send(&tx, hello(&shared, id));
                 identified = true;
+                shared.radar_identified.store(true, Ordering::Relaxed);
             } else {
                 info!("radar: not identified, retry in {RADAR_IDENTIFY_RETRY:?}; station keeps running");
             }
@@ -683,6 +829,8 @@ fn radar_task(uart: UartDriver<'static>, out_pin: PinDriver<'static, Input>, tx:
             }
             Frame::Ack(a) => info!("radar: unsolicited ACK cmd={:#04x} status={:#06x}", a.cmd, a.status),
         });
+        shared.radar_dropped.store(parser.stats.dropped_bytes, Ordering::Relaxed);
+        shared.radar_bad.store(parser.stats.bad_frames, Ordering::Relaxed);
         if got > 0 {
             shared.radar_frames.fetch_add(got, Ordering::Relaxed);
             last_data = Instant::now();

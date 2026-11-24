@@ -11,3 +11,4 @@ pub mod doa;
 pub mod fft;
 pub mod ld2410;
 pub mod level;
+pub mod selftest;

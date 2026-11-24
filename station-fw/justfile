@@ -56,6 +56,10 @@ flash-fast:
 record label="clip" *args:
     uv run tools/station_record.py {{port_arg}} --baud {{record_baud}} {{label}} {{args}}
 
+# Reset the board and print the power-on self test (mics + radar); exit code 0 PASS, 1 WARN, 2 FAIL
+selftest *args:
+    uv run tools/selftest.py {{port_arg}} --baud {{baud}} {{args}}
+
 # Install the Xtensa toolchain and flashing tools if missing
 setup:
     command -v espup >/dev/null || cargo install espup --locked
