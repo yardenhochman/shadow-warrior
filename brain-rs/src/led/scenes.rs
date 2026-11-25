@@ -1,7 +1,7 @@
 //! Scene constructors: which layers, in which order, for each arena state.
 use super::layers::{
     Ember, EmberStyle, EnergyBar, EnergyBarStyle, PunchPulse, PunchStyle, ShoutGlow,
-    ShoutGlowStyle, ShoutRipple, ShoutRippleStyle,
+    ShoutGlowStyle, ShoutMeter, ShoutMeterStyle, ShoutRipple, ShoutRippleStyle,
 };
 use super::{Blend, ColumnLayout, Compositor, Inputs};
 
@@ -12,12 +12,21 @@ pub const FIGHT_MAX_PULSES: usize = 8;
 
 /// WARMING: the persistent energy bar with the live shout glow added around its head.
 pub fn warming(len: usize) -> Compositor {
+    warming_with(len, ShoutMeterStyle::default())
+}
+
+/// WARMING with an explicit shout meter look: bar, then the live shout meter (screened over the
+/// bar, from the base up to `shout_level`), then the glow. Intensity 0 leaves the meter out.
+pub fn warming_with(len: usize, meter: ShoutMeterStyle) -> Compositor {
     let mut c = Compositor::new(len, MAX_ONESHOTS);
     c.push(
         Box::new(EnergyBar::new(EnergyBarStyle::default())),
         Blend::Normal,
         1.0,
     );
+    if meter.intensity > 0.0 {
+        c.push(Box::new(ShoutMeter::new(meter)), Blend::Screen, 1.0);
+    }
     c.push(
         Box::new(ShoutGlow::new(ShoutGlowStyle::default())),
         Blend::Add,
@@ -38,6 +47,9 @@ pub struct FightStyle {
     /// Opacity of the energy bar when enabled.
     pub energy_bar_opacity: f32,
     pub max_pulses: usize,
+    /// Live shout meter at the base of the column, under the ripple and the punch pulses.
+    /// `None` (the default here) = no meter; the arena config enables it at a reduced intensity.
+    pub shout_meter: Option<ShoutMeterStyle>,
 }
 
 impl Default for FightStyle {
@@ -53,6 +65,7 @@ impl Default for FightStyle {
             energy_bar_style: EnergyBarStyle::default(),
             energy_bar_opacity: 0.5,
             max_pulses: FIGHT_MAX_PULSES,
+            shout_meter: None,
         }
     }
 }
@@ -82,6 +95,9 @@ impl FightScene {
                 Blend::Normal,
                 style.energy_bar_opacity,
             );
+        }
+        if let Some(m) = style.shout_meter.clone().filter(|m| m.intensity > 0.0) {
+            comp.push(Box::new(ShoutMeter::new(m)), Blend::Screen, 1.0);
         }
         comp.push(
             Box::new(ShoutRipple::new(style.shout.clone())),
@@ -123,12 +139,17 @@ impl FightScene {
 
 /// FIGHT with the default look for one column.
 pub fn fight(len: usize, layout: ColumnLayout) -> FightScene {
+    fight_with(len, layout, FightStyle::default())
+}
+
+/// FIGHT with an explicit style (e.g. the shout meter on).
+pub fn fight_with(len: usize, layout: ColumnLayout, style: FightStyle) -> FightScene {
     FightScene::new(
         ColumnLayout {
             leds: len,
             ..layout
         },
-        FightStyle::default(),
+        style,
     )
 }
 
@@ -213,6 +234,108 @@ mod tests {
             .iter()
             .any(|f| f.iter().all(|&b| b == 255));
         assert!(flash, "full bar flashes white");
+    }
+
+    // ---- shout meter ----
+
+    fn meter_inputs(energy: f32, shout_level: f32) -> Inputs {
+        Inputs { energy, shout_level, ..Default::default() }
+    }
+
+    /// Render `frames` frames of warming and return the last one as RGB triples.
+    fn warming_frame(len: usize, energy: f32, level: f32) -> Vec<[u8; 3]> {
+        let mut c = warming(len);
+        let mut out = Vec::new();
+        for _ in 0..4 {
+            out = c.render(DT, &meter_inputs(energy, level)).to_vec();
+        }
+        out.chunks(3).map(|p| [p[0], p[1], p[2]]).collect()
+    }
+
+    /// Meter pixels are the ones with real blue: the bar is red to amber (blue ~0).
+    fn meter_lit(f: &[[u8; 3]]) -> usize {
+        f.iter().filter(|p| p[2] > 128).count()
+    }
+
+    #[test]
+    fn meter_lights_the_expected_number_of_leds_per_strip_over_the_bar() {
+        for len in [180, 60] {
+            for (level, want) in [(0.0, 0), (0.5, len / 2), (1.0, len)] {
+                let f = warming_frame(len, 0.4, level);
+                let n = meter_lit(&f);
+                assert!(
+                    (n as i32 - want as i32).abs() <= 3,
+                    "len {len} level {level}: {n} lit, want ~{want}"
+                );
+                if want > 0 {
+                    assert!(f[0][2] > 128, "grows from the base");
+                    assert!(level == 1.0 || f[len - 1][2] < 20, "top stays dark");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn meter_colour_differs_from_the_bar_and_adds_no_more_than_its_own_colour() {
+        let on = warming_frame(180, 0.1, 0.6); // bar 0..18, meter 0..108
+        let wide = |p: [u8; 3]| p.map(i32::from);
+        let (bar_only, meter_only) = (wide(warming_frame(180, 0.1, 0.0)[10]), wide(on[80]));
+        assert!(on[10][2] > 128, "where they overlap the screened meter reads as light, not as bar");
+        assert!(bar_only[0] > bar_only[2] + 100, "bar is red-ish {bar_only:?}");
+        assert!(meter_only[2] > meter_only[0] + 100 && meter_only[1] > meter_only[0] + 50, "{meter_only:?}");
+        // alone, deep inside the body, it is exactly its configured colour
+        let alone = warming_frame(180, 0.0, 1.0);
+        assert_eq!(alone[20], [0, 200, 255]);
+        // over a full white-ish bar nothing exceeds the byte range or turns darker
+        let over = warming_frame(180, 0.9, 1.0);
+        let under = warming_frame(180, 0.9, 0.0);
+        for (o, u) in over.iter().zip(&under) {
+            assert!(o.iter().zip(u).all(|(a, b)| a >= b), "screen never darkens: {o:?} {u:?}");
+        }
+    }
+
+    #[test]
+    fn a_zero_intensity_meter_is_left_out_of_warming() {
+        let mut c = warming_with(60, ShoutMeterStyle::new([0, 200, 255], 0.0));
+        let f = c.render(DT, &meter_inputs(0.0, 1.0)).to_vec();
+        assert!(f.iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn meter_on_a_multi_strip_controller_follows_each_strips_length_and_direction() {
+        use crate::led::layout::append_strip;
+        let strips = [ColumnLayout::new(0, 4, 60, false), ColumnLayout::new(1, 4, 180, true)];
+        let mut comps: Vec<Compositor> = strips.iter().map(|s| warming(s.leds)).collect();
+        let mut frame = Vec::new();
+        for _ in 0..4 {
+            frame.clear();
+            for (c, s) in comps.iter_mut().zip(&strips) {
+                append_strip(&mut frame, c.render(DT, &meter_inputs(0.0, 0.5)), s.reverse);
+            }
+        }
+        let px: Vec<[u8; 3]> = frame.chunks(3).map(|p| [p[0], p[1], p[2]]).collect();
+        let (a, b) = px.split_at(60);
+        assert!((meter_lit(a) as i32 - 30).abs() <= 3 && a[0][2] > 128 && a[59][2] < 20, "forward strip: base = first LED");
+        assert!((meter_lit(b) as i32 - 90).abs() <= 3 && b[179][2] > 128 && b[0][2] < 20, "reversed strip: base = last LED");
+    }
+
+    #[test]
+    fn fight_meter_is_scaled_down_and_off_without_a_style() {
+        let style = FightStyle {
+            shout_meter: Some(ShoutMeterStyle::new([0, 200, 255], 0.5)),
+            ..FightStyle::default()
+        };
+        let mut with = fight_with(180, ColumnLayout::single(180), style);
+        let mut without = fight(180, ColumnLayout::single(180));
+        let inp = meter_inputs(0.0, 1.0);
+        let (mut w, mut wo) = (Vec::new(), Vec::new());
+        for _ in 0..4 {
+            w = with.render(DT, &inp).to_vec();
+            wo = without.render(DT, &inp).to_vec();
+        }
+        assert_eq!(w[20 * 3 + 2], 128, "half-strength cyan (blue 255 * 0.5) over the dark base");
+        assert!(wo.chunks(3).all(|p| p[2] < 60), "no meter without the style");
+        assert!(w.chunks(3).map(|p| p[2]).max().unwrap() <= 128 + 40, "stays subtle");
     }
 
     // ---- fight ----

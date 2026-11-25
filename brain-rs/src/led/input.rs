@@ -4,6 +4,10 @@ use super::layer::{Inputs, Punch};
 /// How long a single shout event keeps the live level up (exponential time constant, seconds).
 const SHOUT_DECAY_TAU: f32 = 0.35;
 /// How fast punch activity ("rage") fades, seconds, and how much a full-power punch adds.
+/// A `ShoutLevel` is held this long (events come at ~30 Hz); if none arrives (audio stalled,
+/// a lost packet burst) the level then fades with `SHOUT_LEVEL_STALE_TAU` instead of sticking.
+const SHOUT_LEVEL_HOLD: f32 = 0.15;
+const SHOUT_LEVEL_STALE_TAU: f32 = 0.1;
 const RAGE_DECAY_TAU: f32 = 4.0;
 const RAGE_PER_FULL_PUNCH: f32 = 0.35;
 /// Punches queued in one frame beyond this are dropped (a stalled loop must not flood).
@@ -15,6 +19,9 @@ const MAX_PENDING_PUNCHES: usize = 16;
 pub struct LiveInputs {
     energy: f32,
     shout: f32,
+    shout_level: f32,
+    /// Seconds since the last `ShoutLevel` event.
+    shout_level_age: f32,
     rage: f32,
     next_punch_id: u64,
     pending: Vec<Punch>,
@@ -40,6 +47,15 @@ impl LiveInputs {
         }
     }
 
+    /// `ShoutLevel { level }` (0..1): the live meter level. Replaces the previous value (the
+    /// producer already smooths it) and is handed to the next frame as is: no extra buffering.
+    pub fn on_shout_level(&mut self, level: f32) {
+        if level.is_finite() {
+            self.shout_level = level.clamp(0.0, 1.0);
+            self.shout_level_age = 0.0;
+        }
+    }
+
     /// `PunchDetected { power }` (0..100). Delivered once, in the next [`Self::frame`].
     pub fn on_punch(&mut self, power: f32) {
         if !power.is_finite() {
@@ -58,12 +74,20 @@ impl LiveInputs {
         let out = Inputs {
             energy: self.energy,
             shout: self.shout,
+            shout_level: self.shout_level,
             rage: self.rage,
             punches: std::mem::take(&mut self.pending),
         };
         self.rage *= (-dt.max(0.0) / RAGE_DECAY_TAU).exp();
         if self.rage < 0.003 {
             self.rage = 0.0;
+        }
+        self.shout_level_age += dt.max(0.0);
+        if self.shout_level_age > SHOUT_LEVEL_HOLD {
+            self.shout_level *= (-dt.max(0.0) / SHOUT_LEVEL_STALE_TAU).exp();
+            if self.shout_level < 0.003 {
+                self.shout_level = 0.0;
+            }
         }
         self.shout *= (-dt.max(0.0) / SHOUT_DECAY_TAU).exp();
         if self.shout < 0.003 {
@@ -131,6 +155,29 @@ mod tests {
         a.frame(0.5);
         b.frame(0.01);
         assert!(a.frame(0.0).shout < b.frame(0.0).shout);
+    }
+
+    #[test]
+    fn shout_level_passes_through_unbuffered_and_fades_when_events_stop() {
+        let mut i = LiveInputs::default();
+        i.on_shout_level(0.7);
+        assert_eq!(i.frame(1.0 / 30.0).shout_level, 0.7, "next frame sees it, undelayed");
+        i.on_shout_level(0.2);
+        assert_eq!(i.frame(1.0 / 30.0).shout_level, 0.2, "drops at once, no input-side release");
+        // 30 Hz events keep it alive indefinitely
+        for _ in 0..90 {
+            i.on_shout_level(0.5);
+            assert_eq!(i.frame(1.0 / 30.0).shout_level, 0.5);
+        }
+        // events stop: held ~150 ms, then gone within a second
+        let mut last = 1.0;
+        for _ in 0..40 {
+            last = i.frame(1.0 / 30.0).shout_level;
+        }
+        assert_eq!(last, 0.0);
+        i.on_shout_level(f32::NAN);
+        i.on_shout_level(4.0);
+        assert_eq!(i.frame(0.0).shout_level, 1.0, "clamped");
     }
 
     #[test]

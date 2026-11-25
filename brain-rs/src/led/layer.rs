@@ -18,6 +18,9 @@ pub struct Inputs {
     pub energy: f32,
     /// Instantaneous shout level, 0..1 (layers smooth it themselves).
     pub shout: f32,
+    /// Live shout loudness, 0..1, from the 30 Hz `ShoutLevel` events (fast: ~tens of ms),
+    /// unlike `shout`, which is a decaying glow per detected shout.
+    pub shout_level: f32,
     /// Recent punch activity, 0..1: a decaying average of punch power (drives the fire base).
     pub rage: f32,
     /// Punches since the previous frame. The compositor owner spawns one-shot layers for these;

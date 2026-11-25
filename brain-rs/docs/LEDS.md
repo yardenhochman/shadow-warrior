@@ -6,7 +6,7 @@ Two ways to drive a WLED strip, one per arena state.
 |-------|------|--------------|------|
 | Suspended | off | - | strip off |
 | Idle | **built-in WLED effects** (HTTP) | the controller | ember breathing to true black, ~6 s: two overlaid segments (WLED 16), single Tri Fade on older firmware |
-| Warming | **UDP realtime** | the brain, 30 fps | energy bar (persistent) + shout glow (live) |
+| Warming | **UDP realtime** | the brain, 30 fps | energy bar (persistent) + shout meter (live, cyan) + shout glow (live) |
 | Fight | **UDP realtime** | the brain, 30 fps | punch pulses, shout effects, music-driven effects, optional energy bar |
 | Cooldown | **built-in WLED effect** (HTTP) | the controller | "Fire 2012", Lava palette |
 
@@ -187,15 +187,27 @@ overlays.
 - `Compositor`: stacks layers with blend modes (`Normal`, `Add`, `Screen`, `Max`), a master
   brightness, and a capped list of one-shot layers (punch flashes). The buffers are reused, so
   memory and CPU stay bounded however many punches land.
-- `Inputs` (filled every frame from the event bus): `energy` (0..1), `shout` (live level),
-  `punches` (power each).
+- `Inputs` (filled every frame from the event bus): `energy` (0..1), `shout` (decaying glow per
+  `ShoutDetected`), `shout_level` (0..1, live loudness from `ShoutLevel`; held 150 ms, then fades
+  if events stop), `punches` (power each).
 - Time is real `dt`, not frame count.
 
 Scenes:
 
 - **Warming:** `EnergyBar` (persistent: rises fast, falls slowly, anti-aliased edge, bright head,
-  white flash while full) + `ShoutGlow` (added around the bar head, wider and brighter with a
-  louder shout, nothing in silence).
+  white flash while full) + `ShoutMeter` + `ShoutGlow` (added around the bar head, wider and
+  brighter with a louder shout, nothing in silence).
+  - **Bar + meter:** the bar (red to amber) fills slowly as shouts are counted. Over it the
+    **shout meter** (cyan, `[0,200,255]`) grows from the base of every strip to
+    `shout_level * strip_length` with a soft ~2.5 LED top edge and a lighter head, and falls
+    back in ~150 ms. It is blended with `Screen` after the bar (never exceeds its own colour
+    at `intensity` 1; where it overlaps the bar the result is pale, above the bar it is pure
+    cyan). `shout_level` comes from `Event::ShoutLevel` (docs/SOUND.md), ~30 Hz, not from the
+    delayed `ShoutDetected`. Each strip renders its own compositor, so a controller with several
+    strips (different lengths, `reverse`) gets a meter per strip, flipped like the bar.
+  - **Fight:** the same layer sits under the shout ripple and the punch pulses at
+    `led.shout_meter_fight_scale` (0.5): subtle, base-only, cyan is the shout colour of the
+    fight scene anyway. `0` turns it off in the fight.
 - **Fight** (`scenes::fight(len, layout)` -> `FightScene`, one per strip; all numbers in
   `FightStyle` = `EmberStyle` + `PunchStyle` + `ShoutRippleStyle` + `EnergyBarStyle`):
   - `Ember` (persistent): dark-red/orange flicker scrolling up from the bottom of the column,
@@ -223,7 +235,32 @@ LED_PREVIEW_OUT=<dir> cargo test led::scenes -- --ignored
 # -> warming.ppm, fight_columns.ppm (5 columns side by side), fight_strip.ppm (centre column)
 ```
 
-All colours and timings live in style structs (`EnergyBarStyle`, `ShoutGlowStyle`, `EmberStyle`,
+Config (`config.yaml`, all optional):
+
+```yaml
+led:
+  shout_meter_color: [0, 200, 255]   # RGB 0..255; keep it unlike the energy bar (red to amber)
+  shout_meter_fight_scale: 0.5       # fight-scene intensity, 0 = no meter in the fight
+audio:                               # the signal itself: docs/SOUND.md
+  shout_meter_lo_db: 6
+  shout_meter_hi_db: 35
+  shout_meter_gate: true
+  shout_meter_release_ms: 200
+```
+
+### Shout meter latency budget (event to strip)
+
+`ShoutLevel` -> bus -> realtime loop is not buffered: the loop drains the bus with `try_recv`
+at the top of every tick and `LiveInputs::on_shout_level` hands the value to that same frame.
+The loop runs at `wled.udp_fps` (30 default, 33 ms/tick, `Skip` on overrun), so the added
+wait is uniform 0..33 ms (mean ~17 ms), then one render (<1 ms) and one UDP send.
+Onset to strip: front-end frame 16 ms + audio callback/stream chunk (device buffer; the
+station sends its own chunks) + event publish (every 2nd frame, 0..16 ms) + tick wait 0..33 ms
++ Wi-Fi/WLED (a few ms, WLED applies realtime frames on arrival). Roughly 35-70 ms plus the
+audio buffer. Raising `udp_fps` to 60 would cut the tick wait to ~8 ms (not tried; Wi-Fi
+packet rate doubles). The loop is **30 fps, not slower**.
+
+All colours and timings live in style structs (`EnergyBarStyle`, `ShoutGlowStyle`, `ShoutMeterStyle`, `EmberStyle`,
 `PunchStyle`/`TierStyle`, `ShoutRippleStyle`, `FightStyle`).
 
 ## Status
