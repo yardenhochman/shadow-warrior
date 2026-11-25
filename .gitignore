@@ -41,3 +41,6 @@ brain-rs/clips/station/*.json
 
 # shared system secret (see station-fw/justfile)
 system.env
+
+# local secrets (GEMINI_API_KEY etc.)
+.env
