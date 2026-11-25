@@ -6,7 +6,7 @@
 """Cross-check a dual recording's event labels with Gemini audio understanding. Dev-time only.
 
     uv run tools/gemini_label.py brain-rs/clips/dual/<rec>/ [--wav bomge.wav] [--offset 0.92]
-                                 [--chunk 30] [--model gemini-2.5-flash]
+                                 [--chunk 30] [--model gemini-3.5-flash]
 
 Reads GEMINI_API_KEY from the repo-root .env (never printed). Sends the reference mic (bomge.wav) in
 overlapping chunks, asks for a JSON list of timestamped events, writes labels_gemini.json (reference
@@ -66,7 +66,7 @@ def ask(client, types, model: str, data: bytes) -> list[dict]:
             return json.loads(r.text)
         except Exception as e:  # 429 / transient: back off
             msg = str(e)
-            if any(c in msg[:40] for c in ("402", "401", "403", "400")):  # billing/auth/bad request: retrying won't help
+            if any(c in msg[:40] for c in ("402", "401", "403", "400", "404")):  # billing/auth/bad request: retrying won't help
                 sys.exit(f"Gemini API error, not retrying: {msg[:300]}")
             wait = 15 * (attempt + 1)
             print(f"  retry in {wait}s: {msg[:120]}", file=sys.stderr)
@@ -81,7 +81,7 @@ def main() -> int:
     ap.add_argument("--offset", type=float, default=0.92, help="reference time - station time (for comparing with labels_auto)")
     ap.add_argument("--chunk", type=float, default=30.0)
     ap.add_argument("--overlap", type=float, default=3.0)
-    ap.add_argument("--model", default="gemini-2.5-flash")
+    ap.add_argument("--model", default="gemini-3.5-flash")
     a = ap.parse_args()
 
     load_dotenv(REPO / ".env")
