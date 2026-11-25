@@ -78,6 +78,11 @@ pub enum Event {
         level_db: f32,
     },
     AudioLevelChanged { level_db: f32 },
+    /// Continuous, low-latency shout level for the LED shout meter (~30 Hz while active, one
+    /// final 0 when it falls silent). `level` 0..1 (fast attack, ~200 ms release),
+    /// `db_above_floor` the band level over the adaptive noise floor. Not a detection:
+    /// `ShoutDetected` stays the event that counts shouts.
+    ShoutLevel { level: f32, db_above_floor: f32 },
     /// Which input the brain captures from. `pulse_source` is the PipeWire/Pulse source
     /// node behind an alias device ("default"), `external` = the station's stream.
     AudioInputInfo { device_name: String, sample_rate: u32, pulse_source: Option<String>, external: bool },
@@ -229,6 +234,7 @@ impl Event {
             Event::AudioOutputSink { .. } => "AudioOutputSink",
             Event::ShoutDetected { .. } => "ShoutDetected",
             Event::AudioLevelChanged { .. } => "AudioLevelChanged",
+            Event::ShoutLevel { .. } => "ShoutLevel",
             Event::StationConnected { .. } => "StationConnected",
             Event::StationDisconnected { .. } => "StationDisconnected",
             Event::StationError { .. } => "StationError",

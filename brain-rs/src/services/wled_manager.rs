@@ -9,10 +9,11 @@ use tokio::sync::RwLock;
 use tokio::time::interval;
 use tracing::{debug, error, info, warn};
 
-use crate::config::{columns_total, next_free_column, pin_columns, StripConfig, DEFAULT_STRIP_LEDS, WledConfig, WledController, WledEffect};
+use crate::config::{columns_total, LedConfig, next_free_column, pin_columns, StripConfig, DEFAULT_STRIP_LEDS, WledConfig, WledController, WledEffect};
 use crate::core::{ArenaState, Event, SharedEventBus};
 use crate::led::layout::{append_strip, controller_strips};
-use crate::led::scenes::FightScene;
+use crate::led::layers::ShoutMeterStyle;
+use crate::led::scenes::{FightScene, FightStyle};
 use crate::led::{scenes, ColumnLayout, Compositor, Inputs, LiveInputs};
 use crate::models::{WledOutput, WledStatus};
 use crate::services::database_manager::SharedDatabaseManager;
@@ -54,6 +55,8 @@ pub struct WledManager {
     overlaid: std::sync::Mutex<std::collections::HashSet<String>>,
     /// UDP realtime port; WLED's own 21324 except in tests, which pick a free port.
     realtime_port: u16,
+    /// Look of the brain-rendered scenes (`led:` in config.yaml).
+    led: LedConfig,
 }
 
 impl WledManager {
@@ -79,7 +82,14 @@ impl WledManager {
             versions: Default::default(),
             overlaid: Default::default(),
             realtime_port: REALTIME_PORT,
+            led: LedConfig::default(),
         }
+    }
+
+    /// Set the look of the realtime scenes (shout meter colour / fight scale).
+    pub fn with_led_config(mut self, led: LedConfig) -> Self {
+        self.led = led;
+        self
     }
 
     /// Send realtime frames to `port` instead of 21324, so tests can listen on a free port
@@ -506,6 +516,7 @@ impl WledManager {
         let sockets = self.udp_sockets.clone();
         let link = self.link.clone();
         let fps = self.config.udp_fps.max(1);
+        let led = self.led.clone();
         // Warming and fight read events; subscribe before spawning so none are missed.
         let mut events = matches!(state, ArenaState::Warming | ArenaState::Fight)
             .then(|| self.event_bus.subscribe());
@@ -513,7 +524,7 @@ impl WledManager {
         let handle = tokio::spawn(async move {
             let mut ticker = interval(Duration::from_millis(1000 / fps as u64));
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            let mut scene = Scene::new(state);
+            let mut scene = Scene::new(state, &led);
             let mut last_frame = Instant::now();
             // UDP send errors are reported at most once per second per controller.
             let mut last_report: std::collections::HashMap<std::net::IpAddr, std::time::Instant> =
@@ -805,25 +816,35 @@ enum Scene {
     Warming {
         inputs: LiveInputs,
         comps: std::collections::HashMap<(usize, usize), Compositor>,
+        meter: ShoutMeterStyle,
     },
     /// Ember base + punch pulses + shout ripple, one scene per strip like warming.
     Fight {
         inputs: LiveInputs,
         scenes: std::collections::HashMap<(usize, usize), FightScene>,
+        style: FightStyle,
     },
     Dark,
 }
 
 impl Scene {
-    fn new(state: ArenaState) -> Self {
+    fn new(state: ArenaState, led: &LedConfig) -> Self {
         match state {
             ArenaState::Warming => Scene::Warming {
                 inputs: LiveInputs::default(),
                 comps: Default::default(),
+                meter: ShoutMeterStyle::new(led.shout_meter_color, 1.0),
             },
             ArenaState::Fight => Scene::Fight {
                 inputs: LiveInputs::default(),
                 scenes: Default::default(),
+                style: FightStyle {
+                    shout_meter: Some(ShoutMeterStyle::new(
+                        led.shout_meter_color,
+                        led.shout_meter_fight_scale,
+                    )),
+                    ..FightStyle::default()
+                },
             },
             _ => Scene::Dark,
         }
@@ -840,6 +861,7 @@ impl Scene {
                     inputs.on_energy(energy, max_energy)
                 }
                 Ok(Event::ShoutDetected { intensity, .. }) => inputs.on_shout(intensity),
+                Ok(Event::ShoutLevel { level, .. }) => inputs.on_shout_level(level),
                 Ok(Event::PunchDetected { power, .. }) => inputs.on_punch(power),
                 Ok(_) | Err(TryRecvError::Lagged(_)) => {}
                 Err(TryRecvError::Empty | TryRecvError::Closed) => break,
@@ -884,28 +906,28 @@ impl Scene {
         dt: f32,
     ) -> Vec<u8> {
         match self {
-            Scene::Warming { comps, .. } => {
+            Scene::Warming { comps, meter, .. } => {
                 let comp = match comps.entry((idx, j)) {
                     std::collections::hash_map::Entry::Occupied(e) if e.get().len() == layout.leds => {
                         e.into_mut()
                     }
                     std::collections::hash_map::Entry::Occupied(mut e) => {
-                        e.insert(scenes::warming(layout.leds));
+                        e.insert(scenes::warming_with(layout.leds, meter.clone()));
                         e.into_mut()
                     }
                     std::collections::hash_map::Entry::Vacant(e) => {
-                        e.insert(scenes::warming(layout.leds))
+                        e.insert(scenes::warming_with(layout.leds, meter.clone()))
                     }
                 };
                 comp.render(dt, inputs).to_vec()
             }
-            Scene::Fight { scenes, .. } => {
+            Scene::Fight { scenes, style, .. } => {
                 let stale = scenes.get(&(idx, j)).is_none_or(|sc| {
                     sc.layout().leds != layout.leds
                         || sc.layout().bag_distance != layout.bag_distance
                 });
                 if stale {
-                    scenes.insert((idx, j), scenes::fight(layout.leds, *layout));
+                    scenes.insert((idx, j), scenes::fight_with(layout.leds, *layout, style.clone()));
                 }
                 let sc = scenes.get_mut(&(idx, j)).expect("just inserted");
                 sc.render(dt, inputs).to_vec()
@@ -1366,10 +1388,23 @@ mod tests {
         assert!(rx.recv_from(&mut buf).is_err(), "no frames after stop");
     }
 
+    /// `ShoutLevel` on the bus reaches the very next frame's inputs (warming and fight).
+    #[test]
+    fn shout_level_events_feed_the_next_frame() {
+        for state in [ArenaState::Warming, ArenaState::Fight] {
+            let bus = crate::core::EventBus::new(16);
+            let mut rx = bus.subscribe();
+            let mut scene = Scene::new(state, &LedConfig::default());
+            bus.publish(Event::ShoutLevel { level: 0.6, db_above_floor: 20.0 });
+            scene.drain_events(&mut rx);
+            assert_eq!(scene.begin_frame(1.0 / 30.0).shout_level, 0.6);
+        }
+    }
+
     /// A controller that reports a different LED count gets a bar of the new length.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn warming_rebuilds_the_compositor_when_the_led_count_changes() {
-        let mut scene = Scene::new(ArenaState::Warming);
+        let mut scene = Scene::new(ArenaState::Warming, &LedConfig::default());
         let inputs = Inputs {
             energy: 1.0,
             ..Default::default()
@@ -1386,7 +1421,7 @@ mod tests {
     /// own bottom; a `reverse` strip is flipped.
     #[test]
     fn multi_strip_frame_has_an_independent_bar_per_strip() {
-        let mut scene = Scene::new(ArenaState::Warming);
+        let mut scene = Scene::new(ArenaState::Warming, &LedConfig::default());
         let inputs = Inputs {
             energy: 0.5,
             ..Default::default()

@@ -26,6 +26,24 @@ pub struct Config {
     pub sound: SoundConfig,
     #[serde(default)]
     pub station: StationConfig,
+    #[serde(default)]
+    pub led: LedConfig,
+}
+
+/// Look of the brain-rendered LED scenes (warming, fight; see docs/LEDS.md).
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(default)]
+pub struct LedConfig {
+    /// Shout meter colour, RGB 0..255 (the energy bar is red to amber: keep it different).
+    pub shout_meter_color: [u8; 3],
+    /// Meter intensity in the fight scene relative to warming (0 = no meter in the fight).
+    pub shout_meter_fight_scale: f32,
+}
+
+impl Default for LedConfig {
+    fn default() -> Self {
+        Self { shout_meter_color: [0, 200, 255], shout_meter_fight_scale: 0.5 }
+    }
 }
 
 /// Sensor station link (services/station_manager.rs). Off unless `enabled`.
@@ -360,6 +378,20 @@ pub struct AudioConfig {
     /// Non-shouty frames tolerated inside a sustained shout.
     #[serde(default = "d_gap_frames")]
     pub shout_gap_frames: u32,
+    /// Shout meter (`ShoutLevel` events, services/shout_meter.rs): the meter reads 0 at
+    /// `floor + shout_meter_lo_db` and 1 at `floor + shout_meter_hi_db` above the adaptive
+    /// noise floor.
+    #[serde(default = "d_meter_lo")]
+    pub shout_meter_lo_db: f32,
+    #[serde(default = "d_meter_hi")]
+    pub shout_meter_hi_db: f32,
+    /// Dim the meter for frames that do not look like a shout (voiced / centroid / tilt /
+    /// flatness). `false`: level only.
+    #[serde(default = "d_true")]
+    pub shout_meter_gate: bool,
+    /// Meter release time constant, milliseconds (attack is immediate).
+    #[serde(default = "d_meter_release")]
+    pub shout_meter_release_ms: f32,
     /// Directory where audio clips (wav + feature json) are written.
     #[serde(default = "default_clip_dir")]
     pub clip_dir: PathBuf,
@@ -418,6 +450,9 @@ fn d_min_features() -> u32 { 3 }
 fn d_score_threshold() -> f32 { 8.0 }
 fn d_score_decay() -> f32 { 0.9 }
 fn d_gap_frames() -> u32 { 3 }
+fn d_meter_lo() -> f32 { 6.0 }
+fn d_meter_hi() -> f32 { 35.0 }
+fn d_meter_release() -> f32 { 200.0 }
 
 fn default_clip_dir() -> PathBuf {
     PathBuf::from("./clips")
@@ -864,6 +899,10 @@ impl Default for Config {
                 shout_score_threshold: d_score_threshold(),
                 shout_score_decay: d_score_decay(),
                 shout_gap_frames: d_gap_frames(),
+                shout_meter_lo_db: d_meter_lo(),
+                shout_meter_hi_db: d_meter_hi(),
+                shout_meter_gate: d_true(),
+                shout_meter_release_ms: d_meter_release(),
                 clip_dir: default_clip_dir(),
                 clip_seconds: default_clip_seconds(),
                 clip_on_shout: default_clip_on_shout(),
@@ -947,6 +986,7 @@ impl Default for Config {
             speaker: SpeakerConfig::default(),
             sound: SoundConfig::default(),
             station: StationConfig::default(),
+            led: LedConfig::default(),
         }
     }
 }

@@ -355,6 +355,12 @@ h2 {
     transition: width 0.1s ease;
 }
 
+/* Live shout level: fast, so no width transition. */
+.shout-meter {
+    background: #00c8ff;
+    transition: none;
+}
+
 .music-track {
     margin-top: 0.5rem;
     font-size: 0.85rem;

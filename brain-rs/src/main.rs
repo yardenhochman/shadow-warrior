@@ -80,7 +80,7 @@ async fn main() -> Result<()> {
     let audio_manager = Arc::new(AudioManager::new(config.audio.clone(), event_bus.clone()));
     info!("Audio manager initialized");
 
-    let wled_manager = Arc::new(WledManager::new(config.wled.clone(), db_manager.clone(), event_bus.clone()));
+    let wled_manager = Arc::new(WledManager::new(config.wled.clone(), db_manager.clone(), event_bus.clone()).with_led_config(config.led.clone()));
     info!("WLED manager initialized");
 
     let tasmota_manager = Arc::new(TasmotaManager::new(

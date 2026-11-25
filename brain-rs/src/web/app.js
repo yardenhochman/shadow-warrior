@@ -126,6 +126,11 @@ function connectEventStream() {
         updateAudioLevel(data.level_db);
     });
 
+    eventSource.addEventListener('ShoutLevel', (event) => {
+        const data = JSON.parse(event.data).data;
+        document.getElementById('shoutMeter').style.width = Math.round(data.level * 100) + '%';
+    });
+
     eventSource.addEventListener('MusicStarted', (event) => {
         const payload = JSON.parse(event.data);
         const data = payload.data;

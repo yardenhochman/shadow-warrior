@@ -11,6 +11,7 @@ use earshot::Detector;
 
 use super::audio_source;
 use super::shout_detector::ShoutDetector;
+use super::shout_meter::ShoutMeter;
 use super::session_recorder::{disk_free_bytes, sanitize_label, RecordStatus, SessionParams, SessionRecorder};
 use super::audio_frontend::{ClipOutput, ClipRecorder, FrameFeatures, FrontEnd, FrontEndConfig};
 
@@ -299,7 +300,7 @@ impl AudioManager {
     }
 
     /// Spawn the shout detector: consumes `subscribe_features()` and publishes
-    /// `AudioLevelChanged` (throttled) and `ShoutDetected`.
+    /// `AudioLevelChanged` (throttled), `ShoutLevel` (~30 Hz, shout_meter.rs) and `ShoutDetected`.
     fn start_shout_detector(&self) {
         let mut rx = self.subscribe_features();
         let config = self.config.clone();
@@ -307,6 +308,7 @@ impl AudioManager {
         let level = self.current_level_db.clone();
         tokio::spawn(async move {
             let mut det = ShoutDetector::new();
+            let mut meter = ShoutMeter::new();
             let mut last_level_event = Instant::now();
             while rx.changed().await.is_ok() {
                 let Some(feat) = rx.borrow_and_update().clone() else { continue };
@@ -315,6 +317,10 @@ impl AudioManager {
                 if last_level_event.elapsed() >= Duration::from_millis(100) {
                     event_bus.publish(Event::AudioLevelChanged { level_db: feat.band_db });
                     last_level_event = Instant::now();
+                }
+                // Fast meter signal, independent of the detector's score/duration logic.
+                if let Some(m) = meter.push(&feat, &cfg) {
+                    event_bus.publish(Event::ShoutLevel { level: m.level, db_above_floor: m.db_above_floor });
                 }
                 if let Some(d) = det.push(&feat, &cfg) {
                     event_bus.publish(Event::shout_detected(d.intensity, d.duration_sec, d.level_db));

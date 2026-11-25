@@ -72,6 +72,37 @@ speaker supervisor: `speaker_state` (`not_configured` | `connected` | `connectin
 playing is `health.music.powered`. The card says "Playing via <speaker>" or "Falling back to built-in
 audio". There is no output test endpoint: nothing in the API plays a sound on demand.
 
+## ShoutLevel: the live shout meter signal
+
+`ShoutDetected` fires ~300-500 ms after onset (sustained, scored): right for counting shouts, far too
+late for a live LED meter. `Event::ShoutLevel { level, db_above_floor }` is the continuous companion
+(`services/shout_meter.rs`, run next to the detector on the same 16 ms front-end features for both the
+local mic and the station stream; it does not touch `ShoutDetected`).
+
+```
+raw   = clamp((db_above_floor - lo) / (hi - lo), 0, 1)    lo/hi = audio.shout_meter_lo_db / _hi_db
+        (lo and hi are raised by shout_playback_margin_db while our speakers play)
+gate  = 0.25 + 0.75 * passed/4     passed = voiced, centroid, tilt, flatness checks of the detector
+level = attack: immediate; release: exponential, tau = audio.shout_meter_release_ms
+```
+
+- `db_above_floor` is the band-passed level over the adaptive noise floor (the detector's distance
+  rejection applies: a far or steady sound hugs the floor and reads 0).
+- The gate makes a loud non-shout (talking, music, a clap) read dim, not zero: all four checks failed
+  = 25 %, all passed = 100 %. `audio.shout_meter_gate: false` = level only.
+- Published at most every 2nd frame (~31 Hz) while the level is above zero, plus one final 0; nothing
+  while silent. Frames dropped by the watch channel are credited, so the decay stays in real time.
+- Consumers: the LED `ShoutMeter` layer (docs/LEDS.md) and a small live bar on the dashboard audio card.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `audio.shout_meter_lo_db` | 6 | dB above the floor where the meter starts (reads 0 below) |
+| `audio.shout_meter_hi_db` | 35 | dB above the floor where it is full |
+| `audio.shout_meter_gate` | true | dim frames that do not look like a shout |
+| `audio.shout_meter_release_ms` | 200 | release time constant |
+
+Not tuned on recordings yet: use `shout_replay --features-csv` output to pick lo/hi for the I2S mics.
+
 ## Tuning on recordings
 
 `shout_replay` (`src/bin/shout_replay.rs`, logic in `services/shout_replay.rs`) replays a WAV through
