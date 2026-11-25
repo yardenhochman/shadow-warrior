@@ -1,0 +1,21 @@
+{
+ "ver": "16.0.1",
+ "vid": 2508020,
+ "name": "WLED",
+ "leds": {
+  "count": 180,
+  "pwr": 820,
+  "fps": 41,
+  "maxpwr": 1000,
+  "maxseg": 32,
+  "bootps": 0,
+  "seglc": [
+   1
+  ],
+  "lc": 1,
+  "rgbw": false,
+  "wv": 0,
+  "cct": 0
+ },
+ "arch": "ESP32-C3"
+}

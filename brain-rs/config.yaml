@@ -143,7 +143,7 @@ wled:
   # Keep WLED's own per-output Reverse off and use `reverse: true` below (unverified whether
   # WLED's Reverse flips UDP realtime frames).
   # controllers:
-  #   - ip: "10.0.0.55"          # one strip = column 0 (column = list index)
+  #   - ip: "10.0.0.35"          # one strip = column 0 (column = list index)
   #     num_leds: 180
   #   - ip: "10.0.0.56"          # a controller hosting columns 1 and 2 (num_leds = 360)
   #     strips:
@@ -159,14 +159,33 @@ wled:
   # colors (up to 3 RGB triples, e.g. [[255,0,0],[0,0,255]]).
   effects:
     idle:
-      # 2026-11-19: WLED "Tri Fade": ember -> black -> black -> ember, a third of the cycle each, so
+      # WLED 16+ (2026-11-25): two overlaid segments over the whole strip. A dim ember Solid
+      # underneath, a white Fade on top blended by multiply: the ember breathes to true black
+      # (~6 s at speed 0, the slowest Fade). `effect` is ignored while `segments` is set.
+      # Needs gamma 1.8 on the controller (deploy/wled_set_gamma.py). Blend: a name (normal,
+      # add, multiply, screen ... see config.rs BLEND_MODES) or the WLED `bm` number.
+      # Traps: Sine (speed < 16 freezes, its step is speed/16), Breathe never reaches black.
+      effect: "Solid"
+      segments:
+        - effect: "Solid"
+          colors: [[255, 25, 0], [0, 0, 0], [0, 0, 0]]
+          brightness: 90
+          blend: normal
+        - effect: "Fade"
+          speed: 0
+          intensity: 128
+          colors: [[255, 255, 255], [0, 0, 0], [0, 0, 0]]
+          brightness: 255
+          blend: multiply
+      # Controllers older than WLED 16 (no blend modes) get this single-segment look:
+      # 2026-11-19 "Tri Fade": ember -> black -> black -> ember, a third of the cycle each, so
       # a ~5 s breath with a short dark rest. Cycle = 65.536 s / ((speed >> 3) + 1): speed 96-103
-      # give 5.04 s. Brightness 44 keeps the peak under the controller's 1000 mA limit (ABL), which
-      # otherwise flattens the top of the wave; raise it only with a bigger PSU and `maxpwr`.
-      effect: "Tri Fade"
-      speed: 96
-      brightness: 44
-      colors: [[255, 25, 0], [0, 0, 0], [0, 0, 0]]
+      # give 5.04 s. Brightness 44 keeps the peak under the controller's 1000 mA limit (ABL).
+      fallback:
+        effect: "Tri Fade"
+        speed: 96
+        brightness: 44
+        colors: [[255, 25, 0], [0, 0, 0], [0, 0, 0]]
     # Only idle and cooldown use built-in WLED effects. Warming and fight are always UDP
     # realtime, rendered by the brain (docs/LEDS.md). Set them to anything else and the
     # layered scenes are lost.

@@ -197,9 +197,14 @@ On each controller (WLED web UI):
       the strip's PSU rating is **unknown**, check it before raising the limit).
 - [ ] Sync / realtime: "Receive UDP realtime" on (default), port 21324. The brain sends a frame
       every tick, so the 2 s realtime timeout never expires while it runs.
-- [ ] Version: effect and palette ids differ between WLED builds. The brain resolves names
-      against the controller (`/json/eff`, `/json/pal`) and the fallback table is for 0.15.4
-      (verified on an ESP32-C3). Use exact names in `config.yaml` (`"Fade"`, `"Fire 2012"`, `"Lava"`).
+- [ ] Version: **WLED 16 or newer** (the idle look overlays two segments with a blend mode,
+      which 0.15.4 lacks; the brain reads `ver` from `/json/info` and uses the single-segment
+      `fallback` idle on 0.x controllers). Effect and palette ids differ between WLED builds. The
+      brain resolves names against the controller (`/json/eff`, `/json/pal`) and the fallback
+      table is for 0.15.4. Use exact names in `config.yaml` (`"Fade"`, `"Fire 2012"`, `"Lava"`).
+- [ ] Gamma 1.8 (a one-off controller setting, the brain does not set it): WLED's default 2.8
+      makes the dark end of the idle breath steppy. `uv run deploy/wled_set_gamma.py <ip>`
+      (sends the full `gc` object and reads it back; Settings > LED Preferences > Gamma also works).
 - [ ] An ESP32-C3 rebooted under 4 Hz GET polling: do not poll it hard. The brain polls
       `/json/info` every 30 s (LED count, liveness) and reads `/json/cfg` (LED outputs) once
       per connect, never repeatedly.
@@ -212,7 +217,7 @@ In `/opt/shadow-brain/config.yaml` on the station:
 wled:
   columns: 4                                       # optional, default = highest column + 1
   controllers:
-    - {ip: "10.0.0.55", num_leds: 180}             # one strip = column 0 (column = list index)
+    - {ip: "10.0.0.35", num_leds: 180}             # one strip = column 0 (column = list index)
     - ip: "10.0.0.56"                              # one controller hosting columns 1 and 2
       strips:                                      # consecutive in LED order; num_leds optional (= sum)
         - {column: 1, leds: 180}
@@ -240,8 +245,9 @@ wled:
 
 Check the strips before trusting the brain:
 
-- [ ] `uv run deploy/wled_try.py --wled http://<ip> --fx Fade --sx 40 --col 255,25,0 --col 0,0,0`
-      shows the idle breathing (stop the brain first; this tool never polls).
+- [ ] `uv run deploy/wled_try.py --wled http://<ip> --overlay 180` shows the WLED 16 idle
+      (`--fx Fade --sx 40 --col 255,25,0 --col 0,0,0` shows the single-segment look). Stop the
+      brain first; this tool never polls.
 - [ ] Without any hardware, `simulator/live/live.py brain --wled none --layout <file>` shows the
       real brain's frames in the browser; `simulator/live/layouts/four-columns.yaml` is a ready
       layout (see `simulator/web/README.md`, "Layout").
