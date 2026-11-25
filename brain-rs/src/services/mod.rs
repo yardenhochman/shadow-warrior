@@ -17,6 +17,7 @@ pub mod station_manager;
 pub mod station_provisioner;
 pub mod schedule_manager;
 pub mod shout_detector;
+pub mod shout_replay;
 pub mod tasmota_manager;
 pub mod wav_eval;
 pub mod wled_manager;
