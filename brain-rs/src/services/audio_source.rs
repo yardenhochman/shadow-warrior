@@ -14,12 +14,18 @@ pub enum SourceKind {
     /// Alias resolved by the sound server ("default", "pipewire", "Default Audio Device"):
     /// can be a mic or a monitor; only the server knows.
     Generic,
+    /// ALSA null device ("Discard all samples (playback) or generate zero samples (capture)"):
+    /// captures silence forever, never a microphone.
+    Null,
     /// A named capture device.
     Real,
 }
 
 pub fn classify_name(name: &str) -> SourceKind {
     let n = name.trim().to_lowercase();
+    if n.contains("discard all samples") || n.contains("generate zero samples") || n == "null" || n.starts_with("null:") {
+        return SourceKind::Null;
+    }
     if n.contains("monitor") || n.contains("loopback") || n.contains("stereo mix") || n.contains("what u hear") {
         return SourceKind::Monitor;
     }
@@ -44,17 +50,17 @@ pub enum Decision {
 /// (None = unknown). With `reject_monitor` false the default is always used.
 pub fn decide(candidates: &[String], default_idx: usize, default_is_monitor: Option<bool>, reject_monitor: bool) -> Decision {
     let Some(default_name) = candidates.get(default_idx) else {
-        return Decision::Reject("no input device available".into());
+        return Decision::Reject(format!("{NO_MIC_PREFIX}: no input device available"));
     };
-    if !reject_monitor {
-        return Decision::Use(default_idx);
-    }
     let kind = classify_name(default_name);
-    let default_bad = kind == SourceKind::Monitor || (kind == SourceKind::Generic && default_is_monitor == Some(true));
+    // A null device is never a microphone, whatever `reject_monitor` says.
+    let default_bad = kind == SourceKind::Null
+        || (reject_monitor
+            && (kind == SourceKind::Monitor || (kind == SourceKind::Generic && default_is_monitor == Some(true))));
     if !default_bad {
         return Decision::Use(default_idx);
     }
-    // A named non-default device that is neither a monitor nor an alias (could be a real mic).
+    // A named non-default device that is neither a monitor, null nor an alias (could be a real mic).
     if let Some(i) = candidates
         .iter()
         .enumerate()
@@ -63,8 +69,24 @@ pub fn decide(candidates: &[String], default_idx: usize, default_is_monitor: Opt
     {
         return Decision::Use(i);
     }
-    Decision::Reject(format!("no real microphone: capture is a sink monitor ({default_name})"))
+    Decision::Reject(format!("{NO_MIC_PREFIX}: only null/monitor devices present ({default_name})"))
 }
+
+/// Start of every "there is no microphone" reason (health `audio.last_error`).
+pub const NO_MIC_PREFIX: &str = "no microphone";
+
+/// Typed "no microphone" failure of `AudioManager::start`, so the retry loop can tell it
+/// from a device that exists but cannot be opened.
+#[derive(Debug)]
+pub struct NoMicrophone(pub String);
+
+impl std::fmt::Display for NoMicrophone {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for NoMicrophone {}
 
 /// Parse `pactl --format=json list sources` and report whether `source_name` is a monitor
 /// (`monitor_of_sink` set, or name ends in ".monitor"). None if absent or unparsable.
@@ -75,7 +97,7 @@ pub fn source_is_monitor(json: &str, source_name: &str) -> Option<bool> {
     Some(of_sink || source_name.ends_with(".monitor"))
 }
 
-fn run_pactl(args: &[&str], timeout: Duration) -> Option<String> {
+pub(crate) fn run_pactl(args: &[&str], timeout: Duration) -> Option<String> {
     use std::io::Read;
     use std::process::{Command, Stdio};
     let mut child = Command::new("pactl")
@@ -119,6 +141,28 @@ pub fn pactl_default_source_is_monitor() -> Option<bool> {
     }
 }
 
+/// Name of the PipeWire/Pulse default source and its description (what an alias capture
+/// device such as "default" or "pipewire" really is). Blocking; None without `pactl`.
+pub fn pactl_default_source_info() -> Option<(String, Option<String>)> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    let t = Duration::from_secs(2);
+    let name = run_pactl(&["get-default-source"], t)?.trim().to_string();
+    if name.is_empty() {
+        return None;
+    }
+    let desc = run_pactl(&["--format=json", "list", "sources"], t).and_then(|j| source_description(&j, &name));
+    Some((name, desc))
+}
+
+/// `description` of the named source in `pactl --format=json list sources`.
+pub fn source_description(json: &str, source_name: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(json).ok()?;
+    let src = v.as_array()?.iter().find(|s| s.get("name").and_then(|n| n.as_str()) == Some(source_name))?;
+    src.get("description").and_then(|d| d.as_str()).map(str::to_string)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,12 +183,40 @@ mod tests {
         assert_eq!(classify_name("Default Audio Device"), Generic);
         assert_eq!(classify_name("sysdefault:CARD=Device"), Real);
         assert_eq!(classify_name("USB PnP Sound Device Mono"), Real);
+        assert_eq!(classify_name(NULL_DEV), Null);
+        assert_eq!(classify_name("null"), Null);
+    }
+
+    const NULL_DEV: &str = "Discard all samples (playback) or generate zero samples (capture)";
+
+    #[test]
+    fn null_device_default_is_rejected_with_reason() {
+        let d = decide(&v(&[NULL_DEV]), 0, None, true);
+        assert!(
+            matches!(d, Decision::Reject(ref m) if m.starts_with("no microphone: only null/monitor devices present")),
+            "{d:?}"
+        );
+        // the guard flag does not matter: a null device is never a microphone
+        assert!(matches!(decide(&v(&[NULL_DEV]), 0, None, false), Decision::Reject(_)));
+    }
+
+    #[test]
+    fn null_default_falls_back_to_a_real_mic_when_plugged_in() {
+        let c = v(&[NULL_DEV, "default", "sysdefault:CARD=BOMGE"]);
+        assert_eq!(decide(&c, 0, None, true), Decision::Use(2));
+    }
+
+    #[test]
+    fn describes_a_pulse_source() {
+        let j = r#"[{"name":"alsa_input.usb-BOMGE","description":"BOMGE USB Mic Mono"}]"#;
+        assert_eq!(source_description(j, "alsa_input.usb-BOMGE").as_deref(), Some("BOMGE USB Mic Mono"));
+        assert_eq!(source_description(j, "x"), None);
     }
 
     #[test]
     fn monitor_default_without_alternative_is_rejected() {
         let d = decide(&v(&["UE BOOM 4 Monitor"]), 0, None, true);
-        assert!(matches!(d, Decision::Reject(ref m) if m.starts_with("no real microphone")));
+        assert!(matches!(d, Decision::Reject(ref m) if m.starts_with("no microphone")));
     }
 
     #[test]
@@ -152,7 +224,7 @@ mod tests {
         let c = v(&["Default Audio Device"]);
         assert_eq!(
             decide(&c, 0, Some(true), true),
-            Decision::Reject("no real microphone: capture is a sink monitor (Default Audio Device)".into())
+            Decision::Reject("no microphone: only null/monitor devices present (Default Audio Device)".into())
         );
         assert_eq!(decide(&c, 0, Some(false), true), Decision::Use(0));
         assert_eq!(decide(&c, 0, None, true), Decision::Use(0), "unknown verdict: do not block a possibly real mic");

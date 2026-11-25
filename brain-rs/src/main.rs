@@ -133,10 +133,19 @@ async fn main() -> Result<()> {
     if station_audio {
         // The station's raw stream replaces the local microphone.
         audio_manager.attach_external("sensor station", services::station_manager::AUDIO_RATE).await;
-    } else if let Err(e) = audio_manager.start().await {
-        tracing::error!("Audio manager failed to start, continuing without audio input: {e:#}");
-        event_bus.publish(core::Event::AudioError { error: format!("start: {e:#}") });
+    } else {
+        // Retries in the background until a microphone shows up (USB mic plugged in late).
+        tokio::spawn(audio_manager.clone().start_with_retry());
     }
+    health_registry.set_features(core::audio_health::FeatureFlags {
+        audio_input: config.audio.input || station_audio,
+        station_enabled: config.station.enabled,
+        station_stream_audio: station_audio,
+        provision_enabled: config.station.provision.enabled,
+        speaker_configured: config.speaker.address.as_deref().is_some_and(|a| !a.trim().is_empty()),
+    });
+    // Default output sink (PipeWire/Pulse) for the dashboard's speaker card.
+    let _sinks = services::audio_output::spawn(event_bus.clone());
     let _mdns = (!config.server.mdns_name.is_empty()).then(|| {
         let station_port = config.station.udp_bind.as_deref().and_then(|b| b.rsplit(':').next()).and_then(|p| p.parse().ok());
         services::mdns_advert::advertise(&config.server.mdns_name, config.server.port, station_port.filter(|_| config.station.enabled))

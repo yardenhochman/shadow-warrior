@@ -287,7 +287,6 @@ function healthRows(health) {
     if (!health) return [];
     const rows = [
         { label: 'BLE' + (health.ble.name ? ` (${health.ble.name})` : ''), device: health.ble },
-        { label: 'Audio' + (health.audio.name ? ` (${health.audio.name})` : ''), device: health.audio },
         { label: 'Music', device: health.music },
     ];
     for (const [ip, d] of Object.entries(health.wled || {})) rows.push({ label: `WLED ${ip}`, device: d });
@@ -346,6 +345,178 @@ function renderDeviceHealth(health) {
         if (d.error_count > 0) card.appendChild(fact('Errors', String(d.error_count)));
         root.appendChild(card);
     }
+
+    // Sensor station, microphone and speaker cards (built from health.station, audio_in, audio_out)
+    for (const spec of [stationCard(health), micCard(health), speakerCard(health)]) {
+        const card = el('div', `health-row ${spec.badge[1]}`);
+        const head = el('div', 'health-head');
+        head.appendChild(el('span', 'health-name', spec.label));
+        head.appendChild(el('span', `health-badge ${spec.badge[1]}`, spec.badge[0]));
+        card.appendChild(head);
+        if (spec.note) card.appendChild(el('div', `health-note ${spec.note[1]}`, spec.note[0]));
+        for (const [k, v, cls] of spec.facts) card.appendChild(fact(k, v, cls));
+        for (const [ch, db] of spec.bars || []) card.appendChild(levelBar(el, ch, db));
+        root.appendChild(card);
+    }
+}
+
+// dB (-60..0) as a small bar: "L [=====   ] -23.4 dB"
+function levelBar(el, channel, db) {
+    const row = el('div', 'level-bar');
+    row.appendChild(el('span', 'level-ch', channel));
+    const track = el('div', 'level-track');
+    const pct = db == null ? 0 : Math.max(0, Math.min(100, ((db + 60) / 60) * 100));
+    const fill = el('div', 'level-fill' + (db != null && db > -6 ? ' hot' : ''));
+    fill.style.width = `${pct}%`;
+    track.appendChild(fill);
+    row.appendChild(track);
+    row.appendChild(el('span', 'level-val', db == null ? 'n/a' : `${db.toFixed(1)} dB`));
+    return row;
+}
+
+const fmtDb = (v) => (v == null ? 'n/a' : `${Number(v).toFixed(1)} dB`);
+
+// Sensor station: link, sensors, frame counters and BLE provisioning per station.
+function stationCard(health) {
+    const f = health.features || {};
+    const st = health.station || {};
+    const label = 'Sensor station' + (st.name ? ` (${st.name})` : '');
+    if (!f.station_enabled) {
+        return { label, badge: ['Disabled', 'off'], note: ['Disabled in config (station.enabled: false)', 'off'], facts: [] };
+    }
+    const facts = [];
+    let badge;
+    if (!st.connected) badge = ['Disconnected', 'down'];
+    else if (st.stale) badge = ['Stale', 'stale'];
+    else badge = ['Connected', 'up'];
+    facts.push(['Last seen', relativeTime(st.last_seen) || 'never', st.stale ? 'warn' : '']);
+    if (!st.connected && st.disconnect_reason) facts.push(['Reason', st.disconnect_reason, 'err']);
+    if (st.detail) facts.push(['Firmware', st.detail.replace(/^fw /, '')]);
+    if (st.radar_present != null) {
+        const dist = st.radar_distance_cm != null ? ` at ${st.radar_distance_cm} cm` : '';
+        facts.push(['Radar', st.radar_present ? `presence${dist}` : 'clear', st.radar_present ? 'ok' : '']);
+    } else {
+        facts.push(['Radar', 'no data']);
+    }
+    if (st.direction_deg != null) {
+        const conf = st.direction_confidence != null ? ` (conf ${Number(st.direction_confidence).toFixed(2)})` : '';
+        facts.push(['Direction', `${Number(st.direction_deg).toFixed(0)} deg${conf}`]);
+    }
+    facts.push(['Frames', `${st.frames} (lost ${st.frames_lost}, bad ${st.bad_frames})`,
+        st.frames_lost > 0 || st.bad_frames > 0 ? 'warn' : '']);
+    if (st.audio_gap_frames > 0) facts.push(['Audio gaps filled', String(st.audio_gap_frames), 'warn']);
+    if (st.last_error) {
+        const when = relativeTime(st.last_error_at);
+        facts.push(['Last error', when ? `${st.last_error} (${when})` : st.last_error, 'err']);
+    }
+    // BLE provisioning, one line per station: found | provisioning | up | failed(reason)
+    const prov = Object.entries(health.station_provision || {});
+    if (!f.provision_enabled) {
+        facts.push(['Provisioning', 'off (station.provision.enabled: false)']);
+    } else if (prov.length === 0) {
+        facts.push(['Provisioning', 'no station seen yet']);
+    }
+    for (const [name, e] of prov) {
+        const cls = e.state === 'failed' ? 'err' : e.state === 'up' ? 'ok' : 'warn';
+        const text = e.state === 'failed' ? `failed: ${e.detail || 'unknown reason'}`
+            : e.state === 'up' ? `up${e.detail ? ` (${e.detail})` : ''}`
+            : e.state;
+        facts.push([`Provision ${name}`, `${text} ${relativeTime(e.updated) || ''}`.trim(), cls]);
+    }
+    const bars = [['L', st.rms_dbfs_l], ['R', st.rms_dbfs_r]];
+    return { label, badge, facts, bars: st.rms_dbfs_l == null && st.rms_dbfs_r == null ? [] : bars };
+}
+
+// Audio in: the capture device the brain really uses, and whether anything is heard.
+function micCard(health) {
+    const a = health.audio_in || {};
+    const au = health.audio || {};
+    const label = 'Microphone (audio in)';
+    const facts = [];
+    const reason = a.reason || au.last_error || au.disconnect_reason;
+    let badge, note;
+    switch (a.status) {
+        case 'disabled':
+            return { label, badge: ['Disabled', 'off'], note: ['Audio input is off in config (audio.input: false)', 'off'], facts };
+        case 'no_microphone':
+            badge = ['No microphone', 'down'];
+            note = [reason || 'no microphone', 'err'];
+            facts.push(['Status', 'retrying until a microphone is plugged in', 'warn']);
+            break;
+        case 'signal':
+            badge = ['Signal present', 'up'];
+            break;
+        case 'silent':
+            badge = ['Silent', 'stale'];
+            note = ['Capturing, but the level is below the signal threshold (-60 dB). Dead mic or quiet room.', 'warn'];
+            break;
+        default:
+            badge = ['No data', 'stale'];
+            note = ['Device open, no level reports in the last seconds', 'warn'];
+    }
+    if (a.source === 'station') {
+        note = ['The sensor station is the audio source (station.stream_audio)', note ? note[1] : 'ok'];
+        facts.push(['Source', 'sensor station stream']);
+    } else if (a.source === 'microphone') {
+        facts.push(['Source', 'local microphone']);
+    }
+    if (a.device) facts.push(['Device', a.device]);
+    if (a.pulse_source) facts.push(['PipeWire source', a.pulse_source]);
+    if (a.sample_rate) facts.push(['Sample rate', `${a.sample_rate} Hz`]);
+    facts.push(['Level', fmtDb(a.level_db)]);
+    facts.push(['Peak (3 s)', fmtDb(a.peak_db)]);
+    if (a.status !== 'no_microphone' && au.last_error) {
+        const when = relativeTime(au.last_error_at);
+        facts.push(['Last error', when ? `${au.last_error} (${when})` : au.last_error, 'err']);
+    }
+    const bars = a.status === 'no_microphone' ? [] : [['', a.level_db]];
+    return { label, badge, note, facts, bars };
+}
+
+// Audio out: Bluetooth speaker supervision and the sink the music is played through.
+function speakerCard(health) {
+    const o = health.audio_out || {};
+    const sp = health.speaker || {};
+    const f = health.features || {};
+    const playing = !!(health.music && health.music.powered);
+    const track = health.music && health.music.detail;
+    const spName = sp.name || 'Bluetooth speaker';
+    const label = 'Speakers (audio out)' + (sp.name ? ` (${sp.name})` : '');
+    const sinkText = o.sink ? (o.sink_description || o.sink) : null;
+    const facts = [];
+    let badge, note;
+    if (o.route === 'bluetooth') {
+        note = [playing ? `Playing via ${spName}` : `Output is ${spName} (idle)`, 'ok'];
+    } else if (f.speaker_configured) {
+        note = [`Falling back to built-in audio${sinkText ? ` (${sinkText})` : ''}: ${spName} is not the output`, 'warn'];
+    } else {
+        note = [sinkText ? `No Bluetooth speaker configured; output is ${sinkText}` : 'No Bluetooth speaker configured', 'off'];
+    }
+    switch (o.speaker_state) {
+        case 'connected': badge = ['Connected', o.route === 'bluetooth' ? 'up' : 'stale']; break;
+        case 'connecting': badge = ['Connecting', 'stale']; break;
+        case 'failed': badge = ['Failed', 'down']; break;
+        default: badge = ['Not configured', 'off'];
+    }
+    if (o.speaker_state === 'failed') {
+        note = [`${spName} is not connected: ${sp.last_error || 'unknown error'}. Playing via ${o.route === 'bluetooth' ? spName : 'built-in audio'}.`, 'err'];
+    }
+    if (f.speaker_configured) {
+        facts.push(['Speaker link', o.speaker_state || 'unknown', o.speaker_state === 'failed' ? 'err' : o.speaker_state === 'connected' ? 'ok' : 'warn']);
+        facts.push(['Last seen', relativeTime(sp.last_seen) || 'never', sp.stale ? 'warn' : '']);
+        if (o.speaker_state === 'failed') {
+            const retry = o.speaker_retry_in_sec != null ? `, next try in about ${o.speaker_retry_in_sec}s` : '';
+            facts.push(['Retries', `${o.speaker_attempts} failed${retry}`, 'warn']);
+        }
+        if (sp.last_error) {
+            const when = relativeTime(sp.last_error_at);
+            facts.push(['Last error', when ? `${sp.last_error} (${when})` : sp.last_error, 'err']);
+        }
+    }
+    facts.push(['Output sink', sinkText ? `${sinkText}` : 'unknown (no pactl)']);
+    if (o.volume_pct != null) facts.push(['Volume', `${o.volume_pct}%${o.muted ? ' (muted)' : ''}`, o.muted ? 'warn' : '']);
+    facts.push(['Music', playing ? `playing${track ? `: ${track}` : ''}` : 'stopped']);
+    return { label, badge, note, facts };
 }
 
 // Update statistics

@@ -46,6 +46,32 @@ Unconfigured cues are silent.
 - **Dev machines**: this plays through the default output. Unit tests use a fake output and
   never open a device.
 
+## Audio health (dashboard cards)
+
+`/api/state` -> `hardware.health` carries two blocks, shown as the Microphone and Speakers cards.
+
+**`audio_in`** (microphone, or the station stream when `station.stream_audio`):
+`source` (`microphone` | `station`), `device` (name as cpal reports it), `pulse_source` (PipeWire/Pulse
+source node and description behind an alias device such as `default`, via `pactl`), `sample_rate`,
+`level_db` / `peak_db` (band level of the shout front-end, peak held 3 s), `reason` and a derived
+`status`: `disabled` (`audio.input: false`) | `no_microphone` | `no_data` (no level for 3 s) | `silent`
+(below -60 dB) | `signal`.
+
+`no_microphone`: the brain never captures from a sink monitor or from an ALSA **null device** ("Discard
+all samples (playback) or generate zero samples (capture)", also `null`); a null device is rejected
+even with `audio.reject_monitor: false`. It reports `audio.connected: false` with `last_error`
+"no microphone: only null/monitor devices present (<device>)" and retries `AudioManager::start`
+every 5 s (doubling to 60 s), so a USB mic plugged in later is picked up without a restart. A capture
+that is lost after it started (unplug while running) is still not restarted (shadow-warrior-8ev).
+
+**`audio_out`**: `sink` / `sink_description` / `sink_bluetooth` / `volume_pct` / `muted` of the default
+PipeWire/Pulse sink (polled with `pactl` every 5 s by `services/audio_output.rs`; rodio plays to this
+default sink; absent without `pactl`), `route` (`bluetooth` | `builtin` | `unknown`), and the Bluetooth
+speaker supervisor: `speaker_state` (`not_configured` | `connected` | `connecting` | `failed`),
+`speaker_attempts`, `speaker_retry_in_sec`; link details and `last_error` stay in `health.speaker`. Music
+playing is `health.music.powered`. The card says "Playing via <speaker>" or "Falling back to built-in
+audio". There is no output test endpoint: nothing in the API plays a sound on demand.
+
 ## Not done yet
 
 - Combo cues (`combo3/5/10`): brain-rs has no combo notion yet (the simulator counts hits

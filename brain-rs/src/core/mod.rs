@@ -1,3 +1,4 @@
+pub mod audio_health;
 pub mod events;
 pub mod state_machine;
 pub mod status_registry;

@@ -381,7 +381,7 @@ pub struct AudioConfig {
     #[serde(default = "d_true")]
     pub input: bool,
     /// Refuse a sink-monitor / loopback capture (the brain would hear its own playback):
-    /// audio health becomes an error ("no real microphone") and shout detection stays off.
+    /// audio health becomes an error ("no microphone: only null/monitor devices present") and shout detection stays off.
     #[serde(default = "d_true")]
     pub reject_monitor: bool,
     /// Long-session recorder: seconds of raw audio per WAV chunk.
