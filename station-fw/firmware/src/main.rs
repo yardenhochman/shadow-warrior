@@ -374,36 +374,63 @@ fn main() -> anyhow::Result<()> {
             .spawn(move || radar_task(uart, out_pin, tx, shared, id))?;
     }
 
-    // --- Wi-Fi + BLE provisioning: UDP frames to the brain, commands on UDP 4211 ---
-    // BOOT (GPIO0) held at power-up re-opens BLE provisioning for 10 minutes.
+    // --- network: a boot is either Wi-Fi (normal) or BLE provisioning, never both (RAM) ---
+    // BOOT (GPIO0) held at power-up forces a provisioning boot.
     let button_override = PinDriver::input(p.pins.gpio0, Pull::Up).map(|b| b.is_low()).unwrap_or(false);
     match (esp_idf_svc::eventloop::EspSystemEventLoop::take(), esp_idf_svc::nvs::EspDefaultNvsPartition::take()) {
         (Ok(sysloop), Ok(nvs)) => {
-            let initial = net::load_cfg(&nvs);
-            let (upd_tx, upd_rx) = std::sync::mpsc::channel();
-            let txp = tx.clone();
-            match net::spawn(p.modem, sysloop, nvs.clone(), initial, upd_rx, move |sock| {
-                txp.lock().unwrap_or_else(|e| e.into_inner()).udp = sock;
-            }) {
-                Ok(()) => {
-                    let sh = shared.clone();
-                    let mut warned = false;
-                    if let Err(e) = net::spawn_cmd_rx(move |f| {
-                        if let Ok(env) = decode_command(f) {
-                            handle_command(&env, &sh, None, &mut warned);
+            let cfg = net::load_cfg(&nvs);
+            let flag = net::take_prov_flag(&nvs);
+            match station_core::ble_policy::boot_mode(cfg.is_some(), button_override, flag) {
+                station_core::ble_policy::Mode::Normal => {
+                    // SAFETY: BLE is never started in this boot; returns the controller's RAM to the heap.
+                    unsafe { sys::esp_bt_mem_release(sys::esp_bt_mode_t_ESP_BT_MODE_BTDM) };
+                    let txp = tx.clone();
+                    let started = cfg.map(|cfg| {
+                        net::spawn(p.modem, sysloop, nvs, cfg, move |sock| {
+                            txp.lock().unwrap_or_else(|e| e.into_inner()).udp = sock;
+                        })
+                    });
+                    match started {
+                        Some(Ok(())) => {
+                            let sh = shared.clone();
+                            let mut warned = false;
+                            if let Err(e) = net::spawn_cmd_rx(move |f| {
+                                if let Ok(env) = decode_command(f) {
+                                    handle_command(&env, &sh, None, &mut warned);
+                                }
+                            }) {
+                                warn!("net: command port failed: {e}");
+                            }
                         }
-                    }) {
-                        warn!("net: command port failed: {e}");
+                        Some(Err(e)) => warn!("net: Wi-Fi start failed: {e}; USB only"),
+                        None => {}
                     }
-                    let sh = shared.clone();
+                }
+                station_core::ble_policy::Mode::Provision => {
+                    info!("boot: BLE provisioning mode (Wi-Fi off); button={button_override} flag={flag}");
                     let nvs2 = nvs.clone();
+                    let on_config = move |c: station_proto::provision::Config| {
+                        net::apply_update(
+                            &nvs2,
+                            net::Update { ssid: c.ssid.as_str().into(), pass: c.pass.as_str().into(), brain: c.brain.as_str().into() },
+                        );
+                        // Give the GATT write response a moment to go out, then join Wi-Fi from a clean boot.
+                        thread::spawn(|| {
+                            thread::sleep(Duration::from_millis(1500));
+                            // SAFETY: plain restart.
+                            unsafe { sys::esp_restart() }
+                        });
+                    };
+                    let sh = shared.clone();
+                    let nvs3 = nvs.clone();
                     let on_cmd = move |c: station_proto::provision::Command| {
                         use station_proto::provision::Command as C;
                         info!("ble: command {c:?}");
                         match c {
                             C::SelfTest => sh.selftest_req.store(true, Ordering::Relaxed),
                             C::ClearConfig => {
-                                net::clear_cfg(&nvs2);
+                                net::clear_cfg(&nvs3);
                                 // SAFETY: plain restart.
                                 unsafe { sys::esp_restart() }
                             }
@@ -411,11 +438,20 @@ fn main() -> anyhow::Result<()> {
                             C::Restart => unsafe { sys::esp_restart() },
                         }
                     };
-                    if let Err(e) = ble::spawn(id, env!("CARGO_PKG_VERSION"), upd_tx, on_cmd, button_override) {
+                    if let Err(e) = ble::spawn(id, env!("CARGO_PKG_VERSION"), on_config, on_cmd) {
                         warn!("ble: provisioning service failed to start: {e}");
                     }
+                    // Stored settings (button or flag boot): give the brain 10 minutes, then retry Wi-Fi.
+                    let stored = cfg.is_some();
+                    let _ = sysloop;
+                    thread::spawn(move || loop {
+                        thread::sleep(Duration::from_secs(5));
+                        if station_core::ble_policy::provision_expired(stored, now_ms()) {
+                            // SAFETY: plain restart.
+                            unsafe { sys::esp_restart() }
+                        }
+                    });
                 }
-                Err(e) => warn!("net: Wi-Fi start failed: {e}; USB only"),
             }
         }
         (a, b) => warn!("net: event loop/NVS unavailable ({:?}, {:?}); USB only", a.err(), b.err()),

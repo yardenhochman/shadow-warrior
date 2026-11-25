@@ -1,62 +1,51 @@
-//! When the station advertises its provisioning service over BLE.
+//! Boot modes of the station.
+//!
+//! The classic ESP32 does not have the RAM to run Wi-Fi and the BLE stack at the same time next to the
+//! DSP buffers, so a boot is either `Normal` (Wi-Fi only, Bluetooth memory returned to the heap) or
+//! `Provision` (BLE only, waiting for the brain to write the Wi-Fi settings, then reboot into `Normal`).
 
-/// Station state relevant to advertising.
-#[derive(Clone, Copy, Debug)]
-pub struct AdvInput {
-    /// Wi-Fi settings are stored (flash or build time).
-    pub configured: bool,
-    pub link_up: bool,
-    /// Milliseconds since the link was last up (or since boot if never).
-    pub down_ms: u32,
-    pub uptime_ms: u32,
-    /// BOOT button was held at power-up: re-provisioning on purpose.
-    pub button_override: bool,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    Normal,
+    Provision,
 }
 
-pub const DOWN_ADVERTISE_MS: u32 = 60_000;
-pub const OVERRIDE_WINDOW_MS: u32 = 10 * 60_000;
+/// `configured`: Wi-Fi settings are stored. `button`: BOOT held at power-up. `flag`: one-shot flag left by the
+/// previous boot (Wi-Fi kept failing, or a BLE command asked for provisioning).
+pub fn boot_mode(configured: bool, button: bool, flag: bool) -> Mode {
+    if !configured || button || flag {
+        Mode::Provision
+    } else {
+        Mode::Normal
+    }
+}
 
-/// Unconfigured stations always advertise; a configured one only when Wi-Fi has been down for a minute
-/// or for 10 minutes after a button-held boot. A connected station stays quiet (less 2.4 GHz traffic).
-pub fn should_advertise(i: AdvInput) -> bool {
-    if !i.configured {
-        return true;
-    }
-    if i.link_up {
-        return false;
-    }
-    i.down_ms >= DOWN_ADVERTISE_MS || (i.button_override && i.uptime_ms < OVERRIDE_WINDOW_MS)
+/// How long the Wi-Fi link may stay failed before the station reboots into provisioning (wrong password or
+/// a moved access point), and how long a provisioning boot with stored settings waits for the brain.
+pub const FAILED_BEFORE_PROVISION_MS: u32 = 5 * 60_000;
+pub const PROVISION_WINDOW_MS: u32 = 10 * 60_000;
+
+/// In provisioning mode with settings already stored (button or flag), give up and retry Wi-Fi after the window.
+pub fn provision_expired(configured: bool, uptime_ms: u32) -> bool {
+    configured && uptime_ms >= PROVISION_WINDOW_MS
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const BASE: AdvInput = AdvInput { configured: true, link_up: true, down_ms: 0, uptime_ms: 1_000_000, button_override: false };
-
     #[test]
-    fn unconfigured_always_advertises() {
-        assert!(should_advertise(AdvInput { configured: false, ..BASE }));
-        assert!(should_advertise(AdvInput { configured: false, link_up: false, ..BASE }));
+    fn modes() {
+        assert_eq!(boot_mode(true, false, false), Mode::Normal);
+        assert_eq!(boot_mode(false, false, false), Mode::Provision);
+        assert_eq!(boot_mode(true, true, false), Mode::Provision);
+        assert_eq!(boot_mode(true, false, true), Mode::Provision);
     }
 
     #[test]
-    fn healthy_station_is_quiet() {
-        assert!(!should_advertise(BASE));
-        assert!(!should_advertise(AdvInput { button_override: true, uptime_ms: 1000, ..BASE }));
-    }
-
-    #[test]
-    fn down_for_a_minute_advertises() {
-        let down = AdvInput { link_up: false, ..BASE };
-        assert!(!should_advertise(AdvInput { down_ms: 59_999, ..down }));
-        assert!(should_advertise(AdvInput { down_ms: 60_000, ..down }));
-    }
-
-    #[test]
-    fn button_window_is_ten_minutes() {
-        let b = AdvInput { link_up: false, button_override: true, ..BASE };
-        assert!(should_advertise(AdvInput { uptime_ms: 599_999, ..b }));
-        assert!(!should_advertise(AdvInput { uptime_ms: 600_000, ..b }));
+    fn expiry_only_with_stored_settings() {
+        assert!(!provision_expired(false, u32::MAX));
+        assert!(!provision_expired(true, PROVISION_WINDOW_MS - 1));
+        assert!(provision_expired(true, PROVISION_WINDOW_MS));
     }
 }

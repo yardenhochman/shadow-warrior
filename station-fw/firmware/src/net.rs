@@ -2,8 +2,8 @@
 //!
 //! Settings come from flash (NVS namespace `station`: keys `ssid`, `pass`, `brain` = "ip:port"),
 //! falling back to build-time env `STATION_WIFI_SSID`, `STATION_WIFI_PASS`, `STATION_BRAIN`, and can
-//! be (re)written at run time over BLE (`ble.rs`) through [`Update`]. With no SSID the supervisor
-//! idles (link `Unconfigured`) and the station runs over USB only until it is provisioned.
+//! be (re)written over BLE (`ble.rs`, a provisioning boot) through [`apply_update`]. With no SSID the station
+//! boots into BLE provisioning instead (see `station_core::ble_policy`).
 //!
 //! Transport: one `station-proto` frame (`0x00 COBS 0x00`) per UDP datagram to the brain, and
 //! command frames from the brain on UDP port [`CMD_PORT`]. Power save is off (modem sleep adds
@@ -11,7 +11,6 @@
 
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU8, Ordering};
-use std::sync::mpsc::Receiver;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -44,7 +43,6 @@ pub static CONNECTS: AtomicU32 = AtomicU32::new(0);
 /// Milliseconds timestamp of the last time the link was up (0 = never since boot).
 pub static LAST_UP_MS: AtomicU32 = AtomicU32::new(0);
 
-const LINK_UNCONFIGURED: u8 = 0;
 const LINK_CONNECTING: u8 = 1;
 const LINK_UP: u8 = 2;
 const LINK_FAILED: u8 = 3;
@@ -96,7 +94,7 @@ pub fn load_cfg(nvs: &EspDefaultNvsPartition) -> Option<NetCfg> {
     Some(NetCfg { ssid, pass, brain: b })
 }
 
-fn save_cfg(nvs: &EspDefaultNvsPartition, c: &NetCfg) {
+pub fn save_cfg(nvs: &EspDefaultNvsPartition, c: &NetCfg) {
     let r = EspNvs::new(nvs.clone(), NVS_NS, true).and_then(|h| {
         h.set_str("ssid", &c.ssid)?;
         h.set_str("pass", &c.pass)?;
@@ -117,6 +115,32 @@ pub fn clear_cfg(nvs: &EspDefaultNvsPartition) {
     }
 }
 
+/// One-shot flag: the next boot is a provisioning boot. Read and cleared by [`take_prov_flag`].
+pub fn set_prov_flag(nvs: &EspDefaultNvsPartition) {
+    if let Ok(h) = EspNvs::new(nvs.clone(), NVS_NS, true) {
+        let _ = h.set_u8("prov", 1);
+    }
+}
+
+pub fn take_prov_flag(nvs: &EspDefaultNvsPartition) -> bool {
+    match EspNvs::new(nvs.clone(), NVS_NS, true) {
+        Ok(h) => {
+            let f = h.get_u8("prov").ok().flatten().unwrap_or(0) != 0;
+            if f {
+                let _ = h.remove("prov");
+            }
+            f
+        }
+        Err(_) => false,
+    }
+}
+
+/// Merge a BLE settings write with the stored ones and save them.
+pub fn apply_update(nvs: &EspDefaultNvsPartition, u: Update) {
+    let cur = load_cfg(nvs);
+    save_cfg(nvs, &merge(cur.as_ref(), u));
+}
+
 fn merge(cur: Option<&NetCfg>, u: Update) -> NetCfg {
     NetCfg { ssid: u.ssid, pass: u.pass, brain: parse_brain(&u.brain).or(cur.and_then(|c| c.brain)) }
 }
@@ -132,49 +156,37 @@ pub fn spawn(
     modem: Modem<'static>,
     sysloop: EspSystemEventLoop,
     nvs: EspDefaultNvsPartition,
-    initial: Option<NetCfg>,
-    updates: Receiver<Update>,
+    cfg: NetCfg,
     publish: impl Fn(Option<UdpSocket>) + Send + 'static,
 ) -> anyhow::Result<()> {
+    let heap = |tag: &str| {
+        // SAFETY: plain getters.
+        unsafe { info!("net: heap {tag}: free {} largest block {}", sys::esp_get_free_heap_size(), sys::heap_caps_get_largest_free_block(sys::MALLOC_CAP_8BIT)) }
+    };
+    heap("before Wi-Fi init");
     let mut wifi = EspWifi::new(modem, sysloop, Some(nvs.clone()))?;
+    heap("after Wi-Fi init");
     wifi.set_configuration(&Configuration::Client(ClientConfiguration::default()))?;
     wifi.start()?;
     // SAFETY: Wi-Fi is started; plain setter.
     unsafe { sys::esp_wifi_set_ps(sys::wifi_ps_type_t_WIFI_PS_NONE) };
-    CONFIGURED.store(initial.is_some(), Ordering::Relaxed);
+    CONFIGURED.store(true, Ordering::Relaxed);
 
-    thread::Builder::new().name("wifi".into()).stack_size(8192).spawn(move || {
-        let mut cur = initial;
+    thread::Builder::new().name("wifi".into()).stack_size(5120).spawn(move || {
         let mut backoff = Duration::from_secs(1);
-        // Apply a pending settings write; true when settings changed.
-        let take_update = |cur: &mut Option<NetCfg>| -> bool {
-            let mut changed = false;
-            while let Ok(u) = updates.try_recv() {
-                let c = merge(cur.as_ref(), u);
-                save_cfg(&nvs, &c);
-                *cur = Some(c);
-                CONFIGURED.store(true, Ordering::Relaxed);
-                changed = true;
-            }
-            changed
-        };
+        let mut failed_since: Option<Instant> = None;
         loop {
-            take_update(&mut cur);
-            let Some(cfg) = cur.clone() else {
-                set_link(LINK_UNCONFIGURED);
-                thread::sleep(Duration::from_millis(300));
-                continue;
-            };
+            let cfg = cfg.clone();
             let mut client = ClientConfiguration {
                 auth_method: if cfg.pass.is_empty() { AuthMethod::None } else { AuthMethod::WPA2Personal },
                 ..Default::default()
             };
             let ok = client.ssid.push_str(&cfg.ssid).is_ok() && client.password.push_str(&cfg.pass).is_ok();
             if !ok {
-                warn!("net: SSID (max 32) or password (max 64) too long; ignoring settings");
-                cur = None;
-                CONFIGURED.store(false, Ordering::Relaxed);
-                continue;
+                warn!("net: SSID (max 32) or password (max 64) too long; rebooting into provisioning");
+                set_prov_flag(&nvs);
+                // SAFETY: plain restart.
+                unsafe { sys::esp_restart() };
             }
             let _ = wifi.disconnect();
             if let Err(e) = wifi.set_configuration(&Configuration::Client(client)) {
@@ -188,27 +200,24 @@ pub fn spawn(
                 warn!("net: connect call failed: {e}");
             }
             let t0 = Instant::now();
-            let mut changed = false;
             while t0.elapsed() < CONNECT_TIMEOUT && !wifi.is_up().unwrap_or(false) {
-                if take_update(&mut cur) {
-                    changed = true;
-                    break;
-                }
                 thread::sleep(Duration::from_millis(200));
-            }
-            if changed {
-                continue;
             }
             if !wifi.is_up().unwrap_or(false) {
                 set_link(LINK_FAILED);
+                let since = *failed_since.get_or_insert_with(Instant::now);
                 warn!("net: no connection after {CONNECT_TIMEOUT:?}, retry in {backoff:?}");
-                let t = Instant::now();
-                while t.elapsed() < backoff && !take_update(&mut cur) {
-                    thread::sleep(Duration::from_millis(200));
+                if since.elapsed().as_millis() as u32 >= station_core::ble_policy::FAILED_BEFORE_PROVISION_MS {
+                    warn!("net: Wi-Fi failing for 5 min; rebooting into BLE provisioning");
+                    set_prov_flag(&nvs);
+                    // SAFETY: plain restart.
+                    unsafe { sys::esp_restart() };
                 }
+                thread::sleep(backoff);
                 backoff = (backoff * 2).min(BACKOFF_MAX);
                 continue;
             }
+            failed_since = None;
             backoff = Duration::from_secs(1);
             let ip = wifi.sta_netif().get_ip_info().map(|i| i.ip).ok();
             if let Some(ip) = ip {
@@ -237,14 +246,11 @@ pub fn spawn(
                     RSSI.store(ap.rssi as i32, Ordering::Relaxed);
                 }
                 LAST_UP_MS.store(now_ms(), Ordering::Relaxed);
-                if take_update(&mut cur) {
-                    break;
-                }
                 thread::sleep(Duration::from_millis(500));
             }
             UP.store(false, Ordering::Relaxed);
             publish(None);
-            warn!("net: link down or settings changed, rejoining");
+            warn!("net: link down, rejoining");
         }
     })?;
     Ok(())

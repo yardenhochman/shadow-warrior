@@ -2,11 +2,11 @@
 //!
 //! The brain reads a one-time challenge, writes a sealed `Config` (Wi-Fi SSID/password and the brain's
 //! address) and the Wi-Fi supervisor joins without a restart. The sealing key is the shared system
-//! secret (`STATION_PROVISION_KEY` at build time, from `SYSTEM_SECRET`). The station advertises only
-//! when `station_core::ble_policy::should_advertise` says so.
+//! secret (`STATION_PROVISION_KEY` at build time, from `SYSTEM_SECRET`). This runs only in a provisioning
+//! boot (`station_core::ble_policy::Mode::Provision`): BLE and Wi-Fi do not fit in RAM together, so after a
+//! valid write the settings are saved and the station reboots into Wi-Fi mode.
 
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -15,7 +15,6 @@ use esp32_nimble::utilities::mutex::Mutex as NimMutex;
 use esp32_nimble::{uuid128, BLEAdvertisementData, BLECharacteristic, BLEDevice, NimbleProperties};
 use esp_idf_svc::sys;
 use log::{info, warn};
-use station_core::ble_policy::{should_advertise, AdvInput};
 use station_proto::provision::{self, Command, Link, Status, CHALLENGE_LEN};
 
 use crate::net;
@@ -61,9 +60,8 @@ fn status(now_ms: u32) -> Status {
 pub fn spawn(
     station_id: u32,
     version: &str,
-    updates: Sender<net::Update>,
+    on_config: impl Fn(provision::Config) + Send + Sync + 'static,
     on_command: impl Fn(Command) + Send + Sync + 'static,
-    button_override: bool,
 ) -> anyhow::Result<()> {
     let (pass, custom) = passphrase();
     if !custom {
@@ -105,7 +103,7 @@ pub fn spawn(
             match res {
                 Ok(c) => {
                     info!("ble: provisioning received for ssid {:?}", c.ssid.as_str());
-                    let _ = updates.send(net::Update { ssid: c.ssid.as_str().into(), pass: c.pass.as_str().into(), brain: c.brain.as_str().into() });
+                    on_config(c);
                 }
                 Err(e) => {
                     warn!("ble: provisioning write rejected: {e:?}");
@@ -123,31 +121,13 @@ pub fn spawn(
 
     let name = format!("sw-station-{:04x}", station_id & 0xffff);
     adv.lock().set_data(BLEAdvertisementData::new().name(&name).add_service_uuid(uuid128!(provision::SERVICE_UUID)))?;
-    info!("ble: GATT service up, advertising name {name} when unconfigured or Wi-Fi is down");
+    info!("ble: provisioning mode, advertising as {name}");
 
+    adv.lock().start()?;
     thread::Builder::new().name("ble".into()).stack_size(4096).spawn(move || {
-        let mut advertising = false;
         let mut last = [0u8; Status::LEN];
         loop {
             let now = (unsafe { sys::esp_timer_get_time() } / 1000) as u32;
-            let last_up = net::LAST_UP_MS.load(Ordering::Relaxed);
-            let want = should_advertise(AdvInput {
-                configured: net::CONFIGURED.load(Ordering::Relaxed),
-                link_up: net::UP.load(Ordering::Relaxed),
-                down_ms: now.wrapping_sub(last_up),
-                uptime_ms: now,
-                button_override,
-            });
-            if want != advertising {
-                let r = if want { adv.lock().start() } else { adv.lock().stop() };
-                match r {
-                    Ok(()) => {
-                        advertising = want;
-                        info!("ble: advertising {}", if want { "on" } else { "off" });
-                    }
-                    Err(e) => warn!("ble: advertising {} failed: {e:?}", if want { "start" } else { "stop" }),
-                }
-            }
             let st = status(now).to_bytes();
             if st != last {
                 last = st;

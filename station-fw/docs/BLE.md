@@ -21,16 +21,18 @@ Code: `station-proto/src/provision.rs` (UUIDs, `Config`, `Status`, `seal`/`open`
 keeps the previous value. Key = `derive_key(passphrase)` (SHA-256 with a domain tag). The passphrase is shared: the firmware
 gets it at build time (`STATION_PROVISION_KEY`), the brain from `station.provision_key`.
 
-## When the station advertises
-- no Wi-Fi settings stored, or
-- stored settings fail for 60 s, or
-- the BOOT button is held at power-up (re-provision).
-It stops advertising 10 minutes after boot unless it is still unconfigured, and while connected to the brain.
-Advertising name: `sw-station-<last 4 hex of station id>`.
+## Boot modes (RAM: the classic ESP32 cannot run Wi-Fi and BLE together)
+- **Normal boot** (Wi-Fi settings stored): Wi-Fi only, BLE off and its RAM returned to the heap. UDP frames to the brain.
+- **Provisioning boot** (no settings, or BOOT held at power-up, or the one-shot flag set): BLE only, Wi-Fi off, advertising
+  `sw-station-<last 4 hex of the station id>`. A valid `config` write is saved to flash and the station reboots
+  into a normal boot about 1.5 s later; the BLE link drops then.
+- A normal boot whose Wi-Fi fails for 5 minutes (wrong password, AP moved) sets the flag and reboots into provisioning.
+  A provisioning boot with settings already stored (button or flag) gives up after 10 minutes and retries Wi-Fi.
 
 ## Flow
 1. Scan for the service UUID, connect.
-2. Read `info`, `status`. If `link == up`, do nothing (unless re-provisioning on purpose).
-3. Read `challenge`, `seal`, write `config`. Auth failure = wrong passphrase: the write is rejected with an ATT error and the challenge rotates.
-4. Watch `status` notifications: connecting, then up with the IP. Failed: wrong Wi-Fi password or out of range.
-5. Disconnect. The station now sends frames to the brain (UDP 4210) and listens for commands on UDP 4211.
+2. Read `info` (station id), `status`.
+3. Read `challenge`, `seal`, write `config` (with response). Wrong passphrase = the write fails with an ATT error and the challenge rotates.
+4. The station reboots; the link drops without a status notification. Success = the station's UDP frames show up at the brain
+   (match the station id from `info`), usually within 10-20 s. If they do not within about 60 s the Wi-Fi settings are wrong:
+   the station will return to provisioning after 5 minutes.
