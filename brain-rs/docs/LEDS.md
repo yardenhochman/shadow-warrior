@@ -5,7 +5,7 @@ Two ways to drive a WLED strip, one per arena state.
 | State | Mode | Who animates | Look |
 |-------|------|--------------|------|
 | Suspended | off | - | strip off |
-| Idle | **built-in WLED effect** (HTTP) | the controller | ember fading to black with a short rest, ~5 s cycle (Tri Fade, see below) |
+| Idle | **built-in WLED effects** (HTTP) | the controller | ember breathing to true black, ~6 s: two overlaid segments (WLED 16), single Tri Fade on older firmware |
 | Warming | **UDP realtime** | the brain, 30 fps | energy bar (persistent) + shout glow (live) |
 | Fight | **UDP realtime** | the brain, 30 fps | punch pulses, shout effects, music-driven effects, optional energy bar |
 | Cooldown | **built-in WLED effect** (HTTP) | the controller | "Fire 2012", Lava palette |
@@ -26,23 +26,58 @@ Two ways to drive a WLED strip, one per arena state.
 
 ## Idle: the breathing look
 
-WLED effect **`Tri Fade`** (id 56 on 0.15.4), speed 96, brightness 44, colours
-`[[255,25,0],[0,0,0],[0,0,0]]` (config `wled.effects.idle`). It fades colour 1 -> 2 -> 3 -> 1, a third
-of the cycle each: ember -> black, a dark rest, black -> ember. Cycle
-`65.536 s / ((speed >> 3) + 1)` (0.15.4 `mode_tricolor_fade`): 5.04 s at speed 96 to 103.
-Chosen on the real strip on 2026-11-19, after comparing Fade (a triangle) and Sine (a smoothed
-triangle). No built-in effect is a pure sine in time; revisit later (a brain-rendered idle
-could be, and could layer two effects, but then the brain must be up).
+**WLED 16+ (two overlaid segments, 2026-11-25).** `wled.effects.idle.segments`, over the strip's
+whole LED range (each strip of a multi-strip controller gets its own pair, ids `strip*2`, `strip*2+1`):
 
-**Brightness 44 is deliberate.** The controller's power limit (ABL, `maxpwr` 1000 mA) scales
+| Segment | Effect | Colours | `bri` | Blend (`bm`) |
+|---------|--------|---------|-------|--------------|
+| 0 | Solid (fx 0) | `[255,25,0]` ember | 90 | normal (0) |
+| 1 | Fade (fx 12), speed 0, intensity 128 | `[255,255,255]` | 255 | **multiply (6)** |
+
+Fade at speed 0 is a ~6 s triangle between white and black; multiplied into the ember it makes
+the ember breathe down to true black and back. Verified on the strip. Config accepts a blend
+name (`normal`, `add`, `multiply`, `screen`, ..., see `BLEND_MODES` in `config.rs`) or the number.
+The numbering is WLED 16's `blendMode` order (FX.h: top, bottom, add, subtract, difference,
+average, multiply, divide, lighten, darken, screen, overlay, hardlight, softlight, dodge, burn,
+stencil); `case 6` of the blend switch in `FX_fcn.cpp` is multiply.
+
+**Why an overlay.** One built-in effect cannot do "slow sine-like breath of one colour to black":
+Breathe never reaches black, Sine freezes at low speed (below), Fade/Tri Fade are triangles in the
+colour itself. Multiplying a brightness wave over a constant colour keeps the hue and lets the
+wave reach black.
+
+**Gamma 1.8**, not WLED's default 2.8: 2.8 crushes the dark end so the fade looks steppy; at night
+outdoors the dark end is what people see. It is a controller setting (`light.gc`), not a brain
+setting: `uv run deploy/wled_set_gamma.py <ip>` (sends the whole `gc` object, `{"bri":1,"col":1.8,
+"val":1.8}`; sending only `col` did not take) and reads it back.
+
+**Traps.**
+- `Sine` (fx 108): the step is `sx / 16` as an integer, so **speed below 16 freezes the animation**.
+- `Breathe` (fx 2) **never reaches black** (it keeps a floor), so it cannot be a clean breath.
+
+**Leaving idle.** Warming and fight are UDP realtime. For cooldown (a single effect) the brain
+sends segment 0 with `bm` 0 plus `{"id":n,"stop":0}` for ids 1..8 (WLED deletes those), otherwise
+segment 1 would multiply into the fire. On a multi-strip controller segment 0 is widened back
+over the whole controller.
+
+**Version detection and fallback.** The brain reads `ver` from `GET /json/info` (every 30 s health
+poll; once on demand if idle is applied before the first poll). A `0.x` version has no blend
+modes, so idle uses `wled.effects.idle.fallback`: the old single-segment **Tri Fade** (id 56 on
+0.15.4), speed 96, brightness 44, colours `[[255,25,0],[0,0,0],[0,0,0]]`. Cycle
+`65.536 s / ((speed >> 3) + 1)` (0.15.4 `mode_tricolor_fade`): 5.04 s at speed 96 to 103. An unknown
+or unparsable version counts as new. A configured `idle` (with or without `segments`) replaces the
+default as a whole, so list a `fallback` yourself if you keep `segments`.
+
+**Brightness and the power limit.** The controller's power limit (ABL, `maxpwr` 1000 mA) scales
 the whole frame down when the estimate is higher. Full ember on 180 LEDs at brightness 180 would
 be about 2.8 A, so the top of the wave was clipped flat for ~75% of the cycle (measured through
-`/json/info` `leds.pwr`). At 44 the wave stays under the limit (120-690 mA). A bigger idle needs
-a bigger PSU and a higher `maxpwr` (the PSU rating is unknown). Warming and fight frames are
-clipped the same way.
+`/json/info` `leds.pwr`). The fallback's brightness 44 and the overlay's ember `bri` 90 stay under
+the limit. A bigger idle needs a bigger PSU and a higher `maxpwr` (the PSU rating is unknown).
+Warming and fight frames are clipped the same way.
 
-Earlier versions of this doc said Fade was an 11 s cycle (wrong: pre-0.15 formula); on 0.15.4
-Fade is `65.536 s / ((speed >> 3) + 10)`, 4.4 s at speed 40, 5.04 s at speed 24.
+The original Tri Fade was chosen on the real strip on 2026-11-19, after comparing Fade (a
+triangle) and Sine. Earlier versions of this doc said Fade was an 11 s cycle (wrong: pre-0.15
+formula); on 0.15.4 Fade is `65.536 s / ((speed >> 3) + 10)`.
 
 Preview without hardware:
 
@@ -65,7 +100,7 @@ A controller may host 2-4 strips; its LED range is then the strips concatenated 
 wled:
   columns: 4                      # optional; default = highest column + 1
   controllers:
-    - {ip: "10.0.0.55", num_leds: 180}          # one strip, column = list index (0)
+    - {ip: "10.0.0.35", num_leds: 180}          # one strip, column = list index (0)
     - ip: "10.0.0.56"                           # two strips, columns 1 and 2
       strips:                                   # consecutive in LED order; num_leds optional (sum)
         - {column: 1, leds: 180}

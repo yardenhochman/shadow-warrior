@@ -5,7 +5,7 @@
 """Hardware check for a real WLED strip: walk the arena through its states and read back
 what the controller is actually doing.
 
-    uv run deploy/wled_walkthrough.py --brain http://10.0.0.28:8000 --wled http://10.0.0.55
+    uv run deploy/wled_walkthrough.py --brain http://10.0.0.28:8000 --wled http://10.0.0.35
 
 For every state it POSTs the transition to the brain, then polls the controller until the
 effect changed (reporting the latency) and prints effect/palette/brightness/colours, whether

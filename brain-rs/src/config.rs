@@ -508,6 +508,14 @@ pub fn pin_columns(controllers: &mut [WledController]) {
 impl WledConfig {
     /// Fill in `num_leds` of multi-strip controllers and reject layouts that cannot work.
     pub fn normalize(&mut self) -> Result<(), String> {
+        let e = &self.effects;
+        for (state, fx) in [("idle", &e.idle), ("warming", &e.warming), ("fight", &e.fight), ("cooldown", &e.cooldown)] {
+            for seg in &fx.segments {
+                if let Some(b) = seg.blend.as_deref().filter(|b| blend_mode_id(b).is_none()) {
+                    return Err(format!("wled.effects.{state}: unknown blend mode '{b}' (one of {})", BLEND_MODES.join(", ")));
+                }
+            }
+        }
         let mut seen = std::collections::BTreeSet::new();
         for (i, c) in self.controllers.iter_mut().enumerate() {
             if !c.strips.is_empty() {
@@ -605,6 +613,53 @@ pub struct WledEffect {
     /// Segment colors (WLED `col`), up to 3 RGB triples
     #[serde(skip_serializing_if = "Option::is_none")]
     pub colors: Option<Vec<[u8; 3]>>,
+    /// Overlaid segments (WLED 16+): when non-empty the effect is these layers, bottom first,
+    /// all over the same LED range (each strip of a controller gets its own copy). The fields
+    /// above except `brightness` (global) and `transition` are then ignored. See docs/LEDS.md.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub segments: Vec<WledSegment>,
+    /// Single-segment look used when the controller runs WLED older than 16 (no blend modes).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<Box<WledEffect>>,
+}
+
+/// One overlaid WLED segment layer.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
+#[serde(default)]
+pub struct WledSegment {
+    /// Effect name or numeric id (like `WledEffect::effect`).
+    pub effect: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub palette: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speed: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub intensity: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub colors: Option<Vec<[u8; 3]>>,
+    /// Segment brightness (WLED seg `bri`)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub brightness: Option<u8>,
+    /// Blend mode against the layers below: a name (see [`blend_mode_id`]) or a number.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blend: Option<String>,
+}
+
+/// WLED 16 segment blend modes (`bm`), in firmware order (FX.h `blendMode`; FX_fcn.cpp
+/// `case 6` is multiply, `case 16` stencil).
+pub const BLEND_MODES: [&str; 17] = [
+    "normal", "bottom", "add", "subtract", "difference", "average", "multiply", "divide",
+    "lighten", "darken", "screen", "overlay", "hardlight", "softlight", "dodge", "burn", "stencil",
+];
+
+/// `bm` for a blend mode name (case-insensitive; "top" = "normal") or a number 0..=16.
+pub fn blend_mode_id(name: &str) -> Option<u8> {
+    let n = name.trim().to_lowercase();
+    if let Ok(i) = n.parse::<u8>() {
+        return (usize::from(i) < BLEND_MODES.len()).then_some(i);
+    }
+    let n = if n == "top" { "normal" } else { n.as_str() }.to_string();
+    BLEND_MODES.iter().position(|m| *m == n).map(|i| i as u8)
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -826,12 +881,35 @@ impl Default for Config {
                 effects: WledEffects {
                     // Same looks as config.yaml (see docs/LEDS.md): idle and cooldown are
                     // built-in WLED effects, warming and fight are UDP realtime.
+                    // Idle on WLED 16+: a dim ember Solid under a white Fade (slowest, ~6 s)
+                    // blended by multiply. `fallback` is the single-segment Tri Fade for 0.x.
                     idle: WledEffect {
-                        effect: "Tri Fade".to_string(),
-                        palette: None,
-                        speed: Some(96), // cycle 5.04 s
-                        brightness: Some(44), // keeps the peak under the 1000 mA ABL limit
-                        colors: Some(vec![[255, 25, 0], [0, 0, 0], [0, 0, 0]]),
+                        effect: "Solid".to_string(),
+                        segments: vec![
+                            WledSegment {
+                                effect: "Solid".to_string(),
+                                colors: Some(vec![[255, 25, 0], [0, 0, 0], [0, 0, 0]]),
+                                brightness: Some(90),
+                                blend: Some("normal".to_string()),
+                                ..Default::default()
+                            },
+                            WledSegment {
+                                effect: "Fade".to_string(),
+                                speed: Some(0),
+                                intensity: Some(128),
+                                colors: Some(vec![[255, 255, 255], [0, 0, 0], [0, 0, 0]]),
+                                brightness: Some(255),
+                                blend: Some("multiply".to_string()),
+                                ..Default::default()
+                            },
+                        ],
+                        fallback: Some(Box::new(WledEffect {
+                            effect: "Tri Fade".to_string(),
+                            speed: Some(96), // cycle 5.04 s
+                            brightness: Some(44), // keeps the peak under the 1000 mA ABL limit
+                            colors: Some(vec![[255, 25, 0], [0, 0, 0], [0, 0, 0]]),
+                            ..Default::default()
+                        })),
                         ..Default::default()
                     },
                     warming: WledEffect {
@@ -875,7 +953,8 @@ mod load_tests {
     fn configured_effect_replaces_default_not_merges() {
         let cfg = Config::from_sources(Figment::from(Yaml::string(REAL_YAML))).unwrap();
         let idle = &cfg.wled.effects.idle;
-        assert_eq!(idle.effect, "Tri Fade");
+        assert_eq!(idle.segments.len(), 2);
+        assert_eq!(idle.fallback.as_ref().unwrap().effect, "Tri Fade");
         assert_eq!(idle.palette, None, "default ocean palette must not leak");
         // config.yaml and the built-in defaults describe the same idle look
         assert_eq!(*idle, Config::default().wled.effects.idle);
@@ -883,6 +962,22 @@ mod load_tests {
         let cfg = Config::from_sources(Figment::from(Yaml::string("wled:\n  effects:\n    idle:\n      effect: Fade\n"))).unwrap();
         assert_eq!(cfg.wled.effects.cooldown, Config::default().wled.effects.cooldown);
         assert_eq!(cfg.wled.effects.idle.palette, None);
+        // a configured idle replaces the default overlay and fallback as a whole
+        assert!(cfg.wled.effects.idle.segments.is_empty());
+        assert!(cfg.wled.effects.idle.fallback.is_none());
+    }
+
+    #[test]
+    fn blend_mode_names_and_validation() {
+        assert_eq!(blend_mode_id("multiply"), Some(6));
+        assert_eq!(blend_mode_id("Multiply"), Some(6));
+        assert_eq!(blend_mode_id("normal"), Some(0));
+        assert_eq!(blend_mode_id("top"), Some(0));
+        assert_eq!(blend_mode_id("16"), Some(16));
+        assert_eq!(blend_mode_id("17"), None);
+        assert_eq!(blend_mode_id("nope"), None);
+        let bad = "wled:\n  effects:\n    idle:\n      effect: Solid\n      segments:\n        - {effect: Fade, blend: nope}\n";
+        assert!(load(bad).is_err());
     }
 
     fn load(yaml: &str) -> Result<Config, Box<figment::Error>> {

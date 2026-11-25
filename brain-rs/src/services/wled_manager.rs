@@ -25,7 +25,7 @@ use health::LinkHealth;
 /// Idle liveness poll period; well under `server.health_stale_sec`.
 const HEALTH_POLL_INTERVAL: Duration = Duration::from_secs(30);
 use protocol::{
-    build_effect_payload, fetch_name_list, post_state, resolve_effect_id, resolve_palette_id,
+    add_overlay_cleanup, build_effect_payload, build_overlay_payload, fetch_name_list, is_pre_16, post_state, resolve_effect_id, resolve_palette_id,
 };
 
 /// A controller's connected socket and the strips its frame covers.
@@ -48,6 +48,10 @@ pub struct WledManager {
     link: Arc<LinkHealth>,
     /// Outputs each controller reported in `/json/cfg` at its last probe.
     probed: std::sync::Mutex<std::collections::HashMap<String, Vec<WledOutput>>>,
+    /// WLED `ver` each controller reported (`/json/info`), e.g. "16.0.1".
+    versions: std::sync::Mutex<std::collections::HashMap<String, String>>,
+    /// Controllers whose segments were last set up as an overlay (so segment 0 is narrowed).
+    overlaid: std::sync::Mutex<std::collections::HashSet<String>>,
     /// UDP realtime port; WLED's own 21324 except in tests, which pick a free port.
     realtime_port: u16,
 }
@@ -72,6 +76,8 @@ impl WledManager {
             palette_cache: RwLock::new(Vec::new()),
             link: Arc::new(LinkHealth::new(event_bus.clone())),
             probed: Default::default(),
+            versions: Default::default(),
+            overlaid: Default::default(),
             realtime_port: REALTIME_PORT,
         }
     }
@@ -374,34 +380,80 @@ impl WledManager {
         Ok(cached)
     }
 
-    /// Set effect via HTTP/JSON API. Returns number of controllers updated.
-    async fn set_http_effect(&self, effect: &WledEffect) -> Result<usize> {
-        // Resolve names against the device's list when we have one (cached or fetched).
-        let effects = self.cached_or_fetch("effects", &self.effect_cache).await;
-        let palettes = match effect.palette {
-            Some(_) => self.cached_or_fetch("palettes", &self.palette_cache).await,
-            None => Vec::new(),
-        };
-        let effect_id = resolve_effect_id(&effect.effect, &effects);
-        let palette_id = effect
-            .palette
-            .as_deref()
-            .map(|p| resolve_palette_id(p, &palettes));
-        let payload = build_effect_payload(effect, effect_id, palette_id);
+    /// WLED version of `ip`, from the last health poll or (once) a `GET /json/info`.
+    async fn controller_version(&self, ip: &str) -> Option<String> {
+        if let Some(v) = self.versions.lock().unwrap().get(ip) {
+            return Some(v.clone());
+        }
+        let info = self.http_client.get(format!("http://{ip}/json/info")).send().await.ok()?;
+        let info = info.json::<serde_json::Value>().await.ok()?;
+        let ver = info["ver"].as_str()?.to_string();
+        self.versions.lock().unwrap().insert(ip.to_string(), ver.clone());
+        Some(ver)
+    }
 
-        let ips: Vec<String> = self
+    /// Set effect via HTTP/JSON API. Returns number of controllers updated.
+    ///
+    /// An effect with `segments` becomes overlaid segments on every strip's LED range when the
+    /// controller runs WLED 16+; older controllers get its `fallback` (or the plain effect).
+    /// Any single-segment effect clears segments 1.. so a former overlay cannot multiply into it.
+    async fn set_http_effect(&self, effect: &WledEffect) -> Result<usize> {
+        let targets: Vec<(String, Vec<StripConfig>)> = self
             .controllers
             .read()
             .await
             .iter()
-            .map(|c| c.ip.clone())
+            .enumerate()
+            .map(|(i, c)| (c.ip.clone(), c.strip_specs(i)))
             .collect();
+        // Resolve names against the device's list when we have one (cached or fetched).
+        let effects = self.cached_or_fetch("effects", &self.effect_cache).await;
+        let uses_palette = effect.palette.is_some()
+            || effect.segments.iter().any(|s| s.palette.is_some())
+            || effect.fallback.as_ref().is_some_and(|f| f.palette.is_some());
+        let palettes = if uses_palette {
+            self.cached_or_fetch("palettes", &self.palette_cache).await
+        } else {
+            Vec::new()
+        };
+        let pal_id = |p: &Option<String>| p.as_deref().map(|p| resolve_palette_id(p, &palettes));
+
         let mut ok = 0;
-        for ip in &ips {
+        for (ip, strips) in &targets {
+            let overlay_wanted = !effect.segments.is_empty();
+            let pre16 = if overlay_wanted {
+                self.controller_version(ip).await.is_some_and(|v| is_pre_16(&v))
+            } else {
+                false
+            };
+            let (payload, label) = if overlay_wanted && !pre16 {
+                let ids: Vec<(u8, Option<u8>)> = effect
+                    .segments
+                    .iter()
+                    .map(|s| (resolve_effect_id(&s.effect, &effects), pal_id(&s.palette)))
+                    .collect();
+                let mut start = 0;
+                let ranges: Vec<(usize, usize)> = strips
+                    .iter()
+                    .map(|s| {
+                        start += s.leds;
+                        (start - s.leds, start)
+                    })
+                    .collect();
+                self.overlaid.lock().unwrap().insert(ip.clone());
+                (build_overlay_payload(effect, &ids, &ranges), format!("overlay of {} layers", effect.segments.len()))
+            } else {
+                let plain = if overlay_wanted { effect.fallback.as_deref().unwrap_or(effect) } else { effect };
+                let mut payload = build_effect_payload(plain, resolve_effect_id(&plain.effect, &effects), pal_id(&plain.palette));
+                let narrowed = strips.len() > 1 || self.overlaid.lock().unwrap().remove(ip);
+                let total = narrowed.then(|| strips.iter().map(|s| s.leds).sum());
+                add_overlay_cleanup(&mut payload, total);
+                (payload, plain.effect.clone())
+            };
             match post_state(&self.http_client, ip, &payload).await {
                 Ok(()) => {
                     self.link.ok(ip);
-                    info!("Set effect on {}: {}", ip, effect.effect);
+                    info!("Set effect on {}: {}", ip, label);
                     ok += 1;
                 }
                 Err(e) => {
@@ -544,11 +596,15 @@ impl WledManager {
                     self.link.ok(&ip);
                     // Layout first (once per connect), then the count as a fallback/check.
                     self.probe_layout_if_due(&ip).await;
+                    let info = resp.json::<serde_json::Value>().await.ok();
+                    if let Some(ver) = info.as_ref().and_then(|v| v["ver"].as_str()) {
+                        let old = self.versions.lock().unwrap().insert(ip.clone(), ver.to_string());
+                        if old.as_deref() != Some(ver) {
+                            info!("WLED {ip} runs {ver}{}", if is_pre_16(ver) { " (no segment blending: idle uses its fallback)" } else { "" });
+                        }
+                    }
                     // The device knows its real strip length; config/discovery only guess.
-                    if let Some(n) = resp
-                        .json::<serde_json::Value>()
-                        .await
-                        .ok()
+                    if let Some(n) = info
                         .and_then(|v| v["leds"]["count"].as_u64())
                         .filter(|n| *n > 0)
                     {
@@ -979,6 +1035,94 @@ mod tests {
         let seen = seen.lock().await;
         let post = seen.iter().find(|r| r.starts_with("POST /json/state")).expect("state posted");
         assert!(post.contains(r#""fx":2"#), "fx must be the device index of Fire 2012: {post}");
+    }
+
+    const INFO_16: &str = include_str!("wled_manager/fixtures/info_16_0_1.json");
+    const INFO_0: &str = include_str!("wled_manager/fixtures/info_0_15_4.json");
+
+    async fn idle_manager(info: &str, strips: usize) -> (WledManager, crate::test_util::Seen) {
+        let config = Config::default();
+        let db = Arc::new(DatabaseManager::new("sqlite::memory:").await.unwrap());
+        let bus: SharedEventBus = Arc::new(EventBus::new(100));
+        let wled = WledManager::new(config.wled.clone(), db, bus);
+        let (addr, _routes, seen) = mock_http(&[
+            ("*", 200, "{}"),
+            ("GET /json/info", 200, info),
+            ("GET /json/effects", 200, r#"["Solid","Blink","Breathe","Wipe","Wipe Random","Random Colors","Sweep","Dynamic","Colorloop","Rainbow","Scan","Scan Dual","Fade"]"#),
+        ])
+        .await;
+        wled.set_controllers_for_test(&[&addr]).await;
+        if strips > 0 {
+            let mut c = wled.controllers.write().await;
+            c[0].strips = (0..strips).map(|i| StripConfig { column: i, leds: 180, reverse: false }).collect();
+            c[0].num_leds = 180 * strips;
+        }
+        (wled, seen)
+    }
+
+    async fn last_state_post(seen: &crate::test_util::Seen) -> serde_json::Value {
+        let seen = seen.lock().await;
+        let post = seen.iter().rev().find(|r| r.starts_with("POST /json/state")).expect("state posted");
+        serde_json::from_str(&post[post.find("\r\n\r\n").unwrap() + 4..]).unwrap()
+    }
+
+    #[tokio::test]
+    async fn idle_posts_overlaid_segments_to_a_wled_16_controller() {
+        let (wled, seen) = idle_manager(INFO_16, 0).await;
+        wled.set_state_effect(ArenaState::Idle).await.unwrap();
+        let p = last_state_post(&seen).await;
+        let seg = p["seg"].as_array().unwrap();
+        assert_eq!(seg[0]["fx"], 0);
+        assert_eq!(seg[0]["bm"], 0);
+        assert_eq!(seg[1]["fx"], 12, "Fade by device index");
+        assert_eq!(seg[1]["bm"], 6);
+        assert_eq!(seg[1]["sx"], 0);
+        assert_eq!((seg[1]["start"].as_u64(), seg[1]["stop"].as_u64()), (Some(0), Some(10)));
+    }
+
+    #[tokio::test]
+    async fn idle_overlay_covers_every_strip_of_a_controller() {
+        let (wled, seen) = idle_manager(INFO_16, 2).await;
+        wled.set_state_effect(ArenaState::Idle).await.unwrap();
+        let p = last_state_post(&seen).await;
+        let seg = p["seg"].as_array().unwrap();
+        assert_eq!(seg.len(), 9, "4 layers + removal of ids 4..=8");
+        assert_eq!((seg[2]["id"].as_u64(), seg[2]["start"].as_u64(), seg[2]["stop"].as_u64()), (Some(2), Some(180), Some(360)));
+        assert_eq!((seg[3]["id"].as_u64(), seg[3]["bm"].as_u64()), (Some(3), Some(6)));
+    }
+
+    #[tokio::test]
+    async fn pre_16_controller_gets_the_single_segment_fallback() {
+        let (wled, seen) = idle_manager(INFO_0, 0).await;
+        wled.set_state_effect(ArenaState::Idle).await.unwrap();
+        let p = last_state_post(&seen).await;
+        assert_eq!(p["bri"], 44);
+        let seg = p["seg"].as_array().unwrap();
+        let seg0 = seg.iter().find(|s| s["id"] == 0 && s.get("fx").is_some()).unwrap();
+        assert_eq!(seg0["sx"], 96);
+        assert!(seg.iter().all(|s| s["bm"] != 6), "no multiply layer on 0.15.4");
+        assert!(seg.iter().filter(|s| s["id"] != 0).all(|s| s["stop"] == 0));
+    }
+
+    #[tokio::test]
+    async fn leaving_idle_for_cooldown_removes_the_multiply_layer() {
+        let (wled, seen) = idle_manager(INFO_16, 0).await;
+        wled.set_state_effect(ArenaState::Idle).await.unwrap();
+        wled.set_state_effect(ArenaState::Cooldown).await.unwrap();
+        let p = last_state_post(&seen).await;
+        let seg = p["seg"].as_array().unwrap();
+        assert!(seg.iter().any(|s| s["id"] == 1 && s["stop"] == 0), "segment 1 removed: {p}");
+        let seg0 = seg.iter().find(|s| s["id"] == 0).unwrap();
+        assert_eq!(seg0["bm"], 0);
+        assert_eq!(seg0["fx"], 66, "Fire 2012 from the static table");
+    }
+
+    #[tokio::test]
+    async fn version_is_stored_by_the_health_poll() {
+        let (wled, _seen) = idle_manager(INFO_16, 0).await;
+        wled.poll_health_once().await;
+        let ip = wled.controllers.read().await[0].ip.clone();
+        assert_eq!(wled.versions.lock().unwrap().get(&ip).map(String::as_str), Some("16.0.1"));
     }
 
     #[tokio::test]

@@ -4,9 +4,9 @@
 # ///
 """Try WLED looks straight on the controller from a laptop, without the brain.
 
-    uv run deploy/wled_try.py --wled http://10.0.0.55 --fx Breathe --pal Default --sx 40 --col 0,80,255
-    uv run deploy/wled_try.py --wled http://10.0.0.55 --demo idle          # cycle labelled candidates
-    uv run deploy/wled_try.py --wled http://10.0.0.55 --off
+    uv run deploy/wled_try.py --wled http://10.0.0.35 --fx Breathe --pal Default --sx 40 --col 0,80,255
+    uv run deploy/wled_try.py --wled http://10.0.0.35 --demo idle          # cycle labelled candidates
+    uv run deploy/wled_try.py --wled http://10.0.0.35 --off
 
 Stop the brain first (`sudo systemctl stop shadow-brain` on the station) or it will overwrite
 what you set on the next arena state change. Only POSTs: an ESP32-C3 rebooted once under
