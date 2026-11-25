@@ -25,6 +25,46 @@ Environment override for a test brain (never open the dev machine's microphone):
 `BRAIN_AUDIO='{input=false}' BRAIN_BLE='{auto_connect=false}' BRAIN_SERVER='{port=8099}'
 BRAIN_STATION='{enabled=true,serial_port="/dev/cu.usbserial-0001"}'`.
 
+## BLE provisioning (`station.provision`, off by default)
+
+A station without working Wi-Fi advertises a GATT service (`station-fw/docs/BLE.md`).
+`services/station_provisioner.rs` scans for it, reads the one-time challenge, writes the sealed
+Wi-Fi settings and the brain's address, waits for the station to report `Up`, and disconnects.
+The UDP frames then reach `station_manager`. Stations already up are left alone.
+
+```yaml
+station:
+  provision:
+    enabled: true
+    wifi_ssid: "arena-wifi"      # the only required key
+    wifi_pass: "..."             # never logged or serialized
+    provision_key: ""            # default: env SYSTEM_SECRET; never logged
+    brain_addr: ""               # empty = LAN IP toward the default route + udp_bind port
+    adapter: null                # default: ble.adapter
+    scan_interval_sec: 30
+    scan_timeout_sec: 8
+    up_timeout_sec: 30           # wait for Wi-Fi join after the write
+    retry_backoff_sec: 60        # per station, doubles per failure
+    retry_backoff_max_sec: 900
+```
+
+Without a passphrase (neither `provision_key` nor `SYSTEM_SECRET`) provisioning stays off and the
+brain logs why. Progress is published as `StationProvision {station, state, detail}`
+(found | provisioning | up(ip) | failed(reason)) and shown per station in the status API
+(`health.station_provision`). The bag and the provisioner serialise their scan/connect phases
+with one lock (`ble_manager::ADAPTER_LOCK`); on a Pi 3 with a single adapter provisioning scans can
+delay a bag reconnect by up to `scan_timeout_sec`; use `adapter:` for a second dongle if that matters.
+
+### Field setup
+1. Put `SYSTEM_SECRET=<random string>` in the gitignored `system.env` at the repo root (export it to the brain, e.g. systemd `EnvironmentFile=`; the firmware build
+   reads the same file).
+2. `just flash` each station (the firmware takes the secret at build time).
+3. Set `station.provision.enabled: true` and `wifi_ssid`/`wifi_pass`, power the stations on.
+   The brain provisions every station it sees; nothing else to configure.
+
+A known-answer vector (`known_answer_vector` test in the provisioner) pins the sealed bytes for
+key `sw-test`, challenge `0123456789ab`, so firmware can be cross-checked.
+
 ## What the brain does with it
 
 | Station message | Brain |

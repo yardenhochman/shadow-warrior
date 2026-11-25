@@ -91,6 +91,9 @@ pub enum Event {
     StationLevel { rms_dbfs_l: f32, rms_dbfs_r: f32, peak_dbfs: f32 },
     /// GCC-PHAT angle, positive = toward mic B (right). Not used for game decisions.
     StationDirection { angle_deg: f32, confidence: f32, rms_dbfs: f32 },
+    /// BLE provisioning progress of one station (services/station_provisioner.rs).
+    /// `state`: found | provisioning | up | failed. `detail`: ip for up, reason for failed.
+    StationProvision { station: String, state: String, detail: Option<String> },
     StationLinkStats { frames: u64, seq_gaps: u64, frames_lost: u64, bad_frames: u64, audio_gap_frames: u64 },
 
     // BLE events
@@ -213,6 +216,7 @@ impl Event {
             Event::StationRadar { .. } => "StationRadar",
             Event::StationLevel { .. } => "StationLevel",
             Event::StationDirection { .. } => "StationDirection",
+            Event::StationProvision { .. } => "StationProvision",
             Event::StationLinkStats { .. } => "StationLinkStats",
             Event::BleDeviceConnected { .. } => "BleDeviceConnected",
             Event::BleDeviceDisconnected { .. } => "BleDeviceDisconnected",

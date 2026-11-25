@@ -50,6 +50,67 @@ pub struct StationConfig {
     pub link_timeout_sec: f32,
     /// Seconds between link statistics events.
     pub stats_interval_sec: f32,
+    /// BLE provisioning of stations without working Wi-Fi (services/station_provisioner.rs).
+    pub provision: ProvisionConfig,
+}
+
+/// BLE provisioning of sensor stations (docs/STATION.md). Off unless `enabled`.
+/// The three secrets never serialize and never appear in `Debug` output.
+#[derive(Clone, Deserialize, Serialize, PartialEq)]
+#[serde(default)]
+pub struct ProvisionConfig {
+    pub enabled: bool,
+    /// Shared passphrase; the firmware has it as `STATION_PROVISION_KEY`.
+    #[serde(skip_serializing)]
+    pub provision_key: String,
+    pub wifi_ssid: String,
+    #[serde(skip_serializing)]
+    pub wifi_pass: String,
+    /// `ip[:port]` the station sends frames to. Empty = this host's LAN address (toward the
+    /// default route) with the port of `station.udp_bind`.
+    pub brain_addr: String,
+    /// BlueZ adapter selector (same syntax as `ble.adapter`). Unset = `ble.adapter`.
+    pub adapter: Option<String>,
+    /// Seconds between scans.
+    pub scan_interval_sec: f32,
+    /// How long each scan listens for advertisements.
+    pub scan_timeout_sec: f32,
+    /// Seconds to wait for the station to join Wi-Fi after the config write.
+    pub up_timeout_sec: f32,
+    /// First retry delay for a station that failed; doubles per failure up to `retry_backoff_max_sec`.
+    pub retry_backoff_sec: f32,
+    pub retry_backoff_max_sec: f32,
+}
+
+impl Default for ProvisionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            provision_key: String::new(),
+            wifi_ssid: String::new(),
+            wifi_pass: String::new(),
+            brain_addr: String::new(),
+            adapter: None,
+            scan_interval_sec: 30.0,
+            scan_timeout_sec: 8.0,
+            up_timeout_sec: 30.0,
+            retry_backoff_sec: 60.0,
+            retry_backoff_max_sec: 900.0,
+        }
+    }
+}
+
+impl std::fmt::Debug for ProvisionConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProvisionConfig")
+            .field("enabled", &self.enabled)
+            .field("provision_key", &"<redacted>")
+            .field("wifi_ssid", &self.wifi_ssid)
+            .field("wifi_pass", &"<redacted>")
+            .field("brain_addr", &self.brain_addr)
+            .field("adapter", &self.adapter)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Default for StationConfig {
@@ -63,6 +124,7 @@ impl Default for StationConfig {
             stream_audio: false,
             link_timeout_sec: 3.0,
             stats_interval_sec: 5.0,
+            provision: ProvisionConfig::default(),
         }
     }
 }

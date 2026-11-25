@@ -155,6 +155,17 @@ async fn main() -> Result<()> {
     } else {
         None
     };
+    let _provisioner = if config.station.provision.enabled {
+        match services::station_provisioner::spawn(&config.station, config.ble.adapter.clone(), event_bus.clone()) {
+            Ok(h) => Some(h),
+            Err(e) => {
+                tracing::error!("{e:#}");
+                None
+            }
+        }
+    } else {
+        None
+    };
     audio_manager.clone().start_shout_clip_trigger();
     let presence_manual = if config.presence.enabled {
         let svc = Arc::new(services::presence::PresenceService::new(

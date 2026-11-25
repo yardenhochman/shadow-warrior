@@ -12,6 +12,7 @@ pub mod session_recorder;
 pub mod sound_manager;
 pub mod speaker_manager;
 pub mod station_manager;
+pub mod station_provisioner;
 pub mod schedule_manager;
 pub mod shout_detector;
 pub mod tasmota_manager;

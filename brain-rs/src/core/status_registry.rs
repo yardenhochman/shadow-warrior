@@ -86,6 +86,14 @@ pub struct StationHealth {
     pub audio_gap_frames: u64,
 }
 
+/// Provisioning state of one station: found | provisioning | up | failed.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct ProvisionEntry {
+    pub state: String,
+    pub detail: Option<String>,
+    pub updated: Option<DateTime<Utc>>,
+}
+
 /// Snapshot of every device, serialized in the status API.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct HardwareHealth {
@@ -98,6 +106,9 @@ pub struct HardwareHealth {
     /// The sensor station (only meaningful once `station.enabled`).
     #[serde(default)]
     pub station: StationHealth,
+    /// BLE provisioning state per station (key: advertised name or address).
+    #[serde(default)]
+    pub station_provision: BTreeMap<String, ProvisionEntry>,
     /// keyed by controller IP
     pub wled: BTreeMap<String, DeviceHealth>,
     /// keyed by plug name
@@ -194,6 +205,12 @@ impl StatusRegistry {
                 h.station.direction_deg = Some(*angle_deg);
                 h.station.direction_confidence = Some(*confidence);
                 h.station.link.seen(now);
+            }
+            Event::StationProvision { station, state, detail } => {
+                h.station_provision.insert(
+                    station.clone(),
+                    ProvisionEntry { state: state.clone(), detail: detail.clone(), updated: Some(now) },
+                );
             }
             Event::StationLinkStats { frames, frames_lost, bad_frames, audio_gap_frames, .. } => {
                 let s = &mut h.station;

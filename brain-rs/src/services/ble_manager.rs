@@ -21,6 +21,10 @@ const ALPHA_UUID: Uuid = Uuid::from_u128(0x6E400004_B5A3_F393_E0A9_E50E24DCCA9E)
 const THRESHOLD_UUID: Uuid = Uuid::from_u128(0x6E400005_B5A3_F393_E0A9_E50E24DCCA9E);
 const FIGHT_MODE_UUID: Uuid = Uuid::from_u128(0x6E400006_B5A3_F393_E0A9_E50E24DCCA9E);
 
+/// Serialises scan/connect phases of the bag and the station provisioner, which may share one
+/// BlueZ adapter (two concurrent discovery sessions and connects confuse cheap controllers).
+pub(crate) static ADAPTER_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 pub struct BleManager {
     config: Arc<RwLock<BleConfig>>,
     event_bus: SharedEventBus,
@@ -146,6 +150,7 @@ impl BleManager {
 
     /// Connect to the punching bag
     async fn connect(&self) -> Result<()> {
+        let _adapter_guard = ADAPTER_LOCK.lock().await;
         let manager = Manager::new().await?;
         let adapter = self.pick_adapter(&manager).await?;
 
