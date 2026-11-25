@@ -218,6 +218,13 @@ pub struct ServerConfig {
     /// `hardware.health`.
     #[serde(default = "default_health_stale_sec")]
     pub health_stale_sec: u64,
+    /// Advertise the brain as `<mdns_name>._shadow-brain._tcp` (host `<mdns_name>.local`); empty disables.
+    #[serde(default = "default_mdns_name")]
+    pub mdns_name: String,
+}
+
+fn default_mdns_name() -> String {
+    crate::services::mdns_advert::DEFAULT_NAME.to_string()
 }
 
 pub(crate) fn default_warming_timeout_sec() -> u64 {
@@ -756,6 +763,7 @@ impl Default for Config {
                 port: 8000,
                 log_level: "info".to_string(),
                 health_stale_sec: default_health_stale_sec(),
+                mdns_name: default_mdns_name(),
             },
             arena: ArenaConfig {
                 warming_timeout_sec: default_warming_timeout_sec(),

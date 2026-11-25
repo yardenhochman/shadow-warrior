@@ -6,6 +6,7 @@ pub mod ble_manager;
 pub mod ble_status;
 pub mod database_manager;
 pub mod discovery_manager;
+pub mod mdns_advert;
 pub mod music_manager;
 pub mod presence;
 pub mod session_recorder;

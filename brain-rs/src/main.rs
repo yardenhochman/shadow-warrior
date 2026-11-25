@@ -137,6 +137,10 @@ async fn main() -> Result<()> {
         tracing::error!("Audio manager failed to start, continuing without audio input: {e:#}");
         event_bus.publish(core::Event::AudioError { error: format!("start: {e:#}") });
     }
+    let _mdns = (!config.server.mdns_name.is_empty()).then(|| {
+        let station_port = config.station.udp_bind.as_deref().and_then(|b| b.rsplit(':').next()).and_then(|p| p.parse().ok());
+        services::mdns_advert::advertise(&config.server.mdns_name, config.server.port, station_port.filter(|_| config.station.enabled))
+    });
     let _station = if config.station.enabled {
         match services::station_manager::spawn(
             config.station.clone(),
