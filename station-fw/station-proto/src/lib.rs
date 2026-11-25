@@ -20,6 +20,8 @@
 #[cfg(any(test, feature = "std"))]
 extern crate std;
 
+pub mod provision;
+
 use serde::{Deserialize, Serialize};
 
 /// Bumped on any incompatible change to [`Msg`] or the framing.
