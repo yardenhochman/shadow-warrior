@@ -66,6 +66,11 @@ impl ShoutDetector {
         Self::default()
     }
 
+    /// Current score accumulator (diagnostics / offline tuning).
+    pub fn score(&self) -> f32 {
+        self.score
+    }
+
     /// Feed one frame. Frames skipped by a lossy channel (index gaps, up to 8)
     /// are credited with the same features so timing stays correct.
     pub fn push(&mut self, f: &FrameFeatures, cfg: &AudioConfig) -> Option<ShoutDetection> {

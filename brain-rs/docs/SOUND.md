@@ -72,6 +72,52 @@ speaker supervisor: `speaker_state` (`not_configured` | `connected` | `connectin
 playing is `health.music.powered`. The card says "Playing via <speaker>" or "Falling back to built-in
 audio". There is no output test endpoint: nothing in the API plays a sound on demand.
 
+## Tuning on recordings
+
+`shout_replay` (`src/bin/shout_replay.rs`, logic in `services/shout_replay.rs`) replays a WAV through
+the same front-end and `ShoutDetector` the brain runs and scores the detections against a labels
+file. Use it to tune the detector for the I2S microphones (ICS-43434 via a station; the detector was
+first tuned on a USB mic). A debug build is fine; it runs far faster than real time and reports audio
+time. (`eval-wav` is the older per-second report without labels.)
+
+Recording workflow:
+
+1. `uv run station-fw/tools/dual_record.py` records the station and the reference mic at once and writes
+   `brain-rs/clips/dual/<label>_<time>/{station_1.wav, bomge.wav, cues.json}`. `cues.json` is
+   `{"cues":[{"kind":"SHOUT|CLAP|SOFT|KNOCK|QUIET|MOVE","t":seconds,"prompt":"NEAR ..."}],"start_offset_sec":N}`.
+2. The two files start at slightly different moments. Find the offset from the first 3 claps
+   (cues of kind CLAP) and optionally write an aligned copy:
+   `uv run station-fw/tools/align_dual.py brain-rs/clips/dual/<rec>/ [--write]`
+   (prints `offset` = bomge time minus station time; `--write` creates `bomge_aligned.wav`).
+3. Replay from `brain-rs/` (stereo is mixed `(l+r)/2` like `station_manager::on_chunk`):
+
+```bash
+cargo run --bin shout_replay -- clips/dual/<rec>/station_1.wav --labels clips/dual/<rec>/cues.json \
+    --features-csv /tmp/features.csv
+# other options: --config config.yaml  --set shout_margin_db=10 (repeatable)  --offset 0.2  --onset-db 10
+# grid search, sorted by hit rate desc, false positives asc, median latency asc:
+cargo run --bin shout_replay -- clips/dual/<rec>/station_1.wav --labels clips/dual/<rec>/cues.json \
+    --sweep shout_margin_db=8,10,12,15 --sweep shout_min_features=2,3 --sweep vad_hangover_frames=6,10 --top 10
+```
+
+Tunables are the `audio:` keys of `config.yaml` (`shout_margin_db`, `vad_hangover_frames`,
+`shout_min_features`, `shout_min_duration_sec`, `shout_score_threshold`, `shout_sensitivity`,
+`shout_f0_min_hz`, ...), read from `--config` (default `config.yaml`; missing means `Config::default`)
+and then `--set`. A cue's audio time is `t + start_offset_sec + --offset`.
+
+Scoring: cues are rough (people react 0.2-0.8 s after the cue; a shout lasts about 1 s). A SHOUT cue is
+a HIT when a `ShoutDetected` fires within `[t-0.3, t+2.5]` s. A detection outside every SHOUT window is a
+false positive, counted under the kind of the cue window it landed in (CLAP, KNOCK, SOFT, QUIET, MOVE) or
+`none`. The per-cue table shows the detection delay from the cue and from the **acoustic onset**: the
+first 16 ms frame whose band-passed level is at least `--onset-db` (default 10) above the detector's own
+noise floor, searched from `t-0.3` to the detection. `latency = detection - onset` is the responsiveness
+number (it includes the frame itself and the 0.2 s `shout_min_duration_sec`). The summary adds the hit
+rate overall and per NEAR/MID/FAR block (when the cue `prompt` contains those words).
+
+`--features-csv` writes one row per frame: `time` (frame end), `band_db`, `noise_floor_db`,
+`db_above_floor`, `vad_prob`, `gate_open`, `f0_hz`, `pitch_conf`, `centroid_hz`, `tilt_db_per_khz`,
+`flatness`, `features_passed`, `shouty`, `score`, `detection`, for plotting against the cues.
+
 ## Not done yet
 
 - Combo cues (`combo3/5/10`): brain-rs has no combo notion yet (the simulator counts hits

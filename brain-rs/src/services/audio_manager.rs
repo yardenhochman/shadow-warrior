@@ -267,7 +267,7 @@ impl AudioManager {
     }
 
     /// Mix interleaved stereo (or N-ch) to mono
-    pub(crate) fn mix_to_mono(data: &[f32], channels: u16) -> Vec<f32> {
+    pub fn mix_to_mono(data: &[f32], channels: u16) -> Vec<f32> {
         if channels == 1 {
             return data.to_vec();
         }

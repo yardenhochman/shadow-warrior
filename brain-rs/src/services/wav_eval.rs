@@ -462,7 +462,7 @@ const USAGE: &str = "usage: shadow-warrior-brain eval-wav [options] <file.wav>..
   --playback        simulate speakers playing (adds shout_playback_margin_db)";
 
 /// Parse a `--set` value as a YAML scalar (number, bool, string).
-fn parse_override(kv: &str) -> Result<(String, serde_yaml::Value)> {
+pub fn parse_override(kv: &str) -> Result<(String, serde_yaml::Value)> {
     let (k, v) = kv.split_once('=').with_context(|| format!("--set expects KEY=VALUE, got {kv}"))?;
     let key = if k.contains('.') { k.to_string() } else { format!("audio.{k}") };
     Ok((key, serde_yaml::from_str(v).with_context(|| format!("bad value in {kv}"))?))
