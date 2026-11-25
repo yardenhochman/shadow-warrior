@@ -29,8 +29,12 @@ BRAIN_STATION='{enabled=true,serial_port="/dev/cu.usbserial-0001"}'`.
 
 A station without working Wi-Fi advertises a GATT service (`station-fw/docs/BLE.md`).
 `services/station_provisioner.rs` scans for it, reads the one-time challenge, writes the sealed
-Wi-Fi settings and the brain's address, waits for the station to report `Up`, and disconnects.
-The UDP frames then reach `station_manager`. Stations already up are left alone.
+Wi-Fi settings and the brain's address, and disconnects. The station saves, reboots into Wi-Fi mode
+(Wi-Fi and BLE do not fit in RAM together) and drops the link without a status notification. Success is
+the station's UDP frames reaching `station_manager`: a `StationConnected` whose id equals the `id=<hex>`
+from the `info` characteristic, within `up_timeout_sec`; otherwise `failed("no frames after provisioning:
+wrong Wi-Fi settings?")` (the station returns to provisioning after 5 minutes, and is retried with backoff).
+The pre-write status is only used to skip stations already Up or Connecting. Stations already up are left alone.
 
 ```yaml
 station:
@@ -43,14 +47,14 @@ station:
     adapter: null                # default: ble.adapter
     scan_interval_sec: 30
     scan_timeout_sec: 8
-    up_timeout_sec: 30           # wait for Wi-Fi join after the write
+    up_timeout_sec: 60           # wait for the station's UDP frames after the write
     retry_backoff_sec: 60        # per station, doubles per failure
     retry_backoff_max_sec: 900
 ```
 
 Without a passphrase (neither `provision_key` nor `SYSTEM_SECRET`) provisioning stays off and the
 brain logs why. Progress is published as `StationProvision {station, state, detail}`
-(found | provisioning | up(ip) | failed(reason)) and shown per station in the status API
+(found | provisioning | up(`station-<id>`) | failed(reason)) and shown per station in the status API
 (`health.station_provision`). The bag and the provisioner serialise their scan/connect phases
 with one lock (`ble_manager::ADAPTER_LOCK`); on a Pi 3 with a single adapter provisioning scans can
 delay a bag reconnect by up to `scan_timeout_sec`; use `adapter:` for a second dongle if that matters.

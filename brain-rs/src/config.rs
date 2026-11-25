@@ -75,7 +75,7 @@ pub struct ProvisionConfig {
     pub scan_interval_sec: f32,
     /// How long each scan listens for advertisements.
     pub scan_timeout_sec: f32,
-    /// Seconds to wait for the station to join Wi-Fi after the config write.
+    /// Seconds to wait for the station's UDP frames after the config write (it reboots into Wi-Fi mode).
     pub up_timeout_sec: f32,
     /// First retry delay for a station that failed; doubles per failure up to `retry_backoff_max_sec`.
     pub retry_backoff_sec: f32,
@@ -93,7 +93,7 @@ impl Default for ProvisionConfig {
             adapter: None,
             scan_interval_sec: 30.0,
             scan_timeout_sec: 8.0,
-            up_timeout_sec: 30.0,
+            up_timeout_sec: 60.0,
             retry_backoff_sec: 60.0,
             retry_backoff_max_sec: 900.0,
         }

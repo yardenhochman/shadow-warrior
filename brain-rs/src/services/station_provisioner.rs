@@ -46,15 +46,13 @@ pub trait Link: Send {
     async fn challenge(&mut self) -> Result<[u8; provision::CHALLENGE_LEN]>;
     /// Write with response.
     async fn write_config(&mut self, sealed: &[u8]) -> std::result::Result<(), WriteError>;
-    /// Next status notification, `Ok(None)` when `timeout` elapsed without one.
-    async fn next_status(&mut self, timeout: Duration) -> Result<Option<Status>>;
     async fn disconnect(&mut self);
 }
 
 #[async_trait]
 pub trait Scanner: Send {
     async fn scan(&mut self, listen: Duration) -> Result<Vec<Found>>;
-    /// Connect and subscribe to status notifications.
+    /// Connect.
     async fn connect(&mut self, found: &Found) -> Result<Box<dyn Link>>;
 }
 
@@ -127,9 +125,9 @@ impl<S: Scanner> Provisioner<S> {
             self.publish(&f.key, "found", None);
             let outcome = self.provision_one(&f).await;
             match &outcome {
-                Outcome::Up(ip) => {
-                    info!("station {} provisioned, ip {ip}", f.key);
-                    self.publish(&f.key, "up", Some(ip.clone()));
+                Outcome::Up(who) => {
+                    info!("station {} provisioned, frames seen from {who}", f.key);
+                    self.publish(&f.key, "up", Some(who.clone()));
                     self.record(&f.key, now, true);
                 }
                 Outcome::Skipped(why) => {
@@ -153,6 +151,7 @@ impl<S: Scanner> Provisioner<S> {
             Err(e) => return Outcome::Failed(format!("connect: {e:#}")),
         };
         let outcome = self.run_session(&f.key, link.as_mut()).await;
+        // Harmless if already dropped (the station reboots after a good write).
         link.disconnect().await;
         outcome
     }
@@ -184,6 +183,11 @@ impl<S: Scanner> Provisioner<S> {
             Ok(s) => s,
             Err(e) => return Outcome::Failed(format!("seal: {e:?}")),
         };
+        let Some(want_id) = parse_station_id(&info) else {
+            return Outcome::Failed(format!("cannot read station id from info {info:?}"));
+        };
+        // Subscribe before the write so a fast reboot cannot be missed.
+        let mut rx = self.bus.subscribe();
         self.publish(key, "provisioning", None);
         match link.write_config(&sealed).await {
             Ok(()) => {}
@@ -192,21 +196,29 @@ impl<S: Scanner> Provisioner<S> {
             }
             Err(WriteError::Io(m)) => return Outcome::Failed(format!("write: {m}")),
         }
-        let deadline = Instant::now() + Duration::from_secs_f32(self.cfg.up_timeout_sec);
+        // The station saves, reboots into Wi-Fi mode and drops the link without a status
+        // notification: the disconnect is expected. Success = its UDP frames reach station_manager.
+        link.disconnect().await;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs_f32(self.cfg.up_timeout_sec);
         loop {
-            let left = deadline.saturating_duration_since(Instant::now());
-            match try_io!("status", link.next_status(left).await) {
-                None => return Outcome::Failed("timeout waiting for Wi-Fi".into()),
-                Some(s) => match s.link {
-                    LinkState::Up => return Outcome::Up(ip_str(s.ip)),
-                    LinkState::Failed => {
-                        return Outcome::Failed("station could not join Wi-Fi (wrong ssid/password or out of range)".into())
-                    }
-                    _ => {}
-                },
+            match tokio::time::timeout_at(deadline, rx.recv()).await {
+                Err(_) => return Outcome::Failed("no frames after provisioning: wrong Wi-Fi settings?".into()),
+                Ok(Ok(Event::StationConnected { station_id: Some(id), .. })) if id == want_id => {
+                    return Outcome::Up(format!("station-{id:08x}"))
+                }
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
+                    return Outcome::Failed("event bus closed".into())
+                }
+                Ok(_) => {}
             }
         }
     }
+}
+
+/// Station id from the `info` characteristic (`station-fw <version> id=<hex>`).
+pub fn parse_station_id(info: &str) -> Option<u32> {
+    let hex = info.split("id=").nth(1)?.split_whitespace().next()?;
+    u32::from_str_radix(hex.trim_start_matches("0x"), 16).ok()
 }
 
 /// The wire config for `cfg`; errors name the field that is too long.
@@ -270,8 +282,6 @@ mod bt {
     use super::*;
     use btleplug::api::{Central, Characteristic, Manager as _, Peripheral as _, ScanFilter, WriteType};
     use btleplug::platform::{Adapter, Manager, Peripheral};
-    use futures::{Stream, StreamExt};
-    use std::pin::Pin;
     use uuid::Uuid;
 
     pub struct BtScanner {
@@ -340,12 +350,10 @@ mod bt {
                 info: find(provision::CHR_INFO)?,
                 challenge: find(provision::CHR_CHALLENGE)?,
                 config: find(provision::CHR_CONFIG)?,
-                notifications: p.notifications().await?,
                 status,
                 p,
                 _keep: self.keep.clone(),
             };
-            link.p.subscribe(&link.status).await?;
             Ok(Box::new(link))
         }
     }
@@ -356,7 +364,6 @@ mod bt {
         status: Characteristic,
         challenge: Characteristic,
         config: Characteristic,
-        notifications: Pin<Box<dyn Stream<Item = btleplug::api::ValueNotification> + Send>>,
         _keep: Option<(Manager, Adapter)>,
     }
 
@@ -379,21 +386,6 @@ mod bt {
                 .await
                 .map_err(|e| WriteError::Rejected(e.to_string()))
         }
-        async fn next_status(&mut self, timeout: Duration) -> Result<Option<Status>> {
-            let deadline = tokio::time::Instant::now() + timeout;
-            loop {
-                match tokio::time::timeout_at(deadline, self.notifications.next()).await {
-                    Err(_) => return Ok(None),
-                    Ok(None) => return Err(anyhow!("link lost")),
-                    Ok(Some(n)) if n.uuid == self.status.uuid => {
-                        if let Some(s) = Status::from_bytes(&n.value) {
-                            return Ok(Some(s));
-                        }
-                    }
-                    Ok(Some(_)) => {}
-                }
-            }
-        }
         async fn disconnect(&mut self) {
             let _ = self.p.disconnect().await;
         }
@@ -404,7 +396,6 @@ mod bt {
 mod tests {
     use super::*;
     use crate::core::EventBus;
-    use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
 
     fn cfg() -> ProvisionConfig {
@@ -413,6 +404,7 @@ mod tests {
             provision_key: "sw-test".into(),
             wifi_ssid: "arena-wifi".into(),
             wifi_pass: "hunter2 hunter2".into(),
+            up_timeout_sec: 0.2,
             retry_backoff_sec: 10.0,
             retry_backoff_max_sec: 40.0,
             ..Default::default()
@@ -429,27 +421,27 @@ mod tests {
         challenge: [u8; 12],
         counter: u8,
         initial: Status,
-        /// Notifications after a successful open().
-        script: VecDeque<Status>,
+        /// After a good write the station reboots; true = it joins Wi-Fi and sends frames.
+        joins: bool,
+        bus: SharedEventBus,
         accepted: Option<WireConfig>,
         writes: u32,
         challenges_read: Vec<[u8; 12]>,
-        pending: VecDeque<Status>,
     }
 
     type Shared = Arc<Mutex<FakeStation>>;
 
-    fn fake(pass: &str, initial: Status, script: Vec<Status>) -> Shared {
+    fn fake(pass: &str, initial: Status, joins: bool, bus: SharedEventBus) -> Shared {
         Arc::new(Mutex::new(FakeStation {
             key: provision::derive_key(pass),
             challenge: [1; 12],
             counter: 1,
             initial,
-            script: script.into(),
+            joins,
+            bus,
             accepted: None,
             writes: 0,
             challenges_read: vec![],
-            pending: VecDeque::new(),
         }))
     }
 
@@ -458,7 +450,7 @@ mod tests {
     #[async_trait]
     impl Link for FakeLink {
         async fn info(&mut self) -> Result<String> {
-            Ok("station-fw test id=0042".into())
+            Ok("station-fw test id=0000002a".into())
         }
         async fn status(&mut self) -> Result<Status> {
             Ok(self.0.lock().unwrap().initial)
@@ -479,14 +471,13 @@ mod tests {
             match res {
                 Ok(c) => {
                     s.accepted = Some(c);
-                    s.pending = std::mem::take(&mut s.script);
+                    if s.joins {
+                        s.bus.publish(Event::StationConnected { station_id: Some(0x2a), fw_version: None });
+                    }
                     Ok(())
                 }
                 Err(e) => Err(WriteError::Rejected(format!("{e:?}"))),
             }
-        }
-        async fn next_status(&mut self, _t: Duration) -> Result<Option<Status>> {
-            Ok(self.0.lock().unwrap().pending.pop_front())
         }
         async fn disconnect(&mut self) {}
     }
@@ -508,26 +499,22 @@ mod tests {
         }
     }
 
-    fn prov(pass_on_station: &str, initial: Status, script: Vec<Status>) -> (Provisioner<FakeScanner>, Shared) {
-        let station = fake(pass_on_station, initial, script);
+    fn prov(pass_on_station: &str, initial: Status, joins: bool) -> (Provisioner<FakeScanner>, Shared) {
+        let bus = Arc::new(EventBus::new(64));
+        let station = fake(pass_on_station, initial, joins, bus.clone());
         let sc = FakeScanner {
             found: vec![Found { key: "sw-station-0042".into(), address: "AA:BB".into() }],
             station: station.clone(),
             scans: 0,
         };
-        let bus = Arc::new(EventBus::new(64));
         (Provisioner::new(cfg(), "192.168.1.20:4210".into(), sc, bus).unwrap(), station)
-    }
-
-    fn up_script() -> Vec<Status> {
-        vec![st(LinkState::Connecting, [0; 4]), st(LinkState::Up, [192, 168, 1, 50])]
     }
 
     #[tokio::test]
     async fn provisions_and_reports_ip() {
-        let (mut p, station) = prov("sw-test", st(LinkState::Unconfigured, [0; 4]), up_script());
+        let (mut p, station) = prov("sw-test", st(LinkState::Unconfigured, [0; 4]), true);
         let r = p.cycle(Instant::now()).await.unwrap();
-        assert_eq!(r[0].1, Outcome::Up("192.168.1.50".into()));
+        assert_eq!(r[0].1, Outcome::Up("station-0000002a".into()));
         let s = station.lock().unwrap();
         let c = s.accepted.as_ref().unwrap();
         assert_eq!(c.ssid.as_str(), "arena-wifi");
@@ -537,7 +524,7 @@ mod tests {
 
     #[tokio::test]
     async fn wrong_passphrase_rejected_then_backoff_doubles() {
-        let (mut p, station) = prov("other", st(LinkState::Unconfigured, [0; 4]), up_script());
+        let (mut p, station) = prov("other", st(LinkState::Unconfigured, [0; 4]), true);
         let t0 = Instant::now();
         let r = p.cycle(t0).await.unwrap();
         assert!(matches!(&r[0].1, Outcome::Failed(m) if m.contains("rejected")), "{r:?}");
@@ -557,7 +544,7 @@ mod tests {
 
     #[tokio::test]
     async fn fresh_challenge_every_attempt() {
-        let (mut p, station) = prov("other", st(LinkState::Unconfigured, [0; 4]), up_script());
+        let (mut p, station) = prov("other", st(LinkState::Unconfigured, [0; 4]), true);
         let t0 = Instant::now();
         p.cycle(t0).await.unwrap();
         p.cycle(t0 + Duration::from_secs(10)).await.unwrap();
@@ -572,30 +559,50 @@ mod tests {
         let key = provision::derive_key("sw-test");
         let wire = build_config(&cfg(), "192.168.1.20:4210").unwrap();
         let sealed = provision::seal(&key, &[1; 12], &wire).unwrap();
-        let station = fake("sw-test", st(LinkState::Unconfigured, [0; 4]), vec![]);
+        let station = fake("sw-test", st(LinkState::Unconfigured, [0; 4]), false, Arc::new(EventBus::new(8)));
         let mut link = FakeLink(station);
         link.write_config(&sealed).await.unwrap();
         assert!(matches!(link.write_config(&sealed).await, Err(WriteError::Rejected(_))));
     }
 
     #[tokio::test]
-    async fn status_failed_is_reported() {
-        let script = vec![st(LinkState::Connecting, [0; 4]), st(LinkState::Failed, [0; 4])];
-        let (mut p, _) = prov("sw-test", st(LinkState::Unconfigured, [0; 4]), script);
+    async fn pre_write_failed_status_still_provisions() {
+        let (mut p, station) = prov("sw-test", st(LinkState::Failed, [0; 4]), true);
         let r = p.cycle(Instant::now()).await.unwrap();
-        assert!(matches!(&r[0].1, Outcome::Failed(m) if m.contains("Wi-Fi")), "{r:?}");
+        assert_eq!(r[0].1, Outcome::Up("station-0000002a".into()));
+        assert_eq!(station.lock().unwrap().writes, 1);
     }
 
     #[tokio::test]
-    async fn timeout_is_a_failure() {
-        let (mut p, _) = prov("sw-test", st(LinkState::Failed, [0; 4]), vec![st(LinkState::Connecting, [0; 4])]);
+    async fn no_frames_after_write_is_a_failure() {
+        let (mut p, _) = prov("sw-test", st(LinkState::Unconfigured, [0; 4]), false);
         let r = p.cycle(Instant::now()).await.unwrap();
-        assert_eq!(r[0].1, Outcome::Failed("timeout waiting for Wi-Fi".into()));
+        assert_eq!(r[0].1, Outcome::Failed("no frames after provisioning: wrong Wi-Fi settings?".into()));
+    }
+
+    #[tokio::test]
+    async fn frames_from_another_station_do_not_count() {
+        let (mut p, station) = prov("sw-test", st(LinkState::Unconfigured, [0; 4]), false);
+        let bus = station.lock().unwrap().bus.clone();
+        let t = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            bus.publish(Event::StationConnected { station_id: Some(0x99), fw_version: None });
+        });
+        let r = p.cycle(Instant::now()).await.unwrap();
+        t.await.unwrap();
+        assert!(matches!(r[0].1, Outcome::Failed(_)), "{r:?}");
+    }
+
+    #[test]
+    fn station_id_parsing() {
+        assert_eq!(parse_station_id("station-fw 0.1.0 id=0000002a"), Some(0x2a));
+        assert_eq!(parse_station_id("station-fw 0.1.0 id=1234abcd extra"), Some(0x1234_abcd));
+        assert_eq!(parse_station_id("station-fw 0.1.0"), None);
     }
 
     #[tokio::test]
     async fn already_up_station_is_not_touched() {
-        let (mut p, station) = prov("sw-test", st(LinkState::Up, [192, 168, 1, 7]), up_script());
+        let (mut p, station) = prov("sw-test", st(LinkState::Up, [192, 168, 1, 7]), true);
         let r = p.cycle(Instant::now()).await.unwrap();
         assert!(matches!(&r[0].1, Outcome::Skipped(m) if m.contains("192.168.1.7")));
         let s = station.lock().unwrap();
@@ -605,22 +612,24 @@ mod tests {
 
     #[tokio::test]
     async fn publishes_state_events() {
-        let station = fake("sw-test", st(LinkState::Unconfigured, [0; 4]), up_script());
-        let sc = FakeScanner { found: vec![Found { key: "sw-station-0042".into(), address: "A".into() }], station, scans: 0 };
         let bus = Arc::new(EventBus::new(64));
+        let station = fake("sw-test", st(LinkState::Unconfigured, [0; 4]), true, bus.clone());
+        let sc = FakeScanner { found: vec![Found { key: "sw-station-0042".into(), address: "A".into() }], station, scans: 0 };
         let mut rx = bus.subscribe();
         let mut p = Provisioner::new(cfg(), "10.0.0.2:4210".into(), sc, bus).unwrap();
         p.cycle(Instant::now()).await.unwrap();
         let mut states = vec![];
-        while let Ok(Event::StationProvision { state, detail, .. }) = rx.try_recv() {
-            states.push((state, detail));
+        while let Ok(ev) = rx.try_recv() {
+            if let Event::StationProvision { state, detail, .. } = ev {
+                states.push((state, detail));
+            }
         }
         assert_eq!(
             states,
             vec![
                 ("found".into(), None),
                 ("provisioning".into(), None),
-                ("up".into(), Some("192.168.1.50".into()))
+                ("up".into(), Some("station-0000002a".into()))
             ]
         );
     }
@@ -655,7 +664,7 @@ mod tests {
         let mut empty = cfg();
         empty.provision_key.clear();
         let bus = Arc::new(EventBus::new(64));
-        let sc = FakeScanner { found: vec![], station: fake("a", st(LinkState::Up, [0; 4]), vec![]), scans: 0 };
+        let sc = FakeScanner { found: vec![], station: fake("a", st(LinkState::Up, [0; 4]), false, bus.clone()), scans: 0 };
         assert!(Provisioner::new(empty, "1.2.3.4".into(), sc, bus).is_err());
     }
 
