@@ -5,6 +5,12 @@ port := env_var_or_default("STATION_PORT", "")
 # Console baud after boot (bootloader is always 115200). Baked in at build time.
 baud := env_var_or_default("STATION_BAUD", "115200")
 export STATION_BAUD := baud
+# One shared system secret for every component: SYSTEM_SECRET in the environment or in a gitignored
+# `system.env` at the repo root (just loads it from any parent directory). It is baked into the firmware
+# as the BLE provisioning key; the brain reads the same SYSTEM_SECRET. Unset: an insecure dev key is used.
+set dotenv-filename := "system.env"
+set dotenv-load := true
+export STATION_PROVISION_KEY := env_var_or_default("SYSTEM_SECRET", "")
 port_arg := if port == "" { "" } else { "--port " + port }
 # Raw audio needs the fast console; `just record` assumes 921600 unless STATION_BAUD says otherwise.
 record_baud := env_var_or_default("STATION_BAUD", "921600")

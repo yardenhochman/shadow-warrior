@@ -38,3 +38,6 @@ sim-shots/
 # Station raw-audio recordings (station-fw/tools/station_record.py): data, not committed
 brain-rs/clips/station/*.wav
 brain-rs/clips/station/*.json
+
+# shared system secret (see station-fw/justfile)
+system.env

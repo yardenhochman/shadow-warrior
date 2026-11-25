@@ -210,7 +210,8 @@ mod tests {
         let ch = *b"0123456789ab";
         let sealed = seal(&key, &ch, &cfg()).unwrap();
         let hex: std::string::String = sealed.iter().map(|b| std::format!("{b:02x}")).collect();
-        std::println!("vector {hex}");
+        // Pinned: the brain's tests use the same vector (brain-rs station_provisioner).
+        assert_eq!(hex, "7a7f431aac89c29a4efc77e3da5e58686ba13285a98e8e6b06258fbce6f79e5c946726d2e053f2c3292dc0da8c234ae54434c0a12f34b592f002c261ae");
         assert_eq!(open(&key, &ch, &sealed).unwrap(), cfg());
     }
 }

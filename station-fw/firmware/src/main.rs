@@ -18,6 +18,7 @@
 //!   radar is logged and retried; it never stops the station.
 //! - main: periodic `Hello` and diagnostics.
 
+mod ble;
 mod net;
 
 use std::io::Write as _;
@@ -243,6 +244,8 @@ struct Shared {
     dec_us_max: AtomicU32,
     dec_reads: AtomicU32,
     cmds_ok: AtomicU32,
+    /// Self test requested over BLE.
+    selftest_req: AtomicBool,
     /// Self test: set by main to ask the audio thread for a probe; the result lands in `probe_result`.
     probe_req: AtomicBool,
     probe_result: Mutex<Option<[ChannelStats; 2]>>,
@@ -319,6 +322,7 @@ fn main() -> anyhow::Result<()> {
         dec_us_max: AtomicU32::new(0),
         dec_reads: AtomicU32::new(0),
         cmds_ok: AtomicU32::new(0),
+        selftest_req: AtomicBool::new(false),
         probe_req: AtomicBool::new(true), // boot self test
         probe_result: Mutex::new(None),
         radar_dropped: AtomicU32::new(0),
@@ -370,28 +374,48 @@ fn main() -> anyhow::Result<()> {
             .spawn(move || radar_task(uart, out_pin, tx, shared, id))?;
     }
 
-    // --- Wi-Fi: UDP frames to the brain, commands on UDP 4211 (off without an SSID) ---
+    // --- Wi-Fi + BLE provisioning: UDP frames to the brain, commands on UDP 4211 ---
+    // BOOT (GPIO0) held at power-up re-opens BLE provisioning for 10 minutes.
+    let button_override = PinDriver::input(p.pins.gpio0, Pull::Up).map(|b| b.is_low()).unwrap_or(false);
     match (esp_idf_svc::eventloop::EspSystemEventLoop::take(), esp_idf_svc::nvs::EspDefaultNvsPartition::take()) {
         (Ok(sysloop), Ok(nvs)) => {
-            if let Some(cfg) = net::load_cfg(&nvs) {
-                let txp = tx.clone();
-                let started = net::spawn(p.modem, sysloop, nvs, cfg, move |sock| {
-                    txp.lock().unwrap_or_else(|e| e.into_inner()).udp = sock;
-                });
-                match started {
-                    Ok(()) => {
-                        let sh = shared.clone();
-                        let mut warned = false;
-                        if let Err(e) = net::spawn_cmd_rx(move |f| {
-                            if let Ok(env) = decode_command(f) {
-                                handle_command(&env, &sh, None, &mut warned);
-                            }
-                        }) {
-                            warn!("net: command port failed: {e}");
+            let initial = net::load_cfg(&nvs);
+            let (upd_tx, upd_rx) = std::sync::mpsc::channel();
+            let txp = tx.clone();
+            match net::spawn(p.modem, sysloop, nvs.clone(), initial, upd_rx, move |sock| {
+                txp.lock().unwrap_or_else(|e| e.into_inner()).udp = sock;
+            }) {
+                Ok(()) => {
+                    let sh = shared.clone();
+                    let mut warned = false;
+                    if let Err(e) = net::spawn_cmd_rx(move |f| {
+                        if let Ok(env) = decode_command(f) {
+                            handle_command(&env, &sh, None, &mut warned);
                         }
+                    }) {
+                        warn!("net: command port failed: {e}");
                     }
-                    Err(e) => warn!("net: Wi-Fi start failed: {e}; USB only"),
+                    let sh = shared.clone();
+                    let nvs2 = nvs.clone();
+                    let on_cmd = move |c: station_proto::provision::Command| {
+                        use station_proto::provision::Command as C;
+                        info!("ble: command {c:?}");
+                        match c {
+                            C::SelfTest => sh.selftest_req.store(true, Ordering::Relaxed),
+                            C::ClearConfig => {
+                                net::clear_cfg(&nvs2);
+                                // SAFETY: plain restart.
+                                unsafe { sys::esp_restart() }
+                            }
+                            // SAFETY: plain restart.
+                            C::Restart => unsafe { sys::esp_restart() },
+                        }
+                    };
+                    if let Err(e) = ble::spawn(id, env!("CARGO_PKG_VERSION"), upd_tx, on_cmd, button_override) {
+                        warn!("ble: provisioning service failed to start: {e}");
+                    }
                 }
+                Err(e) => warn!("net: Wi-Fi start failed: {e}; USB only"),
             }
         }
         (a, b) => warn!("net: event loop/NVS unavailable ({:?}, {:?}); USB only", a.err(), b.err()),
@@ -404,7 +428,7 @@ fn main() -> anyhow::Result<()> {
     let mut last = now_us();
     loop {
         thread::sleep(HELLO_EVERY);
-        if Instant::now() >= next_selftest {
+        if shared.selftest_req.swap(false, Ordering::Relaxed) || Instant::now() >= next_selftest {
             next_selftest = Instant::now() + SELFTEST_EVERY;
             shared.probe_req.store(true, Ordering::Relaxed);
             run_selftest(&shared, &mut last_selftest, false);
@@ -540,6 +564,7 @@ fn run_selftest(shared: &Shared, last: &mut String, boot: bool) {
         Level::Warn => "WARN",
         Level::Fail => "FAIL",
     };
+    ble::SELFTEST.store(worst as u8, Ordering::Relaxed);
     let sig: String = lines.iter().map(|l| l.1.split_once(" rms").map_or(l.1.as_str(), |x| x.0).to_string() + &format!("{:?}", l.0)).collect();
     if !boot && sig == *last {
         return;

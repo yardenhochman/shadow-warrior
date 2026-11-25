@@ -6,6 +6,7 @@ extern crate alloc;
 #[cfg(test)]
 extern crate std;
 
+pub mod ble_policy;
 pub mod decimate;
 pub mod doa;
 pub mod fft;
