@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast::error::RecvError;
 
+use super::audio_health::{AudioInHealth, AudioOutHealth, FeatureFlags};
 use super::events::{Event, SharedEventBus};
 
 /// Detailed health record for a single device.
@@ -109,6 +110,15 @@ pub struct HardwareHealth {
     /// BLE provisioning state per station (key: advertised name or address).
     #[serde(default)]
     pub station_provision: BTreeMap<String, ProvisionEntry>,
+    /// Which optional features are configured (so "off" is not shown as an error).
+    #[serde(default)]
+    pub features: FeatureFlags,
+    /// Microphone / station audio source and its live level.
+    #[serde(default)]
+    pub audio_in: AudioInHealth,
+    /// Speaker supervision and the output sink in use.
+    #[serde(default)]
+    pub audio_out: AudioOutHealth,
     /// keyed by controller IP
     pub wled: BTreeMap<String, DeviceHealth>,
     /// keyed by plug name
@@ -151,6 +161,11 @@ impl StatusRegistry {
         }
     }
 
+    /// Record which features are configured (called once at startup).
+    pub fn set_features(&self, f: FeatureFlags) {
+        self.inner.lock().unwrap().features = f;
+    }
+
     pub fn snapshot(&self) -> HardwareHealth {
         self.snapshot_at(Utc::now())
     }
@@ -164,6 +179,8 @@ impl StatusRegistry {
                 && d.last_seen
                     .is_some_and(|t| now.signed_duration_since(t) > self.stale_after);
         }
+        h.audio_in.derive(&h.features, h.audio.connected, now);
+        h.audio_out.derive(&h.features, h.speaker.connected, h.speaker.last_error.is_some());
         h
     }
 
@@ -174,13 +191,46 @@ impl StatusRegistry {
             Event::AudioDeviceConnected { device_name } => {
                 h.audio.name = Some(device_name.clone());
                 h.audio.up(now);
+                h.audio_in.reason = None;
+                h.audio_in.device.get_or_insert_with(|| device_name.clone());
+            }
+            Event::AudioInputInfo { device_name, sample_rate, pulse_source, external } => {
+                let a = &mut h.audio_in;
+                a.source = Some(if *external { "station" } else { "microphone" }.into());
+                a.device = Some(device_name.clone());
+                a.pulse_source = pulse_source.clone();
+                a.sample_rate = Some(*sample_rate);
+                a.reason = None;
+            }
+            Event::AudioInputMissing { reason } => {
+                h.audio_in.reason = Some(reason.clone());
+                h.audio_in.source = None;
+                h.audio.down(now, Some(reason.clone()));
+                h.audio.fail(now, reason.clone());
+            }
+            Event::AudioOutputSink { sink, description, bluetooth, volume_pct, muted } => {
+                let o = &mut h.audio_out;
+                o.sink = sink.clone();
+                o.sink_description = description.clone();
+                o.sink_bluetooth = *bluetooth;
+                o.volume_pct = *volume_pct;
+                o.muted = *muted;
+                o.checked_at = Some(now);
+            }
+            Event::SpeakerBackoff { attempts, retry_in_sec } => {
+                h.audio_out.speaker_attempts = *attempts;
+                h.audio_out.speaker_retry_in_sec = Some(*retry_in_sec);
             }
             Event::AudioDeviceDisconnected => {
                 let reason = h.audio.last_error.clone();
                 h.audio.down(now, reason);
             }
             Event::AudioError { error } => h.audio.fail(now, error.clone()),
-            Event::AudioLevelChanged { .. } | Event::ShoutDetected { .. } => h.audio.seen(now),
+            Event::AudioLevelChanged { level_db } => {
+                h.audio.seen(now);
+                h.audio_in.level(*level_db, now);
+            }
+            Event::ShoutDetected { .. } => h.audio.seen(now),
             Event::StationConnected { station_id, fw_version } => {
                 let l = &mut h.station.link;
                 if let Some(id) = station_id {
@@ -230,6 +280,8 @@ impl StatusRegistry {
             Event::SpeakerConnected { name } => {
                 h.speaker.name = Some(name.clone());
                 h.speaker.up(now);
+                h.audio_out.speaker_attempts = 0;
+                h.audio_out.speaker_retry_in_sec = None;
             }
             Event::SpeakerDisconnected => {
                 let reason = h.speaker.last_error.clone();
@@ -486,5 +538,91 @@ mod tests {
         assert!(d.connected && d.disconnect_reason.is_none());
         r.apply(&Event::SpeakerAlive, t + chrono::Duration::seconds(400));
         assert!(!r.snapshot_at(t + chrono::Duration::seconds(401)).speaker.stale);
+    }
+
+    fn flags() -> FeatureFlags {
+        FeatureFlags { audio_input: true, speaker_configured: true, ..Default::default() }
+    }
+
+    #[test]
+    fn missing_microphone_is_reported_with_reason_and_recovers() {
+        let r = StatusRegistry::new();
+        r.set_features(flags());
+        let t = Utc::now();
+        let reason = "no microphone: only null/monitor devices present (Discard all samples)";
+        r.apply(&Event::AudioInputMissing { reason: reason.into() }, t);
+        let h = r.snapshot_at(t);
+        assert!(!h.audio.connected);
+        assert_eq!(h.audio.last_error.as_deref(), Some(reason));
+        assert_eq!(h.audio_in.status, "no_microphone");
+        assert_eq!(h.audio_in.reason.as_deref(), Some(reason));
+
+        r.apply(
+            &Event::AudioInputInfo { device_name: "BOMGE".into(), sample_rate: 16000, pulse_source: Some("alsa_input.usb".into()), external: false },
+            t,
+        );
+        r.apply(&Event::AudioDeviceConnected { device_name: "BOMGE".into() }, t);
+        let h = r.snapshot_at(t);
+        assert!(h.audio.connected);
+        assert!(h.audio_in.reason.is_none());
+        assert_eq!(h.audio_in.source.as_deref(), Some("microphone"));
+        assert_eq!(h.audio_in.pulse_source.as_deref(), Some("alsa_input.usb"));
+        assert_eq!(h.audio_in.status, "no_data", "connected but no level yet");
+    }
+
+    #[test]
+    fn input_level_gives_signal_or_silent_and_goes_stale() {
+        let r = StatusRegistry::new();
+        r.set_features(flags());
+        let t = Utc::now();
+        r.apply(&Event::AudioDeviceConnected { device_name: "m".into() }, t);
+        r.apply(&Event::AudioLevelChanged { level_db: -90.0 }, t);
+        assert_eq!(r.snapshot_at(t).audio_in.status, "silent");
+        r.apply(&Event::AudioLevelChanged { level_db: -20.0 }, t);
+        r.apply(&Event::AudioLevelChanged { level_db: -40.0 }, t);
+        let a = r.snapshot_at(t).audio_in;
+        assert_eq!((a.status.as_str(), a.level_db, a.peak_db), ("signal", Some(-40.0), Some(-20.0)));
+        // peak is held for a few seconds, then follows the level
+        let later = t + chrono::Duration::seconds(5);
+        r.apply(&Event::AudioLevelChanged { level_db: -50.0 }, later);
+        assert_eq!(r.snapshot_at(later).audio_in.peak_db, Some(-50.0));
+        assert_eq!(r.snapshot_at(later + chrono::Duration::seconds(10)).audio_in.status, "no_data");
+    }
+
+    #[test]
+    fn station_stream_is_the_audio_source_and_disabled_input_is_not_an_error() {
+        let r = StatusRegistry::new();
+        assert_eq!(r.snapshot().audio_in.status, "disabled");
+        r.set_features(flags());
+        let t = Utc::now();
+        r.apply(&Event::AudioInputInfo { device_name: "sensor station".into(), sample_rate: 16000, pulse_source: None, external: true }, t);
+        assert_eq!(r.snapshot_at(t).audio_in.source.as_deref(), Some("station"));
+    }
+
+    #[test]
+    fn output_sink_and_speaker_state() {
+        let r = StatusRegistry::new();
+        let t = Utc::now();
+        assert_eq!(r.snapshot_at(t).audio_out.speaker_state, "not_configured");
+        r.set_features(flags());
+        assert_eq!(r.snapshot_at(t).audio_out.speaker_state, "connecting");
+        assert_eq!(r.snapshot_at(t).audio_out.route, "unknown");
+        r.apply(&Event::SpeakerError { error: "page timeout".into() }, t);
+        r.apply(&Event::SpeakerBackoff { attempts: 2, retry_in_sec: 12 }, t);
+        let o = r.snapshot_at(t).audio_out;
+        assert_eq!((o.speaker_state.as_str(), o.speaker_attempts, o.speaker_retry_in_sec), ("failed", 2, Some(12)));
+
+        r.apply(
+            &Event::AudioOutputSink { sink: Some("alsa_output.builtin".into()), description: Some("Built-in Audio".into()), bluetooth: false, volume_pct: Some(80), muted: Some(false) },
+            t,
+        );
+        assert_eq!(r.snapshot_at(t).audio_out.route, "builtin");
+        r.apply(&Event::SpeakerConnected { name: "BOOM 4".into() }, t);
+        r.apply(
+            &Event::AudioOutputSink { sink: Some("bluez_output.x".into()), description: Some("UE BOOM 4".into()), bluetooth: true, volume_pct: Some(65), muted: Some(false) },
+            t,
+        );
+        let o = r.snapshot_at(t).audio_out;
+        assert_eq!((o.speaker_state.as_str(), o.route.as_str(), o.speaker_attempts), ("connected", "bluetooth", 0));
     }
 }

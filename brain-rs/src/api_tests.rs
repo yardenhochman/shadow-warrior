@@ -328,3 +328,111 @@ async fn index_route_serves_html_and_bad_routes_fail() {
     let (status, _) = api.send(Method::GET, "/api/arena/presence", None).await;
     assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
 }
+
+/// Publish events and wait until the health registry (a bus subscriber) has folded them in.
+async fn health_after(api: &Api, events: Vec<crate::core::Event>, ready: impl Fn(&Value) -> bool) -> Value {
+    for e in events {
+        api.state.event_bus.publish(e);
+    }
+    for _ in 0..50 {
+        let h = api.get("/api/state").await["data"]["hardware"]["health"].clone();
+        if ready(&h) {
+            return h;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("health never reached the expected state: {}", api.get("/api/state").await["data"]["hardware"]["health"]);
+}
+
+#[tokio::test]
+async fn health_reports_missing_microphone_and_recovery() {
+    use crate::core::audio_health::FeatureFlags;
+    use crate::core::Event;
+    let api = api().await;
+    api.state.health.set_features(FeatureFlags { audio_input: true, ..Default::default() });
+    let reason = "no microphone: only null/monitor devices present (Discard all samples (playback) or generate zero samples (capture))";
+    let h = health_after(&api, vec![Event::AudioInputMissing { reason: reason.into() }], |h| h["audio_in"]["reason"].is_string()).await;
+    assert_eq!(h["audio"]["connected"], false);
+    assert_eq!(h["audio"]["last_error"], reason);
+    assert_eq!(h["audio_in"]["status"], "no_microphone");
+    assert_eq!(api.get("/api/state").await["data"]["hardware"]["audio"]["connected"], false);
+
+    let h = health_after(
+        &api,
+        vec![
+            Event::AudioInputInfo { device_name: "default".into(), sample_rate: 16000, pulse_source: Some("BOMGE (alsa_input.usb)".into()), external: false },
+            Event::AudioDeviceConnected { device_name: "default".into() },
+            Event::AudioLevelChanged { level_db: -30.0 },
+        ],
+        |h| h["audio_in"]["level_db"].is_number(),
+    )
+    .await;
+    assert_eq!(h["audio"]["connected"], true);
+    assert_eq!(h["audio_in"]["status"], "signal");
+    assert_eq!(h["audio_in"]["source"], "microphone");
+    assert_eq!(h["audio_in"]["pulse_source"], "BOMGE (alsa_input.usb)");
+    assert_eq!(h["audio_in"]["sample_rate"], 16000);
+    assert!(h["audio_in"]["reason"].is_null());
+}
+
+#[tokio::test]
+async fn health_reports_station_audio_source_station_state_and_provisioning() {
+    use crate::core::audio_health::FeatureFlags;
+    use crate::core::Event;
+    let api = api().await;
+    let h = api.get("/api/state").await["data"]["hardware"]["health"].clone();
+    assert_eq!(h["features"]["station_enabled"], false, "disabled in config, not an error");
+    assert_eq!(h["station"]["connected"], false);
+
+    api.state.health.set_features(FeatureFlags {
+        audio_input: true,
+        station_enabled: true,
+        station_stream_audio: true,
+        provision_enabled: true,
+        ..Default::default()
+    });
+    let h = health_after(
+        &api,
+        vec![
+            Event::AudioInputInfo { device_name: "sensor station".into(), sample_rate: 16000, pulse_source: None, external: true },
+            Event::StationConnected { station_id: Some(0xabcd), fw_version: Some("0.3".into()) },
+            Event::StationRadar { present: true, distance_cm: Some(120), moving_energy: 5, static_energy: 7 },
+            Event::StationLevel { rms_dbfs_l: -40.0, rms_dbfs_r: -42.5, peak_dbfs: -30.0 },
+            Event::StationProvision { station: "station-abcd".into(), state: "failed".into(), detail: Some("no frames after provisioning".into()) },
+        ],
+        |h| h["station_provision"]["station-abcd"]["state"].is_string() && h["station"]["rms_dbfs_l"].is_number(),
+    )
+    .await;
+    assert_eq!(h["features"]["station_stream_audio"], true);
+    assert_eq!(h["audio_in"]["source"], "station");
+    assert_eq!(h["station"]["connected"], true);
+    assert_eq!(h["station"]["radar_present"], true);
+    assert_eq!(h["station"]["radar_distance_cm"], 120);
+    assert_eq!(h["station_provision"]["station-abcd"]["detail"], "no frames after provisioning");
+}
+
+#[tokio::test]
+async fn health_reports_speaker_and_output_sink() {
+    use crate::core::audio_health::FeatureFlags;
+    use crate::core::Event;
+    let api = api().await;
+    let h = api.get("/api/state").await["data"]["hardware"]["health"].clone();
+    assert_eq!(h["audio_out"]["speaker_state"], "not_configured");
+    api.state.health.set_features(FeatureFlags { speaker_configured: true, ..Default::default() });
+    let h = health_after(
+        &api,
+        vec![
+            Event::SpeakerError { error: "page timeout".into() },
+            Event::SpeakerBackoff { attempts: 3, retry_in_sec: 40 },
+            Event::AudioOutputSink { sink: Some("alsa_output.builtin".into()), description: Some("Built-in Audio".into()), bluetooth: false, volume_pct: Some(90), muted: Some(false) },
+        ],
+        |h| h["audio_out"]["sink"].is_string(),
+    )
+    .await;
+    assert_eq!(h["audio_out"]["speaker_state"], "failed");
+    assert_eq!(h["audio_out"]["speaker_attempts"], 3);
+    assert_eq!(h["audio_out"]["speaker_retry_in_sec"], 40);
+    assert_eq!(h["audio_out"]["route"], "builtin");
+    assert_eq!(h["speaker"]["last_error"], "page timeout");
+    assert_eq!(h["audio_out"]["volume_pct"], 90);
+}

@@ -301,6 +301,40 @@ h2 {
 .health-v { text-align: right; overflow-wrap: anywhere; min-width: 0; }
 .health-fact.warn .health-v { color: var(--warning); }
 .health-fact.err .health-v { color: var(--danger); }
+.health-fact.ok .health-v { color: var(--success); }
+
+/* Station / microphone / speaker cards */
+.health-row.off { border-left-color: var(--border); opacity: 0.8; }
+.health-badge.off { color: var(--text-secondary); }
+.health-note {
+    font-size: 0.85rem;
+    margin: 0.25rem 0 0.4rem;
+    overflow-wrap: anywhere;
+}
+.health-note.ok { color: var(--success); }
+.health-note.warn { color: var(--warning); }
+.health-note.err { color: var(--danger); }
+.health-note.off { color: var(--text-secondary); }
+
+.level-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.8rem;
+    padding: 0.15rem 0;
+}
+.level-bar .level-ch { width: 1.2rem; color: var(--text-secondary); flex-shrink: 0; }
+.level-bar .level-track {
+    flex: 1;
+    min-width: 0;
+    height: 8px;
+    background: var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+}
+.level-bar .level-fill { height: 100%; background: var(--success); border-radius: 4px; }
+.level-bar .level-fill.hot { background: var(--warning); }
+.level-bar .level-val { width: 4.5rem; text-align: right; color: var(--text-secondary); flex-shrink: 0; }
 
 .health-empty {
     color: var(--text-secondary);

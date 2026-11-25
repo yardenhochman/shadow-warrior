@@ -57,10 +57,13 @@ impl AudioManager {
         }
 
         let host = cpal::default_host();
-        let default_device = host.default_input_device().context("No input device available")?;
+        let Some(default_device) = host.default_input_device() else {
+            return Err(audio_source::NoMicrophone(format!("{}: no input device available", audio_source::NO_MIC_PREFIX)).into());
+        };
         let default_name = default_device.description().map(|d| d.to_string()).unwrap_or_else(|_| "Unknown".to_string());
         let reject_monitor = self.config.read().await.reject_monitor;
-        let device = if reject_monitor {
+        // Null devices are rejected even with `reject_monitor: false`.
+        let device = if reject_monitor || audio_source::classify_name(&default_name) == audio_source::SourceKind::Null {
             // Candidates: default first, then the other input devices.
             let mut names = vec![default_name.clone()];
             let mut devs = vec![default_device];
@@ -74,11 +77,11 @@ impl AudioManager {
                 }
             }
             let verdict = tokio::task::spawn_blocking(audio_source::pactl_default_source_is_monitor).await.ok().flatten();
-            match audio_source::decide(&names, 0, verdict, true) {
+            match audio_source::decide(&names, 0, verdict, reject_monitor) {
                 audio_source::Decision::Use(i) => devs.swap_remove(i),
-                // Not capturing, so no shout detection on our own playback. main.rs
-                // publishes this error: health shows audio down with this reason.
-                audio_source::Decision::Reject(reason) => anyhow::bail!("{reason}"),
+                // Not capturing, so no shout detection on our own playback or on silence.
+                // `start_with_retry` publishes this: health shows audio down with this reason.
+                audio_source::Decision::Reject(reason) => return Err(audio_source::NoMicrophone(reason).into()),
             }
         } else {
             default_device
@@ -122,12 +125,58 @@ impl AudioManager {
         *self._stream.write().await = Some(stream);
         self.connected.store(true, Ordering::Relaxed);
 
+        // An alias device ("default", "pipewire") is a PipeWire/Pulse node: say which one.
+        let pulse_source = if audio_source::classify_name(&device_name) == audio_source::SourceKind::Generic {
+            tokio::task::spawn_blocking(audio_source::pactl_default_source_info)
+                .await
+                .ok()
+                .flatten()
+                .map(|(name, desc)| desc.map(|d| format!("{d} ({name})")).unwrap_or(name))
+        } else {
+            None
+        };
+        self.event_bus.publish(Event::AudioInputInfo {
+            device_name: device_name.clone(),
+            sample_rate: actual_rate,
+            pulse_source,
+            external: false,
+        });
         self.event_bus.publish(Event::AudioDeviceConnected { device_name });
 
         self.start_shout_detector();
         self.start_energy_decay_task();
 
         Ok(())
+    }
+
+    /// `start()`, retried with backoff (5 s doubling to 60 s) until a microphone is
+    /// opened, so a USB mic plugged in after boot is picked up. Returns once capturing
+    /// or when input is disabled. A reason is published when it changes: "no microphone"
+    /// as `AudioInputMissing`, other failures as `AudioError`. Replug after a *lost*
+    /// stream is not handled here (shadow-warrior-8ev).
+    pub async fn start_with_retry(self: Arc<Self>) {
+        let mut wait = Duration::from_secs(5);
+        let mut last: Option<String> = None;
+        loop {
+            match self.start().await {
+                Ok(()) => return, // capturing, or input disabled
+                Err(e) => {
+                    let reason = format!("{e:#}");
+                    if last.as_deref() != Some(reason.as_str()) {
+                        if e.downcast_ref::<audio_source::NoMicrophone>().is_some() {
+                            warn!("{reason} (retrying)");
+                            self.event_bus.publish(Event::AudioInputMissing { reason: reason.clone() });
+                        } else {
+                            error!("Audio manager failed to start (retrying): {reason}");
+                            self.event_bus.publish(Event::AudioError { error: format!("start: {reason}") });
+                        }
+                        last = Some(reason);
+                    }
+                }
+            }
+            tokio::time::sleep(wait).await;
+            wait = (wait * 2).min(Duration::from_secs(60));
+        }
     }
 
     /// Use an external audio feed (the sensor station's 16 kHz stream) instead of a
@@ -139,6 +188,12 @@ impl AudioManager {
         *self.frontend.lock().unwrap() =
             Some(FrontEnd::new(sample_rate, FrontEndConfig::default(), Box::new(Detector::default())));
         self.connected.store(true, Ordering::Relaxed);
+        self.event_bus.publish(Event::AudioInputInfo {
+            device_name: source_name.to_string(),
+            sample_rate,
+            pulse_source: None,
+            external: true,
+        });
         self.event_bus.publish(Event::AudioDeviceConnected { device_name: source_name.to_string() });
         self.start_shout_detector();
     }

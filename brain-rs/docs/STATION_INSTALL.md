@@ -152,9 +152,9 @@ the log says `a2dp-sink profile connect failed: Protocol not available`.
     whether the default source is a monitor. It then tries another named non-monitor input
     device; if none exists it does not open the stream, so no shout detection runs, and
     publishes an audio error: `hardware.audio` in `/api/state` shows not connected with
-    `last_error` "start: no real microphone: capture is a sink monitor (...)". The rest of
-    the brain keeps running. Recovery needs a restart of the service after plugging in a mic
-    (there is no capture retry loop). If `pactl` is unavailable and the name is a generic
+    `last_error` "no microphone: only null/monitor devices present (...)". The rest of
+    the brain keeps running. The capture is retried every 5 s (doubling to 60 s), so a mic plugged in later is
+    picked up without a restart; a mic lost while running is not restarted (shadow-warrior-8ev). If `pactl` is unavailable and the name is a generic
     alias, the guard cannot tell and capture starts, so keep the `wpctl` check above.
     **Not verified on the Orange Pi yet** (`shadow-warrior-25j` follow-up).
 

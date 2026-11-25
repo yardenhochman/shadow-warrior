@@ -46,6 +46,8 @@ pub struct SpeakerWatcher {
     last_error: Option<String>,
     /// Pause between audio-profile attempts within one check.
     settle: std::time::Duration,
+    /// Seconds per check tick, to turn the backoff into a retry time for health.
+    tick_sec: u64,
 }
 
 /// `connect()` returns before the profile finishes coming up, so the first audio request can
@@ -64,6 +66,7 @@ impl SpeakerWatcher {
             wait: 0,
             last_error: None,
             settle: std::time::Duration::from_secs(2),
+            tick_sec: 1,
         }
     }
 
@@ -135,6 +138,10 @@ impl SpeakerWatcher {
         self.mark_down();
         self.fails += 1;
         self.wait = (1u32 << self.fails.min(16)).min(self.max_backoff_ticks);
+        self.bus.publish(Event::SpeakerBackoff {
+            attempts: self.fails,
+            retry_in_sec: (self.wait as u64 + 1) * self.tick_sec,
+        });
         if self.last_error.as_deref() != Some(msg.as_str()) {
             warn!("Speaker {}: {msg}", self.name);
             self.bus.publish(Event::SpeakerError { error: msg.clone() });
@@ -161,6 +168,7 @@ async fn run(cfg: SpeakerConfig, bus: SharedEventBus) {
             Ok((link, name)) => {
                 info!("Supervising Bluetooth speaker {name}");
                 let mut watcher = SpeakerWatcher::new(name, bus.clone(), max_ticks);
+                watcher.tick_sec = cfg.check_interval_sec.max(1);
                 let mut ticker = tokio::time::interval(interval);
                 loop {
                     ticker.tick().await;
@@ -314,6 +322,7 @@ mod tests {
         while let Ok(e) = rx.try_recv() {
             v.push(match &e {
                 Event::SpeakerError { error } => format!("SpeakerError({error})"),
+                Event::SpeakerBackoff { .. } => continue, // asserted in backoff_event_carries_attempts_and_retry_time
                 other => other.event_type().to_string(),
             });
         }
@@ -366,6 +375,22 @@ mod tests {
         assert_eq!(link.count("audio"), 4, "AUDIO_ATTEMPTS tries, then give up");
         w.tick(&link).await; // backing off: no new attempt
         assert_eq!(link.count("audio"), 4);
+    }
+
+    #[tokio::test]
+    async fn backoff_event_carries_attempts_and_retry_time() {
+        let (mut w, mut rx) = setup(100);
+        w.tick_sec = 5;
+        let link = Fake::new(false);
+        *link.connect.lock().unwrap() = Err("device not available".into());
+        w.tick(&link).await;
+        let mut got = None;
+        while let Ok(e) = rx.try_recv() {
+            if let Event::SpeakerBackoff { attempts, retry_in_sec } = e {
+                got = Some((attempts, retry_in_sec));
+            }
+        }
+        assert_eq!(got, Some((1, 15)), "2 ticks of wait + the next tick, 5 s each");
     }
 
     #[tokio::test]

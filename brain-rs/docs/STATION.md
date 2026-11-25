@@ -88,6 +88,22 @@ Link health is in `/api/state` under `hardware.health.station`: connected, last 
 levels, direction, `frames`, `frames_lost` (sequence gaps), `bad_frames` (CRC/COBS/format),
 `audio_gap_frames` (silence filled). The same numbers go out as `StationLinkStats` events.
 
+## Dashboard cards
+
+The Device Health panel of the web dashboard has a **Sensor station** card built from
+`hardware.health.station`, `station_provision` and `features`:
+
+- `features.station_enabled: false` shows "Disabled in config", never an error.
+- Link state (connected / stale / disconnected, last seen, reason), firmware, radar presence and
+  distance, direction, `frames` / `frames_lost` / `bad_frames` / `audio_gap_frames`, last error, and
+  L/R RMS dBFS as small level bars.
+- One line per station for BLE provisioning: `found | provisioning | up(ip) | failed(reason)`; failed is
+  red, up green. Without `station.provision.enabled` it says provisioning is off.
+
+`features` (`audio_input`, `station_enabled`, `station_stream_audio`, `provision_enabled`,
+`speaker_configured`) is set once at startup from the config. With `stream_audio` the Microphone card
+(`hardware.health.audio_in`, see SOUND.md) says the station is the audio source.
+
 ## Design notes
 
 - `StationState` is a pure state machine (frame and time in, events and samples out); the

@@ -78,6 +78,20 @@ pub enum Event {
         level_db: f32,
     },
     AudioLevelChanged { level_db: f32 },
+    /// Which input the brain captures from. `pulse_source` is the PipeWire/Pulse source
+    /// node behind an alias device ("default"), `external` = the station's stream.
+    AudioInputInfo { device_name: String, sample_rate: u32, pulse_source: Option<String>, external: bool },
+    /// No usable microphone (only null/monitor devices, or none at all). The capture
+    /// is retried; this is published when the reason changes.
+    AudioInputMissing { reason: String },
+    /// The default PipeWire/Pulse output sink (services/audio_output.rs), on change.
+    AudioOutputSink {
+        sink: Option<String>,
+        description: Option<String>,
+        bluetooth: bool,
+        volume_pct: Option<u32>,
+        muted: Option<bool>,
+    },
 
     // Sensor station (services/station_manager.rs). Sensor values only: the brain
     // decides what they mean. Radar, level and direction are throttled (about 2 / 2 / 5 Hz).
@@ -116,6 +130,8 @@ pub enum Event {
     /// Link check passed; refreshes health `last_seen`.
     SpeakerAlive,
     SpeakerError { error: String },
+    /// Reconnect attempts failed `attempts` times in a row; next try in about `retry_in_sec`.
+    SpeakerBackoff { attempts: u32, retry_in_sec: u64 },
 
     // Music events
     MusicStarted { track_name: String },
@@ -208,6 +224,9 @@ impl Event {
             Event::AudioDeviceConnected { .. } => "AudioDeviceConnected",
             Event::AudioDeviceDisconnected => "AudioDeviceDisconnected",
             Event::AudioError { .. } => "AudioError",
+            Event::AudioInputInfo { .. } => "AudioInputInfo",
+            Event::AudioInputMissing { .. } => "AudioInputMissing",
+            Event::AudioOutputSink { .. } => "AudioOutputSink",
             Event::ShoutDetected { .. } => "ShoutDetected",
             Event::AudioLevelChanged { .. } => "AudioLevelChanged",
             Event::StationConnected { .. } => "StationConnected",
@@ -227,6 +246,7 @@ impl Event {
             Event::SpeakerDisconnected => "SpeakerDisconnected",
             Event::SpeakerAlive => "SpeakerAlive",
             Event::SpeakerError { .. } => "SpeakerError",
+            Event::SpeakerBackoff { .. } => "SpeakerBackoff",
             Event::MusicStarted { .. } => "MusicStarted",
             Event::MusicStopped => "MusicStopped",
             Event::MusicError { .. } => "MusicError",
