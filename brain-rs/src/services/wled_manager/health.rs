@@ -58,6 +58,19 @@ impl LinkHealth {
         self.inner.lock().unwrap().entry(ip.to_string()).or_default().probed = false;
     }
 
+    /// Consecutive failures of `ip` since its last success.
+    pub(super) fn fails(&self, ip: &str) -> u32 {
+        self.inner.lock().unwrap().get(ip).map_or(0, |e| e.fails)
+    }
+
+    /// The controller now lives at `new`: carry its tracking state over.
+    pub(super) fn rename(&self, old: &str, new: &str) {
+        let mut m = self.inner.lock().unwrap();
+        if let Some(e) = m.remove(old) {
+            m.insert(new.to_string(), e);
+        }
+    }
+
     /// A call to `ip` failed.
     pub(super) fn fail(&self, ip: &str, error: impl std::fmt::Display) {
         let mut m = self.inner.lock().unwrap();

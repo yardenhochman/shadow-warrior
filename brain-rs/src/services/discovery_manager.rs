@@ -6,10 +6,68 @@ use ssdp_client::SearchTarget;
 use std::time::Duration;
 use futures::StreamExt;
 use mdns_sd::{ServiceDaemon, ServiceEvent};
+use std::sync::OnceLock;
 
 use crate::services::database_manager::SharedDatabaseManager;
 use crate::services::ble_manager::BleManager;
 use crate::core::{Event, SharedEventBus};
+
+/// A WLED controller seen on mDNS.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WledFound {
+    /// Full service name, e.g. "wled-ab12cd._wled._tcp.local."
+    pub fullname: String,
+    /// Instance part of the full name ("wled-ab12cd").
+    pub instance: String,
+    /// Host name without the ".local." suffix.
+    pub hostname: String,
+    pub ip: String,
+    pub port: u16,
+}
+
+/// The process-wide mDNS daemon, shared by every browse (one socket set, not one per scan).
+fn mdns_daemon() -> Result<ServiceDaemon> {
+    static DAEMON: OnceLock<ServiceDaemon> = OnceLock::new();
+    if let Some(d) = DAEMON.get() {
+        return Ok(d.clone());
+    }
+    let d = ServiceDaemon::new()?;
+    Ok(DAEMON.get_or_init(|| d).clone())
+}
+
+/// Browse `_wled._tcp.local.` for `timeout`; one entry per resolved IPv4 address.
+pub async fn browse_wled(timeout: Duration) -> Result<Vec<WledFound>> {
+    const TYPE: &str = "_wled._tcp.local.";
+    let mdns = mdns_daemon()?;
+    let receiver = mdns.browse(TYPE)?;
+    let deadline = tokio::time::Instant::now() + timeout;
+    let mut found = Vec::new();
+    while let Ok(ev) = tokio::time::timeout_at(deadline, receiver.recv_async()).await {
+        match ev {
+            Ok(ServiceEvent::ServiceResolved(info)) => {
+                let fullname = info.get_fullname().to_string();
+                let instance = fullname.split("._").next().unwrap_or(&fullname).to_string();
+                let hostname = info.get_hostname().trim_end_matches('.').trim_end_matches(".local").to_string();
+                for addr in info.get_addresses().iter().filter(|a| a.is_ipv4()) {
+                    found.push(WledFound {
+                        fullname: fullname.clone(),
+                        instance: instance.clone(),
+                        hostname: hostname.clone(),
+                        ip: addr.to_string(),
+                        port: info.get_port(),
+                    });
+                }
+            }
+            Ok(_) => {}
+            Err(e) => {
+                warn!("mDNS recv error: {}", e);
+                break;
+            }
+        }
+    }
+    let _ = mdns.stop_browse(TYPE);
+    Ok(found)
+}
 
 pub struct DiscoveryManager {
     db: SharedDatabaseManager,
@@ -70,43 +128,15 @@ impl DiscoveryManager {
 
     async fn scan_mdns(db: SharedDatabaseManager, event_bus: SharedEventBus) -> Result<()> {
         info!("Scanning for WLED devices via mDNS (_wled._tcp)...");
-        let mdns = ServiceDaemon::new()?;
-        let receiver = mdns.browse("_wled._tcp.local.")?;
-
-        let timeout = tokio::time::sleep(Duration::from_secs(5));
-        tokio::pin!(timeout);
-
-        loop {
-            tokio::select! {
-                _ = &mut timeout => break,
-                event = tokio::task::spawn_blocking({
-                    let receiver = receiver.clone();
-                    move || receiver.recv()
-                }) => {
-                    match event {
-                        Ok(Ok(ServiceEvent::ServiceResolved(info))) => {
-                            let name = info.get_fullname().to_string();
-                            for addr in info.get_addresses() {
-                                let host = addr.to_string();
-                                let port = info.get_port() as i32;
-                                debug!("Found WLED via mDNS: {} at {}:{}", name, host, port);
-                                if let Err(e) = db.add_device(&name, "wled", &host, port, None).await {
-                                    error!("Failed to save mDNS WLED device: {}", e);
-                                } else {
-                                    info!("Registered WLED {} at {}:{}", name, host, port);
-                                    event_bus.publish(Event::WledConnected { ip: host.clone() });
-                                }
-                            }
-                        }
-                        Ok(Ok(_)) => {}
-                        Ok(Err(e)) => { warn!("mDNS recv error: {}", e); break; }
-                        Err(_) => break,
-                    }
-                }
+        for found in browse_wled(Duration::from_secs(5)).await? {
+            debug!("Found WLED via mDNS: {} at {}:{}", found.instance, found.ip, found.port);
+            if let Err(e) = db.add_device(&found.fullname, "wled", &found.ip, found.port as i32, None).await {
+                error!("Failed to save mDNS WLED device: {}", e);
+            } else {
+                info!("Registered WLED {} at {}:{}", found.fullname, found.ip, found.port);
+                event_bus.publish(Event::WledConnected { ip: found.ip.clone() });
             }
         }
-
-        let _ = mdns.shutdown();
         Ok(())
     }
 

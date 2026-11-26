@@ -136,6 +136,7 @@ mod tests {
             num_leds: 180,
             strips,
             auto_layout: true,
+            ..Default::default()
         }
     }
 

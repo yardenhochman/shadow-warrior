@@ -310,6 +310,12 @@ impl StatusRegistry {
                 let reason = d.last_error.clone();
                 d.down(now, reason);
             }
+            Event::WledMoved { old, new, .. } => {
+                // Same device, new address: carry its history over, drop the dead key.
+                let mut d = h.wled.remove(old).unwrap_or_default();
+                d.address = Some(new.clone());
+                h.wled.insert(new.clone(), d);
+            }
             Event::WledError { ip, error } => {
                 let d = h.wled.entry(ip.clone()).or_default();
                 d.address = Some(ip.clone());

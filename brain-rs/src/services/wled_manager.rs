@@ -21,7 +21,9 @@ use crate::services::database_manager::SharedDatabaseManager;
 mod health;
 mod probe;
 mod protocol;
+mod rediscover;
 use health::LinkHealth;
+use rediscover::{locate, BrowseGate, Locator, MdnsLocator};
 
 /// Idle liveness poll period; well under `server.health_stale_sec`.
 const HEALTH_POLL_INTERVAL: Duration = Duration::from_secs(30);
@@ -57,6 +59,10 @@ pub struct WledManager {
     realtime_port: u16,
     /// Look of the brain-rendered scenes (`led:` in config.yaml).
     led: LedConfig,
+    /// mDNS browse + MAC lookup used to find a controller again after an IP change.
+    locator: Arc<dyn Locator>,
+    /// Keeps the mDNS browse to once per `MIN_BROWSE_INTERVAL`.
+    browse_gate: BrowseGate,
 }
 
 impl WledManager {
@@ -83,6 +89,8 @@ impl WledManager {
             overlaid: Default::default(),
             realtime_port: REALTIME_PORT,
             led: LedConfig::default(),
+            locator: Arc::new(MdnsLocator::new()),
+            browse_gate: BrowseGate::new(rediscover::MIN_BROWSE_INTERVAL),
         }
     }
 
@@ -97,6 +105,14 @@ impl WledManager {
     #[cfg(test)]
     pub(crate) fn with_realtime_port(mut self, port: u16) -> Self {
         self.realtime_port = port;
+        self
+    }
+
+    /// Test seam: scripted network instead of mDNS, with `browse_interval` between browses.
+    #[cfg(test)]
+    pub(crate) fn with_locator(mut self, locator: Arc<dyn Locator>, browse_interval: Duration) -> Self {
+        self.locator = locator;
+        self.browse_gate = BrowseGate::new(browse_interval);
         self
     }
 
@@ -139,6 +155,7 @@ impl WledManager {
         );
 
         *self.controllers.write().await = loaded_controllers.clone();
+        self.resolve_unaddressed().await;
 
         // Offline-tolerant: an unreachable/unresolvable controller is skipped
         // (and retried by the health poll / discovery), never fatal at startup.
@@ -185,6 +202,7 @@ impl WledManager {
                 num_leds: DEFAULT_STRIP_LEDS,
                 strips: vec![StripConfig { column, leds: DEFAULT_STRIP_LEDS, reverse: false }],
                 auto_layout: true,
+                ..Default::default()
             });
         }
         self.rebuild_sockets().await?;
@@ -595,36 +613,151 @@ impl WledManager {
             .map(|c| c.ip.clone())
             .collect();
         for ip in ips {
-            let url = format!("http://{ip}/json/info");
-            match self
-                .http_client
-                .get(&url)
-                .send()
-                .await
-                .and_then(|r| r.error_for_status())
-            {
-                Ok(resp) => {
-                    self.link.ok(&ip);
-                    // Layout first (once per connect), then the count as a fallback/check.
-                    self.probe_layout_if_due(&ip).await;
-                    let info = resp.json::<serde_json::Value>().await.ok();
-                    if let Some(ver) = info.as_ref().and_then(|v| v["ver"].as_str()) {
-                        let old = self.versions.lock().unwrap().insert(ip.clone(), ver.to_string());
-                        if old.as_deref() != Some(ver) {
-                            info!("WLED {ip} runs {ver}{}", if is_pre_16(ver) { " (no segment blending: idle uses its fallback)" } else { "" });
-                        }
-                    }
-                    // The device knows its real strip length; config/discovery only guess.
-                    if let Some(n) = info
-                        .and_then(|v| v["leds"]["count"].as_u64())
-                        .filter(|n| *n > 0)
-                    {
-                        self.update_led_count(&ip, n as usize).await;
+            self.poll_one(&ip).await;
+        }
+        self.rediscover_if_needed().await;
+    }
+
+    async fn poll_one(&self, ip: &str) {
+        let url = format!("http://{ip}/json/info");
+        match self
+            .http_client
+            .get(&url)
+            .send()
+            .await
+            .and_then(|r| r.error_for_status())
+        {
+            Ok(resp) => {
+                self.link.ok(ip);
+                // Layout first (once per connect), then the count as a fallback/check.
+                self.probe_layout_if_due(ip).await;
+                let info = resp.json::<serde_json::Value>().await.ok();
+                if let Some(mac) = info.as_ref().and_then(|v| v["mac"].as_str()) {
+                    self.learn_mac(ip, mac).await;
+                }
+                if let Some(ver) = info.as_ref().and_then(|v| v["ver"].as_str()) {
+                    let old = self.versions.lock().unwrap().insert(ip.to_string(), ver.to_string());
+                    if old.as_deref() != Some(ver) {
+                        info!("WLED {ip} runs {ver}{}", if is_pre_16(ver) { " (no segment blending: idle uses its fallback)" } else { "" });
                     }
                 }
-                Err(e) => self.link.fail(&ip, &e),
+                // The device knows its real strip length; config/discovery only guess.
+                if let Some(n) = info
+                    .and_then(|v| v["leds"]["count"].as_u64())
+                    .filter(|n| *n > 0)
+                {
+                    self.update_led_count(ip, n as usize).await;
+                }
+            }
+            Err(e) => self.link.fail(ip, &e),
+        }
+    }
+
+    /// First contact with a controller configured by `ip` only: remember its MAC so it can
+    /// be found again if its address changes.
+    async fn learn_mac(&self, ip: &str, mac: &str) {
+        if rediscover::norm_mac(mac).is_empty() {
+            return;
+        }
+        let mut controllers = self.controllers.write().await;
+        if let Some(c) = controllers.iter_mut().find(|c| c.ip == ip && c.mac.is_none()) {
+            debug!("WLED {ip}: learned MAC {mac}");
+            c.mac = Some(mac.to_string());
+        }
+    }
+
+    /// Controllers given by `name`/`mac` only (no `ip`): find them on the network at startup.
+    /// Not found is not fatal; the health poll keeps looking.
+    async fn resolve_unaddressed(&self) {
+        let wanted = self.controllers.read().await.iter().any(|c| c.ip.is_empty());
+        if !wanted {
+            return;
+        }
+        self.browse_gate.allow();
+        let found = self.locator.browse().await;
+        self.relocate_all(&found, false).await;
+    }
+
+    /// After `REDISCOVER_AFTER_FAILS` consecutive failures, look for the controller on mDNS
+    /// (at most one browse per `MIN_BROWSE_INTERVAL`) and follow it to its new address.
+    async fn rediscover_if_needed(&self) {
+        let lost = {
+            let controllers = self.controllers.read().await;
+            controllers
+                .iter()
+                .any(|c| self.is_lost(c) && (c.name.is_some() || c.mac.is_some()))
+        };
+        if !lost || !self.browse_gate.allow() {
+            return;
+        }
+        let found = self.locator.browse().await;
+        for new_ip in self.relocate_all(&found, true).await {
+            self.poll_one(&new_ip).await;
+        }
+    }
+
+    fn is_lost(&self, c: &WledController) -> bool {
+        c.ip.is_empty() || self.link.fails(&c.ip) >= rediscover::REDISCOVER_AFTER_FAILS
+    }
+
+    /// Match every lost controller against `found`; returns the new addresses of the moved ones.
+    /// `only_lost` false considers just address-less entries (startup).
+    async fn relocate_all(&self, found: &[crate::services::discovery_manager::WledFound], only_lost: bool) -> Vec<String> {
+        let snapshot: Vec<WledController> = self.controllers.read().await.clone();
+        let mut moved = Vec::new();
+        for c in &snapshot {
+            let eligible = if only_lost { self.is_lost(c) } else { c.ip.is_empty() };
+            if !eligible || (c.name.is_none() && c.mac.is_none()) {
+                continue;
+            }
+            let taken: Vec<String> = snapshot.iter().filter(|o| o.ip != c.ip).map(|o| o.ip.clone()).collect();
+            let Some(new_ip) = locate(self.locator.as_ref(), c, found, &taken).await else { continue };
+            if new_ip == c.ip {
+                continue;
+            }
+            self.apply_move(&c.ip, &new_ip, c.name.as_deref().or(c.mac.as_deref())).await;
+            moved.push(new_ip);
+        }
+        moved
+    }
+
+    /// Re-point controller `old` to `new` everywhere: runtime list (HTTP base URL), per-address
+    /// bookkeeping, realtime UDP sockets, status registry (via `WledMoved`). config.yaml is untouched.
+    async fn apply_move(&self, old: &str, new: &str, label: Option<&str>) {
+        {
+            let mut controllers = self.controllers.write().await;
+            let Some(c) = controllers.iter_mut().find(|c| c.ip == old) else { return };
+            c.ip = new.to_string();
+        }
+        self.link.rename(old, new);
+        {
+            let mut m = self.probed.lock().unwrap();
+            if let Some(v) = m.remove(old) {
+                m.insert(new.to_string(), v);
             }
         }
+        {
+            let mut m = self.versions.lock().unwrap();
+            if let Some(v) = m.remove(old) {
+                m.insert(new.to_string(), v);
+            }
+        }
+        {
+            let mut m = self.overlaid.lock().unwrap();
+            if m.remove(old) {
+                m.insert(new.to_string());
+            }
+        }
+        if let Err(e) = self.rebuild_sockets().await {
+            warn!("WLED socket rebuild after move failed: {e}");
+        }
+        let name = label.unwrap_or(old);
+        if old.is_empty() {
+            info!("WLED {name} found at {new}");
+        } else {
+            info!("WLED {name} moved {old} -> {new}");
+        }
+        self.event_bus.publish(Event::WledMoved { old: old.to_string(), new: new.to_string(), name: name.to_string() });
     }
 
     /// Probe `GET /json/cfg` if this controller connected (or reconnected) since the last
@@ -1464,6 +1597,7 @@ mod tests {
                 StripConfig { column: 1, leds: 60, reverse: true },
             ],
             auto_layout: false,
+            ..Default::default()
         }];
         wled.rebuild_sockets().await.unwrap();
         {
@@ -1506,6 +1640,7 @@ mod tests {
                 StripConfig { column: 2, leds: 60, reverse: false },
             ],
             auto_layout: false,
+            ..Default::default()
         }];
         wled.rebuild_sockets().await.unwrap();
         wled.clone().start_event_loop();
@@ -1578,10 +1713,10 @@ mod tests {
             WledController { ip: "a".into(), num_leds: 120, strips: vec![
                 StripConfig { column: 0, leds: 60, reverse: false },
                 StripConfig { column: 1, leds: 60, reverse: false },
-            ], auto_layout: false },
+            ], auto_layout: false, ..Default::default() },
             WledController { ip: "b".into(), num_leds: 180, strips: vec![
                 StripConfig { column: 2, leds: 180, reverse: false },
-            ], auto_layout: false },
+            ], auto_layout: false, ..Default::default() },
         ];
         wled.update_led_count("a", 90).await;
         wled.update_led_count("b", 150).await;
@@ -1773,7 +1908,7 @@ mod tests {
     }
 
     fn ctrl(ip: &str, strips: Vec<StripConfig>) -> WledController {
-        WledController { ip: ip.into(), num_leds: 180, strips, auto_layout: false }
+        WledController { ip: ip.into(), num_leds: 180, strips, auto_layout: false, ..Default::default() }
     }
 
     #[test]
@@ -1837,5 +1972,157 @@ mod tests {
         assert_eq!(cs[2].ip, a);
         assert_eq!(cs[2].strip_specs(2)[0].column, 2);
         assert!(!cs.iter().any(|c| c.ip == b));
+    }
+
+    // ---- IP change / mDNS re-discovery ----
+
+    use super::rediscover::fake::{found, FakeLocator};
+    use std::sync::atomic::Ordering;
+
+    async fn manager_with(loc: Arc<FakeLocator>, interval: Duration) -> (WledManager, Arc<StatusRegistry>) {
+        let db = Arc::new(DatabaseManager::new("sqlite::memory:").await.unwrap());
+        let bus: SharedEventBus = Arc::new(EventBus::new(100));
+        let reg = Arc::new(StatusRegistry::new());
+        reg.spawn(&bus);
+        tokio::task::yield_now().await;
+        (WledManager::new(Config::default().wled, db, bus).with_locator(loc, interval), reg)
+    }
+
+    fn port_of(addr: &str) -> u16 {
+        addr.rsplit_once(':').unwrap().1.parse().unwrap()
+    }
+
+    async fn poll_n(wled: &WledManager, n: u32) {
+        for _ in 0..n {
+            wled.poll_health_once().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn moved_controller_is_found_by_name() {
+        let loc = Arc::new(FakeLocator::default());
+        let (wled, reg) = manager_with(loc.clone(), Duration::ZERO).await;
+        let dead = dead_addr().await;
+        let (live, _, _) = mock_http(&[("*", 200, r#"{"ver":"16.0.1","mac":"aabbccddeeff"}"#)]).await;
+        *wled.controllers.write().await =
+            vec![WledController { ip: dead.clone(), name: Some("wled-ab12cd".into()), num_leds: 10, ..Default::default() }];
+        loc.found.lock().unwrap().push({
+            let mut f = found("wled-ab12cd", "127.0.0.1");
+            f.port = port_of(&live);
+            f
+        });
+
+        // Below the threshold nothing is browsed.
+        poll_n(&wled, health::FAIL_THRESHOLD - 1).await;
+        assert_eq!(loc.browses.load(Ordering::SeqCst), 0);
+        assert_eq!(wled.controllers.read().await[0].ip, dead);
+
+        poll_n(&wled, 1).await;
+        assert_eq!(wled.controllers.read().await[0].ip, live);
+        assert_eq!(wled.get_status().await[0].ip, live);
+        assert!(wait_connected(&reg, &live, true).await, "re-polled at the new address");
+        assert!(!reg.snapshot().wled.contains_key(&dead), "old registry key dropped");
+        // Config-given name stays, MAC learned from the device after the move.
+        assert_eq!(wled.controllers.read().await[0].mac.as_deref(), Some("aabbccddeeff"));
+    }
+
+    #[tokio::test]
+    async fn ip_only_controller_learns_mac_then_is_found_by_it() {
+        let loc = Arc::new(FakeLocator::default());
+        let (wled, _reg) = manager_with(loc.clone(), Duration::ZERO).await;
+        let (old, old_routes, _) = mock_http(&[("*", 200, r#"{"ver":"16.0.1","mac":"AA:BB:CC:DD:EE:FF"}"#)]).await;
+        let (new, _, _) = mock_http(&[("*", 200, r#"{"ver":"16.0.1","mac":"aabbccddeeff"}"#)]).await;
+        *wled.controllers.write().await = vec![WledController { ip: old.clone(), num_leds: 10, ..Default::default() }];
+
+        wled.poll_health_once().await;
+        assert_eq!(wled.controllers.read().await[0].mac.as_deref(), Some("AA:BB:CC:DD:EE:FF"));
+
+        // The device vanishes from `old`; mDNS lists some other unknown WLED and the real one.
+        old_routes.lock().await.insert("*".into(), (500, "{}".into()));
+        loc.found.lock().unwrap().extend([found("wled-other", "10.9.9.9"), {
+            let mut f = found("wled-new", "127.0.0.1");
+            f.port = port_of(&new);
+            f
+        }]);
+        loc.macs.lock().unwrap().insert("10.9.9.9".into(), "001122334455".into());
+        loc.macs.lock().unwrap().insert("127.0.0.1".into(), "aabbccddeeff".into());
+        poll_n(&wled, health::FAIL_THRESHOLD).await;
+        assert_eq!(wled.controllers.read().await[0].ip, new);
+    }
+
+    #[tokio::test]
+    async fn no_match_leaves_state_untouched() {
+        let loc = Arc::new(FakeLocator::default());
+        let (wled, _reg) = manager_with(loc.clone(), Duration::ZERO).await;
+        let dead = dead_addr().await;
+        *wled.controllers.write().await = vec![WledController {
+            ip: dead.clone(),
+            name: Some("wled-ab12cd".into()),
+            mac: Some("aabbccddeeff".into()),
+            num_leds: 10,
+            ..Default::default()
+        }];
+        loc.found.lock().unwrap().push(found("wled-someone-else", "10.9.9.9"));
+        loc.macs.lock().unwrap().insert("10.9.9.9".into(), "001122334455".into());
+        poll_n(&wled, health::FAIL_THRESHOLD + 2).await;
+        assert!(loc.browses.load(Ordering::SeqCst) >= 1);
+        assert_eq!(wled.controllers.read().await[0].ip, dead);
+        assert_eq!(wled.controllers.read().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn mdns_browse_is_rate_limited() {
+        let loc = Arc::new(FakeLocator::default());
+        let (wled, _reg) = manager_with(loc.clone(), Duration::from_secs(10)).await;
+        let dead = dead_addr().await;
+        *wled.controllers.write().await =
+            vec![WledController { ip: dead, name: Some("wled-ab12cd".into()), num_leds: 10, ..Default::default() }];
+        poll_n(&wled, health::FAIL_THRESHOLD + 5).await;
+        assert_eq!(loc.browses.load(Ordering::SeqCst), 1, "failing every poll still browses once per interval");
+    }
+
+    #[tokio::test]
+    async fn ip_swap_repoints_the_realtime_sender() {
+        let loc = Arc::new(FakeLocator::default());
+        let (wled, _reg) = manager_with(loc, Duration::ZERO).await;
+        let listener = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        listener.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let wled = wled.with_realtime_port(listener.local_addr().unwrap().port());
+        // UDP connect() sends nothing, so a made-up old address is fine.
+        *wled.controllers.write().await =
+            vec![WledController { ip: "10.254.254.1".into(), name: Some("n".into()), num_leds: 10, ..Default::default() }];
+        wled.rebuild_sockets().await.unwrap();
+        assert_eq!(wled.udp_sockets.read().await[0].0.peer_addr().unwrap().ip().to_string(), "10.254.254.1");
+
+        wled.apply_move("10.254.254.1", "127.0.0.1", Some("n")).await;
+
+        let socks = wled.udp_sockets.read().await;
+        assert_eq!(socks.len(), 1);
+        assert_eq!(socks[0].0.peer_addr().unwrap().ip().to_string(), "127.0.0.1");
+        socks[0].0.send(b"ping").unwrap();
+        let mut buf = [0u8; 8];
+        assert_eq!(listener.recv(&mut buf).unwrap(), 4);
+    }
+
+    #[tokio::test]
+    async fn address_less_controller_is_resolved_at_start() {
+        let loc = Arc::new(FakeLocator::default());
+        loc.found.lock().unwrap().push(found("wled-ab12cd", "10.254.254.7"));
+        let db = Arc::new(DatabaseManager::new("sqlite::memory:").await.unwrap());
+        let bus: SharedEventBus = Arc::new(EventBus::new(100));
+        let mut config = Config::default();
+        config.wled.controllers = vec![WledController { name: Some("wled-ab12cd".into()), num_leds: 10, ..Default::default() }];
+        let wled = WledManager::new(config.wled, db, bus).with_locator(loc, Duration::ZERO);
+        wled.start().await.unwrap();
+        assert_eq!(wled.controllers.read().await[0].ip, "10.254.254.7");
+    }
+
+    #[test]
+    fn name_and_mac_are_optional_in_config() {
+        let c: WledController = serde_yaml::from_str("{ip: 10.0.0.5, num_leds: 180}").unwrap();
+        assert!(c.name.is_none() && c.mac.is_none());
+        let c: WledController = serde_yaml::from_str("{name: wled-ab12cd, mac: 'AA:BB:CC:DD:EE:FF', num_leds: 180}").unwrap();
+        assert!(c.ip.is_empty());
+        assert_eq!(c.name.as_deref(), Some("wled-ab12cd"));
     }
 }

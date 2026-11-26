@@ -111,6 +111,7 @@ mod tests {
                 },
             ],
             auto_layout: false,
+            ..Default::default()
         };
         let s = controller_strips(&c, 0, 4);
         assert_eq!((s[0].column, s[0].reverse), (3, false));
@@ -120,6 +121,7 @@ mod tests {
             num_leds: 180,
             strips: vec![],
             auto_layout: false,
+            ..Default::default()
         };
         let s = controller_strips(&single, 2, 4);
         assert_eq!((s.len(), s[0].column, s[0].leds), (1, 2, 180));
