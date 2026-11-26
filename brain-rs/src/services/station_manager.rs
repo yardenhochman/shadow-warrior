@@ -322,9 +322,9 @@ pub async fn spawn(
         };
         let peer: Arc<Mutex<Option<SocketAddr>>> = Arc::new(Mutex::new(None));
         tokio::spawn(udp_reader(sock.clone(), tx.clone(), peer.clone()));
-        if cfg.stream_audio {
-            tokio::spawn(udp_keepalive(sock, fixed, peer));
-        }
+        // Always send the 1 Hz command: with audio off it is StopAudio, a no-op for the station, but it lets a
+        // station whose stored brain address went stale find and adopt this host (station-fw discovery).
+        tokio::spawn(udp_keepalive(sock, fixed, peer, cfg.stream_audio));
     }
     if let Some(port) = cfg.serial_port.clone() {
         let (tx, stop, baud, stream) =
@@ -425,8 +425,9 @@ async fn udp_keepalive(
     sock: Arc<UdpSocket>,
     fixed: Option<SocketAddr>,
     peer: Arc<Mutex<Option<SocketAddr>>>,
+    stream_audio: bool,
 ) {
-    let frame = command_frame(Command::StartAudio);
+    let frame = command_frame(if stream_audio { Command::StartAudio } else { Command::StopAudio });
     let mut t = tokio::time::interval(KEEPALIVE);
     loop {
         t.tick().await;
