@@ -147,6 +147,8 @@ pub enum Event {
     WledConnected { ip: String },
     WledDisconnected { ip: String },
     WledError { ip: String, error: String },
+    /// A controller was found at a new address (mDNS re-discovery); `old` is no longer used.
+    WledMoved { old: String, new: String, name: String },
 
     // Schedule events
     ScheduleChanged { active: bool },
@@ -259,6 +261,7 @@ impl Event {
             Event::WledConnected { .. } => "WledConnected",
             Event::WledDisconnected { .. } => "WledDisconnected",
             Event::WledError { .. } => "WledError",
+            Event::WledMoved { .. } => "WledMoved",
             Event::ScheduleChanged { .. } => "ScheduleChanged",
             Event::TasmotaStateChanged { .. } => "TasmotaStateChanged",
             Event::TasmotaError { .. } => "TasmotaError",

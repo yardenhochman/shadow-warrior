@@ -491,7 +491,18 @@ pub struct WledConfig {
 /// omitted (it is then the sum).
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct WledController {
+    /// Current address (`host` or `host:port`). May be omitted when `name` or `mac` is given:
+    /// it is then resolved at startup by mDNS and re-resolved when the controller moves.
+    #[serde(default)]
     pub ip: String,
+    /// Stable identity: the mDNS instance or host name (e.g. "wled-ab12cd"). Used to find the
+    /// controller again after its IP changed (new router, DHCP).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Stable identity: MAC address as in WLED `/json/info` `mac`. Learned from the controller
+    /// on first contact when not configured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mac: Option<String>,
     #[serde(default)]
     pub num_leds: usize,
     #[serde(default)]

@@ -107,6 +107,14 @@ wled:
         - {column: 2, leds: 180, reverse: true} # wired top-down (LED 0 at the top)
 ```
 
+**IP changes (new router, DHCP).** A controller may carry a stable identity next to (or instead of)
+`ip`: `name` (mDNS instance or host name, e.g. `wled-ab12cd`) and/or `mac` (as in `/json/info`).
+An entry with only `name`/`mac` is resolved by mDNS at startup. After 3 consecutive failed contacts
+the brain browses `_wled._tcp.local.` (at most once per 10 s), matches by name, then by MAC, and
+re-points that controller (HTTP address, realtime UDP socket, status registry; one INFO line
+`WLED <name> moved <old> -> <new>`, event `WledMoved`). `config.yaml` is never rewritten. An entry
+with only `ip` learns its MAC at first contact, so existing configs get this without editing.
+
 Validation at load: the strips' LEDs must sum to `num_leds` if given, no column twice, no
 column >= `columns`. The brain renders **one compositor per strip** and concatenates the
 strips (flipping `reverse` ones) into the controller's frame. Scenes get the strip's
