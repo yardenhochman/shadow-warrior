@@ -83,10 +83,10 @@ audio:
   shout_tilt_min_db_per_khz: -25.0 # spectral tilt floor
   shout_flatness_max: 0.5          # reject noise-like frames (wind, crowd)
   shout_min_features: 3            # of 4 checks (voiced/centroid/tilt/flatness) required
-  shout_min_duration_sec: 0.2      # sustained shouty time before firing (keep < 0.3)
+  shout_min_duration_sec: 0.12     # sustained shouty time before firing (keep < 0.3); tuned on tune1 (160 ms median latency)
   shout_gap_frames: 3              # non-shouty frames tolerated inside a shout
   shout_sensitivity: 1.0           # score gain per shouty frame
-  shout_score_threshold: 8.0       # score at which ShoutDetected fires
+  shout_score_threshold: 12.0      # score at which ShoutDetected fires
   shout_score_decay: 0.9           # per-frame score decay when not shouty
 
   # Live shout meter signal (ShoutLevel events, ~30 Hz; drives the LED shout meter, docs/SOUND.md).

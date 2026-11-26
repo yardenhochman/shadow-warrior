@@ -447,7 +447,7 @@ fn d_centroid() -> f32 { 900.0 }
 fn d_tilt() -> f32 { -25.0 }
 fn d_flatness() -> f32 { 0.5 }
 fn d_min_features() -> u32 { 3 }
-fn d_score_threshold() -> f32 { 8.0 }
+fn d_score_threshold() -> f32 { 12.0 }
 fn d_score_decay() -> f32 { 0.9 }
 fn d_gap_frames() -> u32 { 3 }
 fn d_meter_lo() -> f32 { 6.0 }
@@ -883,7 +883,7 @@ impl Default for Config {
                 sample_rate: 44100,
                 channels: 1,
                 buffer_size: 1024,
-                shout_min_duration_sec: 0.2,
+                shout_min_duration_sec: 0.12,
                 shout_sensitivity: 1.0,
                 vad_threshold: 0.5,
                 shout_margin_db: d_margin(),
