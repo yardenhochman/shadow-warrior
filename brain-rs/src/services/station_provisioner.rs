@@ -304,7 +304,7 @@ mod bt {
     impl Scanner for BtScanner {
         async fn scan(&mut self, listen: Duration) -> Result<Vec<Found>> {
             let _g = crate::services::ble_manager::ADAPTER_LOCK.lock().await;
-            let manager = Manager::new().await?;
+            let manager = crate::services::ble_manager::shared_manager().await?;
             let adapters = manager.adapters().await?;
             let mut names = Vec::new();
             for a in &adapters {
