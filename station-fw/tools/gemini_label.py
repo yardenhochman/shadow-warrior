@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["numpy>=1.26", "google-genai>=1.0", "python-dotenv>=1.0"]
+# dependencies = ["numpy>=1.26", "google-genai>=1.0", "python-dotenv>=1.0", "requests>=2"]
 # ///
 """Cross-check a dual recording's event labels with Gemini audio understanding. Dev-time only.
 
@@ -74,8 +74,51 @@ def ask(client, types, model: str, data: bytes) -> list[dict]:
     return []
 
 
+def parse_json_list(text: str) -> list[dict]:
+    """Models sometimes wrap the JSON in prose or code fences: take the outermost [...] or {"events": [...]}."""
+    text = text.strip()
+    try:
+        v = json.loads(text)
+    except json.JSONDecodeError:
+        i, j = text.find("["), text.rfind("]")
+        if i < 0 or j < i:
+            return []
+        try:
+            v = json.loads(text[i: j + 1])
+        except json.JSONDecodeError:
+            return []
+    if isinstance(v, dict):
+        v = next((x for x in v.values() if isinstance(x, list)), [])
+    return [e for e in v if isinstance(e, dict)]
+
+
+def ask_openrouter(key: str, model: str, data: bytes) -> list[dict]:
+    import base64
+    import requests
+
+    body = {"model": model, "temperature": 0.0, "messages": [{"role": "user", "content": [
+        {"type": "text", "text": PROMPT},
+        {"type": "input_audio", "input_audio": {"data": base64.b64encode(data).decode(), "format": "wav"}}]}]}
+    for attempt in range(4):
+        r = requests.post("https://openrouter.ai/api/v1/chat/completions", json=body, timeout=180,
+                          headers={"Authorization": f"Bearer {key}"})
+        if r.status_code in (400, 401, 402, 403, 404):
+            sys.exit(f"OpenRouter error {r.status_code}, not retrying: {r.text[:300]}")
+        if r.status_code == 200:
+            try:
+                return parse_json_list(r.json()["choices"][0]["message"]["content"] or "")
+            except (KeyError, IndexError, ValueError):
+                return []
+        wait = 15 * (attempt + 1)
+        print(f"  retry in {wait}s: {r.status_code} {r.text[:100]}", file=sys.stderr)
+        time.sleep(wait)
+    return []
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--provider", choices=["gemini", "openrouter"], default="gemini",
+                    help="openrouter needs OPENROUTER_API_KEY and an OpenRouter model id, e.g. openai/gpt-audio-mini")
     ap.add_argument("rec", type=Path)
     ap.add_argument("--wav", default="bomge.wav")
     ap.add_argument("--offset", type=float, default=0.92, help="reference time - station time (for comparing with labels_auto)")
@@ -85,20 +128,25 @@ def main() -> int:
     a = ap.parse_args()
 
     load_dotenv(REPO / ".env")
-    key = os.environ.get("GEMINI_API_KEY")
+    var = "GEMINI_API_KEY" if a.provider == "gemini" else "OPENROUTER_API_KEY"
+    key = os.environ.get(var)
     if not key:
-        sys.exit("GEMINI_API_KEY missing from repo-root .env")
-    from google import genai
-    from google.genai import types
+        sys.exit(f"{var} missing from repo-root .env")
+    if a.provider == "gemini":
+        from google import genai
+        from google.genai import types
 
-    client = genai.Client(api_key=key)
+        client = genai.Client(api_key=key)
+    out_name = "labels_gemini.json" if a.provider == "gemini" else f"labels_{a.model.replace('/', '_').replace(':', '_')}.json"
     x, sr = read_wav(a.rec / a.wav)
     n_chunk, step = int(a.chunk * sr), int((a.chunk - a.overlap) * sr)
     events: list[dict] = []
     for s in range(0, max(1, len(x) - int(a.overlap * sr)), step):
         t_off = s / sr
         print(f"chunk {t_off:.0f}s ..", flush=True)
-        for e in ask(client, types, a.model, wav_bytes(x[s: s + n_chunk], sr)):
+        data = wav_bytes(x[s: s + n_chunk], sr)
+        found = ask(client, types, a.model, data) if a.provider == "gemini" else ask_openrouter(key, a.model, data)
+        for e in found:
             try:
                 e["t"] = float(e["t"]) + t_off
                 e["dur"] = float(e.get("dur", 0.3))
@@ -108,8 +156,8 @@ def main() -> int:
             if not any(abs(o["t"] - e["t"]) < 0.8 and o.get("kind") == e.get("kind") for o in events):
                 events.append(e)
     events.sort(key=lambda e: e["t"])
-    (a.rec / "labels_gemini.json").write_text(json.dumps({"model": a.model, "time_base": "reference", "events": events}, indent=1))
-    print(f"\n{len(events)} Gemini events -> labels_gemini.json")
+    (a.rec / out_name).write_text(json.dumps({"model": a.model, "time_base": "reference", "events": events}, indent=1))
+    print(f"\n{len(events)} {a.model} events -> {out_name}")
 
     auto = a.rec / "labels_auto.json"
     if auto.exists():
