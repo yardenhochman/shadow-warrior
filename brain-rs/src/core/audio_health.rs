@@ -39,6 +39,10 @@ pub struct AudioInHealth {
     pub level_db: Option<f32>,
     /// Peak level over the last few seconds, dB.
     pub peak_db: Option<f32>,
+    /// Slow ambient band level, dBFS (adaptive sensitivity); None until the estimate is warm.
+    pub ambient_db: Option<f32>,
+    /// dB currently added to the shout margin and meter lo/hi by adaptive sensitivity.
+    pub adaptive_offset_db: Option<f32>,
     pub level_at: Option<DateTime<Utc>>,
     #[serde(skip)]
     pub peak_at: Option<DateTime<Utc>>,

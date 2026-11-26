@@ -83,6 +83,10 @@ pub enum Event {
     /// `db_above_floor` the band level over the adaptive noise floor. Not a detection:
     /// `ShoutDetected` stays the event that counts shouts.
     ShoutLevel { level: f32, db_above_floor: f32 },
+    /// Adaptive sensitivity state (~1 Hz while audio flows, services/adaptive.rs): the slow
+    /// ambient band level (dBFS) and the dB currently added to `shout_margin_db` and the
+    /// meter lo/hi (negative = relaxed in a quiet room, positive = tightened in a noisy one).
+    AdaptiveSensitivity { ambient_db: f32, adaptive_offset_db: f32 },
     /// Which input the brain captures from. `pulse_source` is the PipeWire/Pulse source
     /// node behind an alias device ("default"), `external` = the station's stream.
     AudioInputInfo { device_name: String, sample_rate: u32, pulse_source: Option<String>, external: bool },
@@ -237,6 +241,7 @@ impl Event {
             Event::ShoutDetected { .. } => "ShoutDetected",
             Event::AudioLevelChanged { .. } => "AudioLevelChanged",
             Event::ShoutLevel { .. } => "ShoutLevel",
+            Event::AdaptiveSensitivity { .. } => "AdaptiveSensitivity",
             Event::StationConnected { .. } => "StationConnected",
             Event::StationDisconnected { .. } => "StationDisconnected",
             Event::StationError { .. } => "StationError",

@@ -21,6 +21,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use super::audio_frontend::{FrameFeatures, FrontEnd, FrontEndConfig, VadProbe, FRAME_SECS};
+use super::adaptive::{self, AmbientTracker};
 use super::audio_manager::AudioManager;
 use super::shout_detector::{FrameVerdict, ShoutDetector};
 use super::wav_eval::{parse_override, read_wav, DEFAULT_CHUNK};
@@ -112,19 +113,24 @@ pub struct Detection {
 pub struct DetRow {
     pub verdict: FrameVerdict,
     pub score: f32,
+    /// Adaptive sensitivity state used for this frame (`adaptive.rs`).
+    pub ambient_db: f32,
+    pub offset_db: f32,
 }
 
 /// Feed features through a fresh `ShoutDetector`.
 pub fn run_detector(frames: &[FrameFeatures], cfg: &AudioConfig) -> (Vec<Detection>, Vec<DetRow>) {
     let mut det = ShoutDetector::new();
+    let mut ambient = AmbientTracker::new();
     let mut dets = Vec::new();
     let mut rows = Vec::with_capacity(frames.len());
     for f in frames {
-        let (d, verdict) = det.push_verbose(f, cfg);
+        let st = ambient.push(f, cfg);
+        let (d, verdict) = det.push_verbose(f, &adaptive::apply(cfg, st.offset_db));
         if let Some(d) = d {
             dets.push(Detection { t: frame_end(f), intensity: d.intensity, duration_sec: d.duration_sec, level_db: d.level_db });
         }
-        rows.push(DetRow { verdict, score: det.score() });
+        rows.push(DetRow { verdict, score: det.score(), ambient_db: st.ambient_db, offset_db: st.offset_db });
     }
     (dets, rows)
 }
@@ -407,7 +413,7 @@ pub fn format_sweep(results: &[SweepResult], top: usize) -> String {
 }
 
 const CSV_HEADER: &str = "time,band_db,noise_floor_db,db_above_floor,vad_prob,gate_open,f0_hz,pitch_conf,\
-centroid_hz,tilt_db_per_khz,flatness,features_passed,shouty,score,detection\n";
+centroid_hz,tilt_db_per_khz,flatness,features_passed,shouty,score,detection,ambient_db,adaptive_offset_db\n";
 
 pub fn features_csv(frames: &[FrameFeatures], rows: &[DetRow], dets: &[Detection]) -> String {
     let mut out = String::from(CSV_HEADER);
@@ -416,10 +422,10 @@ pub fn features_csv(frames: &[FrameFeatures], rows: &[DetRow], dets: &[Detection
         let det = dets.iter().any(|d| d.t == t) as u8;
         let _ = writeln!(
             out,
-            "{:.3},{:.2},{:.2},{:.2},{:.3},{},{:.1},{:.3},{:.0},{:.2},{:.4},{},{},{:.3},{}",
+            "{:.3},{:.2},{:.2},{:.2},{:.3},{},{:.1},{:.3},{:.0},{:.2},{:.4},{},{},{:.3},{},{:.2},{:.2}",
             t, f.band_db, f.noise_floor_db, f.db_above_floor, f.vad_prob, r.verdict.gate_open as u8,
             f.pitch_hz, f.pitch_conf, f.spectral_centroid_hz, f.spectral_tilt_db_per_khz,
-            f.spectral_flatness, r.verdict.features_passed, r.verdict.shouty as u8, r.score, det
+            f.spectral_flatness, r.verdict.features_passed, r.verdict.shouty as u8, r.score, det, r.ambient_db, r.offset_db
         );
     }
     out
@@ -437,6 +443,8 @@ const USAGE: &str = "usage: shout_replay [options] <file.wav>
   --sweep KEY=v1,v2   grid over values (repeatable); needs --labels
   --top N             rows to print in sweep mode (default 20)
   --chunk N           samples per front-end call (default 1024)
+  --gain-db DB        scale the whole recording by DB before analysis (simulates another mic gain / room;
+                      clipped to full scale)
 Stereo WAVs are mixed (l+r)/2 like the brain does.";
 
 pub fn cli(args: &[String]) -> Result<()> {
@@ -444,6 +452,7 @@ pub fn cli(args: &[String]) -> Result<()> {
     let mut overrides = Vec::new();
     let (mut labels, mut csv, mut wav_path) = (None::<PathBuf>, None::<PathBuf>, None::<PathBuf>);
     let (mut offset, mut onset_db, mut top, mut chunk) = (0.0f32, 10.0f32, 20usize, DEFAULT_CHUNK);
+    let mut gain_db = 0.0f32;
     let mut specs: Vec<(String, Vec<String>)> = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -462,6 +471,7 @@ pub fn cli(args: &[String]) -> Result<()> {
             }
             "--top" => top = val()?.parse().context("--top")?,
             "--chunk" => chunk = val()?.parse().context("--chunk")?,
+            "--gain-db" => gain_db = val()?.parse().context("--gain-db")?,
             "-h" | "--help" => {
                 println!("{USAGE}");
                 return Ok(());
@@ -477,7 +487,11 @@ pub fn cli(args: &[String]) -> Result<()> {
         None => Vec::new(),
     };
     let wav = read_wav(&wav_path)?;
-    let mono = to_mono(&wav.samples, wav.channels);
+    let mut mono = to_mono(&wav.samples, wav.channels);
+    if gain_db != 0.0 {
+        let g = 10f32.powf(gain_db / 20.0);
+        mono.iter_mut().for_each(|x| *x = (*x * g).clamp(-1.0, 1.0));
+    }
     let frames = extract_features(&mono, wav.rate, chunk, Box::new(earshot::Detector::default()));
     println!(
         "{}: {:.1}s {} Hz {}ch, {} frames, {} cues, config {}{}",
@@ -509,6 +523,15 @@ pub fn cli(args: &[String]) -> Result<()> {
         println!("{} detections (no labels)", dets.len());
     } else {
         print!("{}", format_eval(&evaluate_cues(&cues, &dets, &frames, onset_db)));
+    }
+    if let Some(last) = rows.last() {
+        let (lo, hi) = rows.iter().fold((f32::MAX, f32::MIN), |(l, h), r| (l.min(r.offset_db), h.max(r.offset_db)));
+        println!(
+            "adaptive {}: gain {gain_db:+.0} dB, final ambient {:.1} dB, offset final {:+.1} (range {lo:+.1}..{hi:+.1}) dB",
+            if cfg.adaptive_enabled { "on" } else { "off" },
+            last.ambient_db,
+            last.offset_db
+        );
     }
     if let Some(p) = csv {
         std::fs::write(&p, features_csv(&frames, &rows, &dets)).with_context(|| format!("writing {}", p.display()))?;
@@ -684,6 +707,6 @@ mod tests {
         let csv = features_csv(&frames, &rows, &dets);
         assert_eq!(csv.lines().count(), frames.len() + 1);
         assert!(csv.starts_with("time,band_db,"));
-        assert!(csv.lines().skip(1).any(|l| l.ends_with(",1")), "a detection row");
+        assert!(csv.lines().skip(1).any(|l| l.split(',').nth(14) == Some("1")), "a detection row");
     }
 }

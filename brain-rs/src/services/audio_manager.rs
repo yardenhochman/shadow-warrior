@@ -10,6 +10,7 @@ use anyhow::{Context, Result};
 use earshot::Detector;
 
 use super::audio_source;
+use super::adaptive::{self, AmbientTracker};
 use super::shout_detector::ShoutDetector;
 use super::shout_meter::ShoutMeter;
 use super::session_recorder::{disk_free_bytes, sanitize_label, RecordStatus, SessionParams, SessionRecorder};
@@ -309,10 +310,19 @@ impl AudioManager {
         tokio::spawn(async move {
             let mut det = ShoutDetector::new();
             let mut meter = ShoutMeter::new();
+            let mut ambient = AmbientTracker::new();
             let mut last_level_event = Instant::now();
+            let mut last_adaptive_event = Instant::now();
             while rx.changed().await.is_ok() {
                 let Some(feat) = rx.borrow_and_update().clone() else { continue };
-                let cfg = config.read().await.clone();
+                let base_cfg = config.read().await.clone();
+                // Slow ambient estimate -> offset on margin and meter range (adaptive.rs).
+                let st = ambient.push(&feat, &base_cfg);
+                let cfg = adaptive::apply(&base_cfg, st.offset_db);
+                if last_adaptive_event.elapsed() >= Duration::from_secs(1) && st.ambient_db.is_finite() {
+                    event_bus.publish(Event::AdaptiveSensitivity { ambient_db: st.ambient_db, adaptive_offset_db: st.offset_db });
+                    last_adaptive_event = Instant::now();
+                }
                 *level.write().await = feat.band_db;
                 if last_level_event.elapsed() >= Duration::from_millis(100) {
                     event_bus.publish(Event::AudioLevelChanged { level_db: feat.band_db });

@@ -108,6 +108,66 @@ gate did not separate the classes on this mic (all pass ~3 of 4 checks), so it i
 
 Not tuned on recordings yet: use `shout_replay --features-csv` output to pick lo/hi for the I2S mics.
 
+## Adaptive sensitivity (`services/adaptive.rs`)
+
+Idea: when everything is quiet relax the gates, when the environment is noisy raise them. The front-end
+floor is relative (it follows the recent minimum), so in a noisy hall a shout is a smaller step above
+it, and in a very quiet room small sounds look huge. An `AmbientTracker` runs in the same task as the
+detector and meter (`audio_manager::start_shout_detector`) and turns the slow absolute ambient level
+into one `offset_db`, added to `shout_margin_db` and to the meter `lo`/`hi` (`adaptive::apply` builds the effective config; the detector and meter code is unchanged).
+
+```
+ambient  EMA of band_db, tau = adaptive_window_sec, over frames that are not transients
+         (db_above_floor > 8 dB, playback_active, and 1 s after them are skipped: shouts, claps
+         and talking never drag it up; steady noise that the floor follows still counts).
+         Running mean until one window has been seen.
+target   adaptive_gain * soft_deadband(ambient - adaptive_ref_db, adaptive_deadband_db)
+         clamped to [-adaptive_max_down_db, +adaptive_max_up_db]
+offset   follows target, slew-limited to adaptive_slew_db_per_sec; 0 for the first 20 s of ambient
+         and whenever adaptive_enabled is false (identity)
+```
+
+Why these choices: the soft deadband (continuous, 0 within +-4 dB) plus a 2-minute window and a 1 dB/s
+slew stop the thresholds from breathing with every passing noise; gain 0.5 means a 20 dB louder room
+tightens by 10 dB, not 20 (the margin is not a pure SNR). Margin and meter move together so the LED
+meter and the detector agree. Effective margin and meter lo never go below 3 dB.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `audio.adaptive_enabled` | true | off: offset is always 0 |
+| `audio.adaptive_ref_db` | -85 | ambient band level (dBFS) at which the configured values apply as is (station mic in a quiet room reads about -88) |
+| `audio.adaptive_gain` | 0.5 | dB of threshold change per dB of ambient change |
+| `audio.adaptive_max_up_db` | 15 | largest tightening (noisy) |
+| `audio.adaptive_max_down_db` | 10 | largest relaxing (quiet) |
+| `audio.adaptive_deadband_db` | 4 | ambient within +-this of the reference: no change |
+| `audio.adaptive_window_sec` | 120 | ambient time constant |
+| `audio.adaptive_slew_db_per_sec` | 1 | max rate of change of the offset |
+
+Exposed as `Event::AdaptiveSensitivity { ambient_db, adaptive_offset_db }` (~1 Hz while audio flows) and
+folded into the audio-in health record (`audio_in.ambient_db`, `audio_in.adaptive_offset_db`, null until the
+first event). The values the detector uses are the configured ones plus `adaptive_offset_db`.
+
+`adaptive_ref_db` is an absolute level, so it is per mic and per gain: re-measure `ambient_db` in the
+quiet room after changing the mic or its gain and set the reference to it. Radar/presence is not used as an
+extra input (skipped: it adds a second moving part for little, and the VAD/transient exclusion already
+keeps people from raising the estimate).
+
+Offline check on tune1 (station_1.wav, 35 shout cues, config.yaml; `shout_replay --gain-db G --set adaptive_enabled=B`, `--gain-db` scales the whole recording, clipped to full scale):
+
+| gain | adaptive | hits | false positives | median latency | final ambient / offset |
+| --- | --- | --- | --- | --- | --- |
+| 0 dB | off | 35/35 | 51 | 160 ms | -89 dB / 0 |
+| 0 dB | on | 35/35 | 51 | 160 ms | -89 dB / 0 (inside deadband: identical) |
+| -20 dB | off | 34/35 | 6 | 504 ms | -100 dB / 0 |
+| -20 dB | on | 34/35 | 7 | 504 ms | -100 dB / -5.5 |
+| +20 dB | off | 35/35 | 44 | 160 ms | -69 dB / 0 |
+| +20 dB | on | 35/35 | 7 | 416 ms | -69 dB / +6.0 |
+
+(The recording is a quiet room, so on the original gain the reference sits inside the deadband and adaptive does nothing; the +-20 dB rows
+simulate a hotter or less sensitive mic.) At +20 dB (noisy-looking) it removes most false positives at no
+cost in hits but a later median detection; at -20 dB relaxing buys nothing on this recording (the one miss
+is a quiet shout the digital floor of the scaled file also hides).
+
 ## Tuning on recordings
 
 `shout_replay` (`src/bin/shout_replay.rs`, logic in `services/shout_replay.rs`) replays a WAV through
@@ -152,7 +212,7 @@ rate overall and per NEAR/MID/FAR block (when the cue `prompt` contains those wo
 
 `--features-csv` writes one row per frame: `time` (frame end), `band_db`, `noise_floor_db`,
 `db_above_floor`, `vad_prob`, `gate_open`, `f0_hz`, `pitch_conf`, `centroid_hz`, `tilt_db_per_khz`,
-`flatness`, `features_passed`, `shouty`, `score`, `detection`, for plotting against the cues.
+`flatness`, `features_passed`, `shouty`, `score`, `detection`, `ambient_db`, `adaptive_offset_db`, for plotting against the cues.
 
 ## Not done yet
 
