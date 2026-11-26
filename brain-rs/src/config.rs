@@ -454,8 +454,8 @@ fn d_min_features() -> u32 { 3 }
 fn d_score_threshold() -> f32 { 12.0 }
 fn d_score_decay() -> f32 { 0.9 }
 fn d_gap_frames() -> u32 { 3 }
-fn d_meter_lo() -> f32 { 35.0 }
-fn d_meter_hi() -> f32 { 60.0 }
+fn d_meter_lo() -> f32 { 45.0 }
+fn d_meter_hi() -> f32 { 65.0 }
 fn d_meter_attack() -> f32 { 50.0 }
 fn d_meter_release() -> f32 { 200.0 }
 

@@ -250,8 +250,8 @@ led:
   shout_meter_color: [0, 200, 255]   # RGB 0..255; keep it unlike the energy bar (red to amber)
   shout_meter_fight_scale: 0.5       # fight-scene intensity, 0 = no meter in the fight
 audio:                               # the signal itself: docs/SOUND.md
-  shout_meter_lo_db: 35
-  shout_meter_hi_db: 60
+  shout_meter_lo_db: 45
+  shout_meter_hi_db: 65
   shout_meter_gate: false
   shout_meter_attack_ms: 50
   shout_meter_release_ms: 200
