@@ -4,7 +4,7 @@ use btleplug::api::{
 };
 use btleplug::platform::{Adapter, Manager, Peripheral};
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
@@ -24,6 +24,94 @@ const FIGHT_MODE_UUID: Uuid = Uuid::from_u128(0x6E400006_B5A3_F393_E0A9_E50E24DC
 /// Serialises scan/connect phases of the bag and the station provisioner, which may share one
 /// BlueZ adapter (two concurrent discovery sessions and connects confuse cheap controllers).
 pub(crate) static ADAPTER_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Process-wide btleplug [`Manager`], created lazily and shared by the bag and the provisioner.
+///
+/// `Manager::new()` opens a NEW system D-Bus connection (bluez-async 0.8 `BluetoothSession::new`:
+/// `dbus_tokio::connection::new_system_sync()` plus a detached `tokio::spawn` of the connection IO
+/// task). btleplug discards the returned join future, and that task only ends when the bus
+/// connection is lost, so dropping a `Manager` does NOT close its connection: every
+/// `Manager::new()` leaks one connection for the life of the process. The bus allows 256 per UID,
+/// so a retry loop calling it every few seconds exhausts it (shadow-warrior-9nw).
+/// Number of D-Bus sessions this process created via `Manager::new()` (each leaks until exit).
+pub(crate) static SESSIONS_CREATED: AtomicUsize = AtomicUsize::new(0);
+
+/// Re-creating after a fatal error leaks the old connection, so rate-limit it and cap it.
+const SESSION_RECREATE_MIN_INTERVAL: Duration = Duration::from_secs(60);
+const SESSION_MAX_TOTAL: usize = 8;
+
+/// One lazily-created value plus bookkeeping; generic so the policy is testable without BlueZ.
+pub(crate) struct SharedSlot<T> {
+    slot: Option<T>,
+    last_created: Option<std::time::Instant>,
+    created: &'static AtomicUsize,
+}
+
+impl<T: Clone> SharedSlot<T> {
+    pub(crate) const fn new(created: &'static AtomicUsize) -> Self {
+        Self { slot: None, last_created: None, created }
+    }
+
+    pub(crate) async fn get_or_create<F, Fut>(&mut self, make: F) -> Result<T>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<T>>,
+    {
+        if let Some(v) = &self.slot {
+            return Ok(v.clone());
+        }
+        if let Some(t) = self.last_created {
+            if t.elapsed() < SESSION_RECREATE_MIN_INTERVAL {
+                anyhow::bail!("bluetooth session was re-created recently; waiting before retrying");
+            }
+        }
+        if self.created.load(Ordering::SeqCst) >= SESSION_MAX_TOTAL {
+            anyhow::bail!("too many bluetooth sessions created ({SESSION_MAX_TOTAL}); refusing to leak more");
+        }
+        self.last_created = Some(std::time::Instant::now());
+        let v = make().await?;
+        let n = self.created.fetch_add(1, Ordering::SeqCst) + 1;
+        debug!("ble: sessions created={n}");
+        self.slot = Some(v.clone());
+        Ok(v)
+    }
+
+    /// Forget the value after a fatal error (next `get_or_create` makes a new one).
+    pub(crate) fn invalidate(&mut self) {
+        self.slot = None;
+    }
+}
+
+/// True for the D-Bus "too many connections for this UID" error.
+pub(crate) fn is_connection_limit_error(msg: &str) -> bool {
+    msg.contains("maximum number of active connections")
+}
+
+static SHARED_MANAGER: tokio::sync::Mutex<SharedSlot<Manager>> =
+    tokio::sync::Mutex::const_new(SharedSlot::new(&SESSIONS_CREATED));
+
+/// The shared btleplug Manager. On a D-Bus connection-limit error, log once at ERROR and exit
+/// non-zero so systemd (Restart=on-failure) starts a fresh process with no leaked connections.
+pub(crate) async fn shared_manager() -> Result<Manager> {
+    let mut g = SHARED_MANAGER.lock().await;
+    match g.get_or_create(|| async { Ok(Manager::new().await?) }).await {
+        Ok(m) => Ok(m),
+        Err(e) => {
+            let msg = format!("{e:#}");
+            if is_connection_limit_error(&msg) {
+                error!("ble: D-Bus connection limit reached ({msg}); exiting so systemd restarts the service");
+                std::process::exit(1);
+            }
+            Err(e)
+        }
+    }
+}
+
+/// Call when the shared manager's bus connection looks dead (not for ordinary scan/connect errors).
+#[allow(dead_code)]
+pub(crate) async fn invalidate_shared_manager() {
+    SHARED_MANAGER.lock().await.invalidate();
+}
 
 pub struct BleManager {
     config: Arc<RwLock<BleConfig>>,
@@ -151,7 +239,7 @@ impl BleManager {
     /// Connect to the punching bag
     async fn connect(&self) -> Result<()> {
         let _adapter_guard = ADAPTER_LOCK.lock().await;
-        let manager = Manager::new().await?;
+        let manager = shared_manager().await?;
         let adapter = self.pick_adapter(&manager).await?;
 
         info!("Starting BLE scan...");
@@ -162,6 +250,7 @@ impl BleManager {
 
         let scan_timeout = self.config.read().await.scan_timeout_sec;
         sleep(Duration::from_secs(scan_timeout)).await;
+        let _ = adapter.stop_scan().await;
 
         let peripherals = adapter.peripherals().await?;
         info!("Found {} peripherals", peripherals.len());
@@ -233,11 +322,13 @@ impl BleManager {
 
     /// Explicitly scan for devices and return found punching bags
     pub async fn scan_for_devices(&self) -> Result<Vec<(String, String)>> {
-        let manager = Manager::new().await?;
+        let _adapter_guard = ADAPTER_LOCK.lock().await;
+        let manager = shared_manager().await?;
         let adapter = self.pick_adapter(&manager).await?;
 
         adapter.start_scan(ScanFilter::default()).await?;
         sleep(Duration::from_secs(5)).await;
+        let _ = adapter.stop_scan().await;
         
         let peripherals = adapter.peripherals().await?;
         let mut found = Vec::new();
@@ -707,6 +798,38 @@ impl PunchGate {
 mod tests {
     use super::*;
     use crate::core::EventBus;
+
+    #[tokio::test]
+    async fn shared_slot_creates_once_across_many_calls() {
+        static COUNT: AtomicUsize = AtomicUsize::new(0);
+        let mut slot: SharedSlot<u32> = SharedSlot::new(&COUNT);
+        for _ in 0..100 {
+            let v = slot.get_or_create(|| async { Ok(7u32) }).await.unwrap();
+            assert_eq!(v, 7);
+        }
+        assert_eq!(COUNT.load(Ordering::SeqCst), 1, "a leak-per-iteration regression would show >1");
+    }
+
+    #[tokio::test]
+    async fn shared_slot_recreate_is_rate_limited_and_capped() {
+        static COUNT: AtomicUsize = AtomicUsize::new(0);
+        let mut slot: SharedSlot<u32> = SharedSlot::new(&COUNT);
+        slot.get_or_create(|| async { Ok(1u32) }).await.unwrap();
+        slot.invalidate();
+        assert!(slot.get_or_create(|| async { Ok(2u32) }).await.is_err(), "immediate re-create refused");
+        assert_eq!(COUNT.load(Ordering::SeqCst), 1);
+        static CAPPED: AtomicUsize = AtomicUsize::new(SESSION_MAX_TOTAL);
+        let mut capped: SharedSlot<u32> = SharedSlot::new(&CAPPED);
+        assert!(capped.get_or_create(|| async { Ok(1u32) }).await.is_err());
+    }
+
+    #[test]
+    fn detects_dbus_connection_limit_error() {
+        assert!(is_connection_limit_error(
+            "D-Bus error: The maximum number of active connections for UID 1001 has been reached"
+        ));
+        assert!(!is_connection_limit_error("No Bluetooth adapters found"));
+    }
 
     #[test]
     fn parses_both_payload_shapes() {
