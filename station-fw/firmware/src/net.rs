@@ -10,7 +10,8 @@
 //! 100+ ms of jitter). USB serial keeps working at the same time.
 
 use std::net::{SocketAddr, UdpSocket};
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU16, AtomicU32, AtomicU8, Ordering};
+use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -37,6 +38,14 @@ pub static LINK: AtomicU8 = AtomicU8::new(0);
 /// IPv4 octets, big endian.
 pub static IP: AtomicU32 = AtomicU32::new(0);
 pub static RSSI: AtomicI32 = AtomicI32::new(0);
+/// Frames should also go to the broadcast address (the brain is silent or unknown); see `station_core::discovery`.
+pub static BCAST_ACTIVE: AtomicBool = AtomicBool::new(false);
+/// UDP port of the brain, for the broadcast destination.
+pub static BRAIN_PORT: AtomicU16 = AtomicU16::new(DEFAULT_BRAIN_PORT);
+/// `now_ms()` of the last command datagram from anyone (0 = none yet; a real 0 ms is shifted to 1).
+static LAST_CMD_MS: AtomicU32 = AtomicU32::new(0);
+/// Source address of the last command datagram, taken by the supervisor to adopt a moved brain.
+static COMMANDER: Mutex<Option<SocketAddr>> = Mutex::new(None);
 pub static UDP_SENT: AtomicU32 = AtomicU32::new(0);
 pub static UDP_DROPPED: AtomicU32 = AtomicU32::new(0);
 pub static CONNECTS: AtomicU32 = AtomicU32::new(0);
@@ -173,6 +182,21 @@ pub fn spawn(
     CONFIGURED.store(true, Ordering::Relaxed);
 
     thread::Builder::new().name("wifi".into()).stack_size(5120).spawn(move || {
+        // The brain's address can change at runtime (see `station_core::discovery`), so it lives here, not in `cfg`.
+        let mut brain = cfg.brain;
+        BRAIN_PORT.store(brain.map_or(DEFAULT_BRAIN_PORT, |b| b.port()), Ordering::Relaxed);
+        let make_sock = |b: Option<SocketAddr>| {
+            b.and_then(|b| {
+                UdpSocket::bind("0.0.0.0:0")
+                    .and_then(|s| {
+                        s.connect(b)?;
+                        s.set_nonblocking(true)?;
+                        Ok(s)
+                    })
+                    .map_err(|e| warn!("net: udp socket failed: {e}"))
+                    .ok()
+            })
+        };
         let mut backoff = Duration::from_secs(1);
         let mut failed_since: Option<Instant> = None;
         loop {
@@ -223,22 +247,13 @@ pub fn spawn(
             if let Some(ip) = ip {
                 IP.store(u32::from(ip), Ordering::Relaxed);
             }
-            let sock = cfg.brain.and_then(|b| {
-                UdpSocket::bind("0.0.0.0:0")
-                    .and_then(|s| {
-                        s.connect(b)?;
-                        s.set_nonblocking(true)?;
-                        Ok(s)
-                    })
-                    .map_err(|e| warn!("net: udp socket failed: {e}"))
-                    .ok()
-            });
+            publish(make_sock(brain));
             CONNECTS.fetch_add(1, Ordering::Relaxed);
             UP.store(true, Ordering::Relaxed);
             set_link(LINK_UP);
-            info!("net: up, ip {:?}, frames to {:?}", ip, cfg.brain);
-            publish(sock);
-            // Supervise: refresh RSSI, notice a lost link or new settings.
+            info!("net: up, ip {:?}, frames to {:?}", ip, brain);
+            let up_since = now_ms();
+            // Supervise: refresh RSSI, notice a lost link, find or follow the brain.
             while wifi.is_up().unwrap_or(false) {
                 let mut ap: sys::wifi_ap_record_t = Default::default();
                 // SAFETY: valid out pointer; fails harmlessly when not associated.
@@ -246,8 +261,35 @@ pub fn spawn(
                     RSSI.store(ap.rssi as i32, Ordering::Relaxed);
                 }
                 LAST_UP_MS.store(now_ms(), Ordering::Relaxed);
+                // A command from a new address means the brain moved: adopt it and remember it.
+                let commander = COMMANDER.lock().unwrap_or_else(|e| e.into_inner()).take();
+                if let Some(std::net::SocketAddr::V4(from)) = commander {
+                    let cur = brain.and_then(|b| match b {
+                        SocketAddr::V4(v4) => Some(station_core::discovery::Brain { ip: v4.ip().octets(), port: v4.port() }),
+                        _ => None,
+                    });
+                    if let Some(n) = station_core::discovery::adopt(cur, from.ip().octets(), DEFAULT_BRAIN_PORT) {
+                        let addr = SocketAddr::from((n.ip, n.port));
+                        info!("net: brain moved to {addr} (was {brain:?}); adopting");
+                        brain = Some(addr);
+                        BRAIN_PORT.store(n.port, Ordering::Relaxed);
+                        save_cfg(&nvs, &NetCfg { ssid: cfg.ssid.clone(), pass: cfg.pass.clone(), brain });
+                        publish(make_sock(brain));
+                    }
+                }
+                let last = LAST_CMD_MS.load(Ordering::Relaxed);
+                let want = station_core::discovery::broadcast_wanted(
+                    brain.is_some(),
+                    now_ms(),
+                    up_since,
+                    (last != 0).then_some(last),
+                );
+                if BCAST_ACTIVE.swap(want, Ordering::Relaxed) != want {
+                    info!("net: broadcast discovery {}", if want { "on (brain silent)" } else { "off" });
+                }
                 thread::sleep(Duration::from_millis(500));
             }
+            BCAST_ACTIVE.store(false, Ordering::Relaxed);
             UP.store(false, Ordering::Relaxed);
             publish(None);
             warn!("net: link down, rejoining");
@@ -276,7 +318,9 @@ pub fn spawn_cmd_rx(mut on_frame: impl FnMut(&[u8]) + Send + 'static) -> anyhow:
         let _ = sock.set_read_timeout(Some(Duration::from_millis(500)));
         info!("net: command port UDP {CMD_PORT}");
         loop {
-            let Ok((n, _from)) = sock.recv_from(&mut buf) else { continue };
+            let Ok((n, from)) = sock.recv_from(&mut buf) else { continue };
+            LAST_CMD_MS.store(now_ms().max(1), Ordering::Relaxed);
+            *COMMANDER.lock().unwrap_or_else(|e| e.into_inner()) = Some(from);
             for f in buf[..n].split(|&b| b == 0).filter(|f| !f.is_empty()) {
                 on_frame(f);
             }

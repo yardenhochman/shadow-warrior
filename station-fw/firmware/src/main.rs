@@ -117,6 +117,8 @@ struct FrameTx {
     driver: bool,
     /// Connected UDP socket to the brain while Wi-Fi is up.
     udp: Option<UdpSocket>,
+    /// Broadcast-enabled socket, created on first use, for finding a brain whose address changed.
+    bcast: Option<UdpSocket>,
 }
 
 impl FrameTx {
@@ -142,6 +144,23 @@ impl FrameTx {
                 }
                 Err(_) => {
                     net::UDP_DROPPED.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
+        if net::BCAST_ACTIVE.load(Ordering::Relaxed) {
+            if self.bcast.is_none() {
+                self.bcast = UdpSocket::bind("0.0.0.0:0")
+                    .and_then(|s| {
+                        s.set_broadcast(true)?;
+                        s.set_nonblocking(true)?;
+                        Ok(s)
+                    })
+                    .ok();
+            }
+            if let Some(s) = &self.bcast {
+                let dest = (std::net::Ipv4Addr::BROADCAST, net::BRAIN_PORT.load(Ordering::Relaxed));
+                if s.send_to(&buf[..n], dest).is_ok() {
+                    udp_ok = true;
                 }
             }
         }
@@ -297,7 +316,7 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    let tx: Tx = Arc::new(Mutex::new(FrameTx { seq: 0, sent: 0, driver: false, udp: None }));
+    let tx: Tx = Arc::new(Mutex::new(FrameTx { seq: 0, sent: 0, driver: false, udp: None, bcast: None }));
     match install_console_driver() {
         Ok(()) => tx.lock().unwrap_or_else(|p| p.into_inner()).driver = true,
         Err(e) => warn!("console: UART0 driver install failed ({e}); no host commands, no raw audio"),

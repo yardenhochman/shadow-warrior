@@ -8,6 +8,7 @@ extern crate std;
 
 pub mod ble_policy;
 pub mod decimate;
+pub mod discovery;
 pub mod doa;
 pub mod fft;
 pub mod ld2410;
