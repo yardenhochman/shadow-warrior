@@ -55,6 +55,7 @@ document.addEventListener('DOMContentLoaded', () => {
     connectLogStream();
     startUpdateLoop();
     showTab('arena'); // Default to arena tab
+    tuningLoad();
 });
 
 // Initialize state from API
@@ -124,12 +125,16 @@ function connectEventStream() {
         const payload = JSON.parse(event.data);
         const data = payload.data;
         updateAudioLevel(data.level_db);
+        tuningState.bandDb = data.level_db;
     });
 
     eventSource.addEventListener('ShoutLevel', (event) => {
         const data = JSON.parse(event.data).data;
         document.getElementById('shoutMeter').style.width = Math.round(data.level * 100) + '%';
+        tuningOnShoutLevel(data);
     });
+
+    eventSource.addEventListener('ShoutDetected', () => tuningOnShout());
 
     eventSource.addEventListener('MusicStarted', (event) => {
         const payload = JSON.parse(event.data);
@@ -1223,3 +1228,184 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 });
+
+
+// ---- Shout tuning (live audio.* keys; descriptors come from GET /api/audio/tuning) ----
+const tuningState = { params: [], values: {}, defaults: {}, modified: [], bandDb: null, count: 0, lastAt: null, dbAxisMax: 100 };
+let tuningTimer = null;
+let tuningPending = {};
+let tuningFlashTimer = null;
+
+async function tuningCall(path, body) {
+    const opts = body === undefined ? {} : {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    };
+    const r = await fetch(path, opts);
+    const j = await r.json();
+    if (!j.success) throw new Error(j.error || 'request failed');
+    return j.data;
+}
+
+async function tuningLoad() {
+    try {
+        tuningAdopt(await tuningCall('/api/audio/tuning'), true);
+    } catch (e) {
+        showMsg('tuneError', 'Could not load tuning: ' + e.message);
+    }
+}
+
+// Take a server state. `rebuild` re-creates the rows; otherwise only values are refreshed.
+function tuningAdopt(data, rebuild) {
+    tuningState.params = data.params;
+    tuningState.values = data.values;
+    tuningState.defaults = data.defaults;
+    tuningState.modified = data.modified;
+    if (rebuild || !document.querySelector('.tune-row')) tuningBuild();
+    tuningSyncInputs();
+    tuningDrawMarks();
+}
+
+function tuningBuild() {
+    const groups = [['meter', 'LED meter'], ['detector', 'Shout detector (energy)']];
+    const root = document.getElementById('tuneGroups');
+    root.innerHTML = '';
+    for (const [gid, title] of groups) {
+        const ps = tuningState.params.filter(p => p.group === gid);
+        if (!ps.length) continue;
+        const box = document.createElement('div');
+        box.className = 'config-group';
+        box.innerHTML = `<h3>${title}</h3>`;
+        for (const p of ps) box.appendChild(tuningRow(p));
+        root.appendChild(box);
+    }
+}
+
+function tuningRow(p) {
+    const row = document.createElement('div');
+    row.className = 'tune-row';
+    row.dataset.key = p.key;
+    const unit = p.unit ? ` <span class="tune-unit">${p.unit}</span>` : '';
+    if (p.kind === 'bool') {
+        row.innerHTML = `<label class="inline-check"><input type="checkbox"> <b>${p.label}</b></label>
+            <div class="tune-help">${p.help}</div>`;
+        row.querySelector('input').addEventListener('change', e => tuningSet(p.key, e.target.checked));
+        return row;
+    }
+    row.innerHTML = `<div class="tune-head"><label for="tr_${p.key}">${p.label}${unit}</label>
+        <input type="number" class="form-input tune-num" id="tn_${p.key}" min="${p.min}" max="${p.max}" step="${p.step}" inputmode="decimal"></div>
+        <input type="range" id="tr_${p.key}" min="${p.min}" max="${p.max}" step="${p.step}">
+        <div class="tune-help">${p.help}</div>`;
+    const range = row.querySelector('input[type=range]');
+    const num = row.querySelector('input[type=number]');
+    range.addEventListener('input', () => { num.value = range.value; tuningSet(p.key, parseFloat(range.value)); });
+    num.addEventListener('change', () => {
+        const v = parseFloat(num.value);
+        if (!isNaN(v)) { range.value = v; tuningSet(p.key, v); }
+    });
+    return row;
+}
+
+function tuningSyncInputs() {
+    for (const p of tuningState.params) {
+        const v = tuningState.values[p.key];
+        const row = document.querySelector(`.tune-row[data-key="${p.key}"]`);
+        if (!row) continue;
+        row.classList.toggle('modified', tuningState.modified.includes(p.key));
+        if (p.kind === 'bool') { row.querySelector('input').checked = !!v; continue; }
+        const range = row.querySelector('input[type=range]');
+        const num = row.querySelector('input[type=number]');
+        // Do not fight the user while they drag or type.
+        if (document.activeElement !== range) range.value = v;
+        if (document.activeElement !== num) num.value = v;
+    }
+    document.getElementById('tuneDirty').hidden = tuningState.modified.length === 0;
+}
+
+// Debounced (~100 ms) partial update; the server answer carries the clamped values.
+function tuningSet(key, value) {
+    tuningState.values[key] = value;
+    tuningPending[key] = value;
+    tuningDrawMarks();
+    clearTimeout(tuningTimer);
+    tuningTimer = setTimeout(tuningFlush, 100);
+}
+
+async function tuningFlush() {
+    clearTimeout(tuningTimer);
+    const body = tuningPending;
+    tuningPending = {};
+    if (!Object.keys(body).length) return;
+    showMsg('tuneError', '');
+    try {
+        tuningAdopt(await tuningCall('/api/audio/tuning', body), false);
+    } catch (e) {
+        showMsg('tuneError', e.message);
+    }
+}
+
+async function tuningReset() {
+    showMsg('tuneOk', '');
+    try {
+        clearTimeout(tuningTimer);
+        tuningPending = {};
+        tuningAdopt(await tuningCall('/api/audio/tuning/reset', {}), false);
+        showMsg('tuneOk', 'Reset to config defaults.');
+    } catch (e) { showMsg('tuneError', e.message); }
+}
+
+async function tuningSave() {
+    showMsg('tuneError', '');
+    showMsg('tuneOk', '');
+    const btn = document.getElementById('tuneSave');
+    btn.disabled = true;
+    try {
+        await tuningFlush();
+        tuningAdopt(await tuningCall('/api/audio/tuning/save', {}), false);
+        showMsg('tuneOk', 'Saved to config.yaml (the first save keeps config.yaml.bak).');
+    } catch (e) { showMsg('tuneError', e.message); }
+    btn.disabled = false;
+}
+
+function tuningDrawMarks() {
+    const v = tuningState.values;
+    if (v.shout_meter_lo_db === undefined) return;
+    const max = tuningState.dbAxisMax;
+    const pct = db => Math.max(0, Math.min(100, db / max * 100)) + '%';
+    document.getElementById('tuneLoMark').style.left = pct(v.shout_meter_lo_db);
+    document.getElementById('tuneHiMark').style.left = pct(v.shout_meter_hi_db);
+}
+
+function tuningOnShoutLevel(d) {
+    const max = tuningState.dbAxisMax;
+    const db = d.db_above_floor;
+    document.getElementById('tuneDbFill').style.width = Math.max(0, Math.min(100, db / max * 100)) + '%';
+    document.getElementById('tuneLevelFill').style.width = Math.round(d.level * 100) + '%';
+    document.getElementById('tuneDb').textContent = db.toFixed(1) + ' dB';
+    document.getElementById('tuneLevel').textContent = Math.round(d.level * 100) + ' %';
+    if (tuningState.bandDb !== null) {
+        document.getElementById('tuneFloor').textContent = (tuningState.bandDb - db).toFixed(1) + ' dB';
+    }
+    // Adaptive-sensitivity fields: shown only when the brain sends them.
+    for (const [field, box, out] of [['ambient_db', 'tuneAmbientBox', 'tuneAmbient'], ['adaptive_offset_db', 'tuneAdaptBox', 'tuneAdapt']]) {
+        const has = typeof d[field] === 'number';
+        document.getElementById(box).hidden = !has;
+        if (has) document.getElementById(out).textContent = d[field].toFixed(1) + ' dB';
+    }
+}
+
+function tuningOnShout() {
+    tuningState.count++;
+    tuningState.lastAt = Date.now();
+    document.getElementById('tuneCount').textContent = tuningState.count;
+    const flash = document.getElementById('tuneFlash');
+    flash.classList.add('on');
+    clearTimeout(tuningFlashTimer);
+    tuningFlashTimer = setTimeout(() => flash.classList.remove('on'), 700);
+}
+
+setInterval(() => {
+    const el = document.getElementById('tuneLast');
+    if (!el || tuningState.lastAt === null) return;
+    const s = Math.round((Date.now() - tuningState.lastAt) / 1000);
+    el.textContent = s < 1 ? 'just now' : s + ' s ago';
+}, 500);

@@ -1072,3 +1072,34 @@ body {
 .rec-stats > div { display: flex; flex-direction: column; gap: 0.15rem; min-width: 0; overflow-wrap: anywhere; }
 .rec-k { font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; }
 #recDir { overflow-wrap: anywhere; }
+
+/* Shout tuning */
+.tune-dirty { font-size: 0.7rem; font-weight: 600; margin-left: 0.5rem; padding: 0.15rem 0.5rem; border-radius: 999px; background: var(--warning); color: #000; vertical-align: middle; }
+.tune-dirty[hidden] { display: none; }
+.tune-live [hidden] { display: none; }
+.tune-live { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 0.75rem 1rem; margin-bottom: 1rem; }
+.tune-axis, .tune-meter { position: relative; height: 22px; background: var(--bg-dark); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.tune-meter { height: 10px; margin-top: 0.4rem; }
+.tune-fill { height: 100%; width: 0; background: var(--primary); opacity: 0.8; transition: width 0.05s linear; }
+.tune-fill-level { background: var(--success); opacity: 1; }
+.tune-mark { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--warning); }
+.tune-mark.tune-hi { background: var(--secondary); }
+.tune-mark span { position: absolute; top: 1px; left: 4px; font-size: 0.65rem; color: var(--text-primary); }
+.tune-flash { margin-top: 0.4rem; text-align: center; font-weight: 700; letter-spacing: 0.1em; border-radius: 6px; padding: 0.2rem; color: var(--text-secondary); border: 1px solid var(--border); opacity: 0.5; transition: background 0.4s, opacity 0.4s; }
+.tune-flash.on { background: var(--success); color: #000; opacity: 1; transition: none; }
+.tune-row { margin-bottom: 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border); }
+.tune-row:last-child { border-bottom: 0; }
+.tune-row.modified { border-left: 3px solid var(--warning); padding-left: 0.6rem; }
+.tune-head { display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; }
+.tune-head label { color: var(--text-primary); font-weight: 600; }
+.tune-unit { color: var(--text-secondary); font-weight: 400; font-size: 0.8rem; }
+.tune-num { width: 7.5rem; flex: none; }
+.tune-row input[type=range] { width: 100%; min-height: 32px; }
+.tune-help { color: var(--text-secondary); font-size: 0.8rem; }
+@media (min-width: 900px) {
+    .tune-live { position: sticky; top: 0; z-index: 5; }
+}
+@media (max-width: 600px) {
+    .tune-live { padding: 0.5rem 0.6rem; }
+    .tune-num { width: 6rem; }
+}

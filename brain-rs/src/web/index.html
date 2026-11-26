@@ -256,6 +256,36 @@
             </div>
 
             <div id="configTab" class="tab-content">
+                <section class="config-section" id="tuningSection">
+                    <h2>Shout tuning <span class="tune-dirty" id="tuneDirty" hidden>unsaved changes</span></h2>
+                    <p class="form-hint">Changes apply live (next audio frame). Save writes them to config.yaml on the brain.</p>
+                    <div class="tune-live" id="tuneLive">
+                        <div class="tune-axis" id="tuneAxis" title="Shout level in dB above the noise floor">
+                            <div class="tune-fill" id="tuneDbFill"></div>
+                            <div class="tune-mark tune-lo" id="tuneLoMark"><span>lo</span></div>
+                            <div class="tune-mark tune-hi" id="tuneHiMark"><span>hi</span></div>
+                        </div>
+                        <div class="tune-meter" title="Meter level (what the LEDs show)"><div class="tune-fill tune-fill-level" id="tuneLevelFill"></div></div>
+                        <div class="rec-stats">
+                            <div><span class="rec-k">Above floor</span><span id="tuneDb">--</span></div>
+                            <div><span class="rec-k">Meter level</span><span id="tuneLevel">--</span></div>
+                            <div><span class="rec-k">Noise floor</span><span id="tuneFloor">--</span></div>
+                            <div><span class="rec-k">Shouts detected</span><span id="tuneCount">0</span></div>
+                            <div><span class="rec-k">Last shout</span><span id="tuneLast">never</span></div>
+                            <div id="tuneAmbientBox" hidden><span class="rec-k">Ambient</span><span id="tuneAmbient">--</span></div>
+                            <div id="tuneAdaptBox" hidden><span class="rec-k">Adaptive offset</span><span id="tuneAdapt">--</span></div>
+                        </div>
+                        <div class="tune-flash" id="tuneFlash" aria-live="polite">DETECTED</div>
+                    </div>
+                    <div id="tuneGroups"></div>
+                    <div class="config-actions">
+                        <button type="button" class="btn" id="tuneReset" onclick="tuningReset()">Reset</button>
+                        <button type="button" class="btn btn-primary" id="tuneSave" onclick="tuningSave()">Save to config</button>
+                    </div>
+                    <div class="form-error" id="tuneError" role="alert"></div>
+                    <div class="form-ok" id="tuneOk"></div>
+                </section>
+
                 <section class="config-section">
                     <h2>Game Tunables</h2>
                     <form id="configForm" onsubmit="event.preventDefault(); saveConfig();">

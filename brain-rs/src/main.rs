@@ -430,6 +430,9 @@ fn build_router(app_state: Arc<SharedState>) -> Router {
         .route("/api/audio/record/start", post(api::audio::record_start))
         .route("/api/audio/record/stop", post(api::audio::record_stop))
         .route("/api/audio/record/status", get(api::audio::record_status))
+        .route("/api/audio/tuning", get(api::audio::tuning_get).post(api::audio::tuning_set))
+        .route("/api/audio/tuning/reset", post(api::audio::tuning_reset))
+        .route("/api/audio/tuning/save", post(api::audio::tuning_save))
         .route("/api/schedule", get(api::schedule::get_schedule))
         .route("/api/schedule", post(api::schedule::update_schedule))
         // WLED routes

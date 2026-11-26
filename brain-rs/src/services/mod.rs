@@ -1,6 +1,7 @@
 pub mod arena_manager;
 pub mod audio_frontend;
 pub mod audio_manager;
+pub mod audio_tuning;
 pub mod audio_output;
 pub mod audio_source;
 pub mod ble_manager;

@@ -108,6 +108,25 @@ gate did not separate the classes on this mic (all pass ~3 of 4 checks), so it i
 
 Not tuned on recordings yet: use `shout_replay --features-csv` output to pick lo/hi for the I2S mics.
 
+## Live tuning
+
+The dashboard Config tab has a "Shout tuning" card: sliders for the meter (`shout_meter_*`) and the detector
+(`shout_margin_db`, `shout_score_threshold`, `shout_min_duration_sec`, `shout_playback_margin_db`,
+`vad_hangover_frames`, sensitivity, VAD, pitch/centroid/tilt/flatness gates), with the live `ShoutLevel`
+(dB above floor on an axis with the lo/hi marks), the noise floor and a "detected" flash per `ShoutDetected`.
+Sliders apply within one audio frame (the meter and detector re-read the shared `AudioConfig` every frame); nothing
+restarts. Values not saved are lost on restart.
+
+| Endpoint | Effect |
+| --- | --- |
+| `GET /api/audio/tuning` | `{values, defaults, params[key,label,group,kind,min,max,step,unit,help], modified}` |
+| `POST /api/audio/tuning` | partial `{key: value}`; clamped to the descriptor range, unknown key or non-number rejects the whole request; returns the new state |
+| `POST /api/audio/tuning/reset` | back to the last loaded/saved values |
+| `POST /api/audio/tuning/save` | writes the values into the `audio:` section of `config.yaml` (comments kept, existing keys edited in place, changed missing keys appended, atomic, `config.yaml.bak` written once) |
+
+To expose another numeric `audio.*` key, add one `param!` row to `PARAMS` in `services/audio_tuning.rs`;
+the API and the card pick it up. If a `ShoutLevel` event carries `ambient_db` / `adaptive_offset_db` the card shows them.
+
 ## Tuning on recordings
 
 `shout_replay` (`src/bin/shout_replay.rs`, logic in `services/shout_replay.rs`) replays a WAV through

@@ -10,6 +10,7 @@ use anyhow::{Context, Result};
 use earshot::Detector;
 
 use super::audio_source;
+use super::audio_tuning;
 use super::shout_detector::ShoutDetector;
 use super::shout_meter::ShoutMeter;
 use super::session_recorder::{disk_free_bytes, sanitize_label, RecordStatus, SessionParams, SessionRecorder};
@@ -20,6 +21,9 @@ use crate::core::{Event, SharedEventBus};
 
 pub struct AudioManager {
     config: Arc<RwLock<AudioConfig>>,
+    /// Values the live tuning resets to: the config as loaded, or as last saved to disk.
+    tuning_base: std::sync::RwLock<AudioConfig>,
+    config_path: std::path::PathBuf,
     event_bus: SharedEventBus,
     _stream: Arc<RwLock<Option<Stream>>>,
     connected: Arc<AtomicBool>,
@@ -33,10 +37,13 @@ pub struct AudioManager {
 
 impl AudioManager {
     pub fn new(config: AudioConfig, event_bus: SharedEventBus) -> Self {
+        let tuning_base = std::sync::RwLock::new(config.clone());
         let config = Arc::new(RwLock::new(config));
 
         Self {
             config,
+            tuning_base,
+            config_path: "config.yaml".into(),
             event_bus,
             _stream: Arc::new(RwLock::new(None)),
             connected: Arc::new(AtomicBool::new(false)),
@@ -471,6 +478,31 @@ impl AudioManager {
     fn start_energy_decay_task(&self) {
         // This will be used by arena manager to decay energy bar
         // For now, just a placeholder
+    }
+
+    /// Live tuning (services/audio_tuning.rs): current values, defaults and descriptors.
+    pub async fn tuning_state(&self) -> audio_tuning::TuningState {
+        let cur = self.config.read().await;
+        audio_tuning::state(&cur, &self.tuning_base.read().unwrap())
+    }
+
+    /// Apply a partial update to the live config (next frame picks it up).
+    pub async fn tuning_apply(&self, updates: &serde_json::Map<String, serde_json::Value>) -> Result<(), String> {
+        audio_tuning::apply(&mut *self.config.write().await, updates)
+    }
+
+    pub async fn tuning_reset(&self) {
+        let base = self.tuning_base.read().unwrap().clone();
+        audio_tuning::reset(&mut *self.config.write().await, &base);
+    }
+
+    /// Write the live values into the config file; they become the new reset target.
+    pub async fn tuning_save(&self) -> Result<(), String> {
+        let cur = self.config.read().await.clone();
+        let base = self.tuning_base.read().unwrap().clone();
+        audio_tuning::save_to_file(&self.config_path, &cur, &base)?;
+        *self.tuning_base.write().unwrap() = cur;
+        Ok(())
     }
 
     /// Get current config
