@@ -392,6 +392,10 @@ pub struct AudioConfig {
     /// Meter release time constant, milliseconds (attack is immediate).
     #[serde(default = "d_meter_release")]
     pub shout_meter_release_ms: f32,
+    /// Attack time constant (ms): how fast the meter rises. 0 = jump to the new level. A few tens of ms keeps
+    /// key clicks and claps (shorter than the constant) from reaching full scale.
+    #[serde(default = "d_meter_attack")]
+    pub shout_meter_attack_ms: f32,
     /// Directory where audio clips (wav + feature json) are written.
     #[serde(default = "default_clip_dir")]
     pub clip_dir: PathBuf,
@@ -450,8 +454,9 @@ fn d_min_features() -> u32 { 3 }
 fn d_score_threshold() -> f32 { 12.0 }
 fn d_score_decay() -> f32 { 0.9 }
 fn d_gap_frames() -> u32 { 3 }
-fn d_meter_lo() -> f32 { 6.0 }
-fn d_meter_hi() -> f32 { 35.0 }
+fn d_meter_lo() -> f32 { 35.0 }
+fn d_meter_hi() -> f32 { 60.0 }
+fn d_meter_attack() -> f32 { 50.0 }
 fn d_meter_release() -> f32 { 200.0 }
 
 fn default_clip_dir() -> PathBuf {
@@ -912,8 +917,9 @@ impl Default for Config {
                 shout_gap_frames: d_gap_frames(),
                 shout_meter_lo_db: d_meter_lo(),
                 shout_meter_hi_db: d_meter_hi(),
-                shout_meter_gate: d_true(),
+                shout_meter_gate: false,
                 shout_meter_release_ms: d_meter_release(),
+                shout_meter_attack_ms: d_meter_attack(),
                 clip_dir: default_clip_dir(),
                 clip_seconds: default_clip_seconds(),
                 clip_on_shout: default_clip_on_shout(),

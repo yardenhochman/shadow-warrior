@@ -94,7 +94,13 @@ impl ShoutMeter {
         self.last_index = Some(f.index);
         let raw = Self::raw(f, cfg);
         if raw >= self.level {
-            self.level = raw;
+            let att = cfg.shout_meter_attack_ms / 1000.0;
+            self.level = if att <= FRAME_SECS * 0.5 {
+                raw
+            } else {
+                let k = 1.0 - (-(frames as f32) * FRAME_SECS / att).exp();
+                self.level + (raw - self.level) * k
+            };
         } else {
             let tau = (cfg.shout_meter_release_ms / 1000.0).max(FRAME_SECS);
             let k = (-(frames as f32) * FRAME_SECS / tau).exp();
@@ -121,8 +127,14 @@ mod tests {
     use super::*;
     use crate::config::Config;
 
+    /// The math tests use round numbers: 6..35 dB, gate on, immediate attack (not the shipped defaults).
     fn cfg() -> AudioConfig {
-        Config::default().audio
+        let mut a = Config::default().audio;
+        a.shout_meter_lo_db = 6.0;
+        a.shout_meter_hi_db = 35.0;
+        a.shout_meter_gate = true;
+        a.shout_meter_attack_ms = 0.0;
+        a
     }
 
     fn quiet(i: u64) -> FrameFeatures {
@@ -245,5 +257,34 @@ mod tests {
             b.push(&quiet(i), &c);
         }
         assert!((a.level() - b.level()).abs() < 1e-4, "{} {}", a.level(), b.level());
+    }
+
+    #[test]
+    fn attack_time_makes_a_click_small_and_a_sustained_shout_full() {
+        let mut c = Config::default().audio; // shipped defaults: lo 35, hi 60, attack 50 ms
+        c.shout_meter_gate = false;
+        let loud = |i: u64| FrameFeatures { db_above_floor: 70.0, ..quiet(i) };
+        // a 2-frame click (~32 ms)
+        let mut m = ShoutMeter::new();
+        let mut peak = 0.0f32;
+        for i in 0..2 {
+            m.push(&loud(i), &c);
+            peak = peak.max(m.level());
+        }
+        assert!(peak > 0.1 && peak < 0.5, "click peak {peak}");
+        // a sustained shout (~0.5 s) gets to full scale
+        let mut m = ShoutMeter::new();
+        for i in 0..32 {
+            m.push(&loud(i), &c);
+        }
+        assert!(m.level() > 0.99, "shout level {}", m.level());
+    }
+
+    #[test]
+    fn talking_level_stays_below_the_meter_start() {
+        let c = Config::default().audio;
+        // talking peaks ~28 dB above the station floor; the meter starts at 35
+        let f = FrameFeatures { db_above_floor: 28.0, ..quiet(0) };
+        assert_eq!(ShoutMeter::raw(&f, &c), 0.0);
     }
 }

@@ -90,10 +90,11 @@ audio:
   shout_score_decay: 0.9           # per-frame score decay when not shouty
 
   # Live shout meter signal (ShoutLevel events, ~30 Hz; drives the LED shout meter, docs/SOUND.md).
-  shout_meter_lo_db: 6.0           # dB above the floor where the meter starts
-  shout_meter_hi_db: 35.0          # dB above the floor where it is full
-  shout_meter_gate: true           # dim frames that do not look like a shout (floor 25 %)
-  shout_meter_release_ms: 200      # release time constant (attack is immediate)
+  shout_meter_lo_db: 35.0          # dB above the floor where the meter starts (station mic: talking peaks ~28, shouts ~70)
+  shout_meter_hi_db: 60.0          # dB above the floor where it is full
+  shout_meter_gate: false          # true: dim frames that fail the spectral checks (floor 25 %); they did not separate shouts from talking on the station mic
+  shout_meter_release_ms: 200      # release time constant
+  shout_meter_attack_ms: 50        # attack time constant, 0 = immediate; filters key clicks and claps
 
   # Audio clip recording (wav + per-frame feature json), for tuning detectors.
   # Clips can be requested via POST /api/audio/clip and are auto-recorded on shouts.

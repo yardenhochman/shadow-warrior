@@ -83,7 +83,7 @@ local mic and the station stream; it does not touch `ShoutDetected`).
 raw   = clamp((db_above_floor - lo) / (hi - lo), 0, 1)    lo/hi = audio.shout_meter_lo_db / _hi_db
         (lo and hi are raised by shout_playback_margin_db while our speakers play)
 gate  = 0.25 + 0.75 * passed/4     passed = voiced, centroid, tilt, flatness checks of the detector
-level = attack: immediate; release: exponential, tau = audio.shout_meter_release_ms
+level = attack: exponential, tau = audio.shout_meter_attack_ms (0 = immediate); release: exponential, tau = audio.shout_meter_release_ms
 ```
 
 - `db_above_floor` is the band-passed level over the adaptive noise floor (the detector's distance
@@ -96,10 +96,15 @@ level = attack: immediate; release: exponential, tau = audio.shout_meter_release
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `audio.shout_meter_lo_db` | 6 | dB above the floor where the meter starts (reads 0 below) |
-| `audio.shout_meter_hi_db` | 35 | dB above the floor where it is full |
-| `audio.shout_meter_gate` | true | dim frames that do not look like a shout |
+| `audio.shout_meter_lo_db` | 35 | dB above the floor where the meter starts (reads 0 below) |
+| `audio.shout_meter_hi_db` | 60 | dB above the floor where it is full |
+| `audio.shout_meter_gate` | false | dim frames that do not look like a shout |
 | `audio.shout_meter_release_ms` | 200 | release time constant |
+| `audio.shout_meter_attack_ms` | 50 | attack time constant; filters key clicks and claps (a 30 ms click reaches ~45 %) |
+
+Tuned on the station mic (tune1 recording, 35 shouts): shouts peak ~70 dB above the floor, loud talking ~28 dB, claps ~65 dB.
+With lo 35 / hi 60 / attack 50 ms talking reads 0, claps ~0.6, shouts 1.0, and a shout crosses 50 % in ~90 ms. The spectral
+gate did not separate the classes on this mic (all pass ~3 of 4 checks), so it is off. Retune these per mic gain.
 
 Not tuned on recordings yet: use `shout_replay --features-csv` output to pick lo/hi for the I2S mics.
 
