@@ -1,3 +1,4 @@
+pub mod adaptive;
 pub mod arena_manager;
 pub mod audio_frontend;
 pub mod audio_manager;

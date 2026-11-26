@@ -96,6 +96,16 @@ audio:
   shout_meter_release_ms: 200      # release time constant
   shout_meter_attack_ms: 50        # attack time constant, 0 = immediate; filters key clicks and claps
 
+  # Adaptive sensitivity (services/adaptive.rs, docs/SOUND.md): slow ambient level shifts shout_margin_db and meter lo/hi.
+  adaptive_enabled: true
+  adaptive_ref_db: -85.0           # ambient band level (dBFS) at which the values above apply as is (station mic, quiet room: ~-88)
+  adaptive_gain: 0.5               # dB of threshold change per dB of ambient change
+  adaptive_max_up_db: 15.0         # noisy room: tighten by at most this
+  adaptive_max_down_db: 10.0       # quiet room: relax by at most this
+  adaptive_deadband_db: 4.0        # ambient within +-this of the reference: no change
+  adaptive_window_sec: 120.0       # ambient estimate time constant
+  adaptive_slew_db_per_sec: 1.0    # offset changes at most this fast
+
   # Audio clip recording (wav + per-frame feature json), for tuning detectors.
   # Clips can be requested via POST /api/audio/clip and are auto-recorded on shouts.
   clip_dir: "./clips"        # output directory (created on demand)

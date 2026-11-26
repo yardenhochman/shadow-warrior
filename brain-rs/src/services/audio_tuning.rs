@@ -72,6 +72,22 @@ macro_rules! param {
 
 /// All live-tunable keys, in UI order. Add a row here to expose a new numeric `audio.*` key.
 pub static PARAMS: &[Param] = &[
+    param!(bool, adaptive_enabled, "adaptive", "Adaptive sensitivity",
+        "relax the meter/detector thresholds in a quiet room and tighten them in a noisy one"),
+    param!(f32, adaptive_ref_db, "adaptive", "Reference ambient", -120.0, 0.0, 0.5, "dB",
+        "ambient level (band dB) at which the configured thresholds apply as-is; set it to the 'Ambient' reading in a quiet room"),
+    param!(f32, adaptive_gain, "adaptive", "Gain", 0.0, 2.0, 0.05, "",
+        "dB of threshold change per dB of ambient change"),
+    param!(f32, adaptive_max_up_db, "adaptive", "Max tighten", 0.0, 40.0, 0.5, "dB",
+        "most the thresholds may be raised in a noisy room"),
+    param!(f32, adaptive_max_down_db, "adaptive", "Max relax", 0.0, 30.0, 0.5, "dB",
+        "most the thresholds may be lowered in a quiet room"),
+    param!(f32, adaptive_deadband_db, "adaptive", "Deadband", 0.0, 20.0, 0.5, "dB",
+        "ambient changes smaller than this do nothing"),
+    param!(f32, adaptive_window_sec, "adaptive", "Window", 10.0, 900.0, 5.0, "s",
+        "time constant of the ambient estimate"),
+    param!(f32, adaptive_slew_db_per_sec, "adaptive", "Slew limit", 0.1, 10.0, 0.1, "dB/s",
+        "how fast the offset may change"),
     param!(f32, shout_meter_lo_db, "meter", "Meter start (lo)", 0.0, 80.0, 0.5, "dB",
         "dB above the noise floor where the meter starts; raise to ignore clicks, typing and talking"),
     param!(f32, shout_meter_hi_db, "meter", "Meter full (hi)", 1.0, 100.0, 0.5, "dB",

@@ -230,6 +230,10 @@ impl StatusRegistry {
                 h.audio.seen(now);
                 h.audio_in.level(*level_db, now);
             }
+            Event::AdaptiveSensitivity { ambient_db, adaptive_offset_db } => {
+                h.audio_in.ambient_db = Some(*ambient_db);
+                h.audio_in.adaptive_offset_db = Some(*adaptive_offset_db);
+            }
             Event::ShoutDetected { .. } => h.audio.seen(now),
             Event::StationConnected { station_id, fw_version } => {
                 let l = &mut h.station.link;

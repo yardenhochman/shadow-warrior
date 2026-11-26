@@ -396,6 +396,32 @@ pub struct AudioConfig {
     /// key clicks and claps (shorter than the constant) from reaching full scale.
     #[serde(default = "d_meter_attack")]
     pub shout_meter_attack_ms: f32,
+    /// Adaptive sensitivity (services/adaptive.rs, docs/SOUND.md): a slow ambient-level
+    /// estimate shifts `shout_margin_db` and the meter `lo`/`hi` by `adaptive_offset_db`
+    /// (negative in a quiet room, positive in a noisy one). `false`: offset is always 0.
+    #[serde(default = "d_true")]
+    pub adaptive_enabled: bool,
+    /// Ambient band level (dBFS) at which the configured values apply unchanged.
+    #[serde(default = "d_adapt_ref")]
+    pub adaptive_ref_db: f32,
+    /// dB of threshold change per dB of ambient change.
+    #[serde(default = "d_adapt_gain")]
+    pub adaptive_gain: f32,
+    /// Largest tightening (positive offset), dB.
+    #[serde(default = "d_adapt_up")]
+    pub adaptive_max_up_db: f32,
+    /// Largest relaxing (negative offset), dB.
+    #[serde(default = "d_adapt_down")]
+    pub adaptive_max_down_db: f32,
+    /// Ambient deviation from the reference ignored around it (no breathing), dB.
+    #[serde(default = "d_adapt_deadband")]
+    pub adaptive_deadband_db: f32,
+    /// Time constant of the ambient estimate, seconds.
+    #[serde(default = "d_adapt_window")]
+    pub adaptive_window_sec: f32,
+    /// Largest change of the offset, dB per second.
+    #[serde(default = "d_adapt_slew")]
+    pub adaptive_slew_db_per_sec: f32,
     /// Directory where audio clips (wav + feature json) are written.
     #[serde(default = "default_clip_dir")]
     pub clip_dir: PathBuf,
@@ -458,6 +484,13 @@ fn d_meter_lo() -> f32 { 45.0 }
 fn d_meter_hi() -> f32 { 65.0 }
 fn d_meter_attack() -> f32 { 50.0 }
 fn d_meter_release() -> f32 { 200.0 }
+fn d_adapt_ref() -> f32 { -85.0 }
+fn d_adapt_gain() -> f32 { 0.5 }
+fn d_adapt_up() -> f32 { 15.0 }
+fn d_adapt_down() -> f32 { 10.0 }
+fn d_adapt_deadband() -> f32 { 4.0 }
+fn d_adapt_window() -> f32 { 120.0 }
+fn d_adapt_slew() -> f32 { 1.0 }
 
 fn default_clip_dir() -> PathBuf {
     PathBuf::from("./clips")
@@ -920,6 +953,14 @@ impl Default for Config {
                 shout_meter_gate: false,
                 shout_meter_release_ms: d_meter_release(),
                 shout_meter_attack_ms: d_meter_attack(),
+                adaptive_enabled: d_true(),
+                adaptive_ref_db: d_adapt_ref(),
+                adaptive_gain: d_adapt_gain(),
+                adaptive_max_up_db: d_adapt_up(),
+                adaptive_max_down_db: d_adapt_down(),
+                adaptive_deadband_db: d_adapt_deadband(),
+                adaptive_window_sec: d_adapt_window(),
+                adaptive_slew_db_per_sec: d_adapt_slew(),
                 clip_dir: default_clip_dir(),
                 clip_seconds: default_clip_seconds(),
                 clip_on_shout: default_clip_on_shout(),

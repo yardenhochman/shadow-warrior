@@ -136,6 +136,8 @@ function connectEventStream() {
 
     eventSource.addEventListener('ShoutDetected', () => tuningOnShout());
 
+    eventSource.addEventListener('AdaptiveSensitivity', (event) => tuningOnAdaptive(JSON.parse(event.data).data));
+
     eventSource.addEventListener('MusicStarted', (event) => {
         const payload = JSON.parse(event.data);
         const data = payload.data;
@@ -1266,7 +1268,7 @@ function tuningAdopt(data, rebuild) {
 }
 
 function tuningBuild() {
-    const groups = [['meter', 'LED meter'], ['detector', 'Shout detector (energy)']];
+    const groups = [['meter', 'LED meter'], ['detector', 'Shout detector (energy)'], ['adaptive', 'Adaptive sensitivity']];
     const root = document.getElementById('tuneGroups');
     root.innerHTML = '';
     for (const [gid, title] of groups) {
@@ -1386,6 +1388,15 @@ function tuningOnShoutLevel(d) {
         document.getElementById('tuneFloor').textContent = (tuningState.bandDb - db).toFixed(1) + ' dB';
     }
     // Adaptive-sensitivity fields: shown only when the brain sends them.
+    for (const [field, box, out] of [['ambient_db', 'tuneAmbientBox', 'tuneAmbient'], ['adaptive_offset_db', 'tuneAdaptBox', 'tuneAdapt']]) {
+        const has = typeof d[field] === 'number';
+        document.getElementById(box).hidden = !has;
+        if (has) document.getElementById(out).textContent = d[field].toFixed(1) + ' dB';
+    }
+}
+
+// Published ~1 Hz while audio flows (ShoutLevel only exists while the meter is active).
+function tuningOnAdaptive(d) {
     for (const [field, box, out] of [['ambient_db', 'tuneAmbientBox', 'tuneAmbient'], ['adaptive_offset_db', 'tuneAdaptBox', 'tuneAdapt']]) {
         const has = typeof d[field] === 'number';
         document.getElementById(box).hidden = !has;
