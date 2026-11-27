@@ -467,7 +467,7 @@ fn d_record_min_free() -> u64 { 500 }
 fn d_record_max() -> f32 { 4.0 * 3600.0 }
 fn d_record_queue() -> usize { 512 }
 
-fn d_margin() -> f32 { 15.0 }
+fn d_margin() -> f32 { 30.0 }
 fn d_playback_margin() -> f32 { 8.0 }
 fn d_hangover() -> u32 { 6 }
 fn d_f0_min() -> f32 { 150.0 }
@@ -933,7 +933,7 @@ impl Default for Config {
                 channels: 1,
                 buffer_size: 1024,
                 shout_min_duration_sec: 0.12,
-                shout_sensitivity: 1.0,
+                shout_sensitivity: 0.4,
                 vad_threshold: 0.5,
                 shout_margin_db: d_margin(),
                 shout_playback_margin_db: d_playback_margin(),

@@ -697,7 +697,10 @@ mod tests {
 
     #[tokio::test]
     async fn shout_tunables_apply_live_and_reach_detector() {
-        let am = AudioManager::new(crate::config::Config::default().audio, Arc::new(EventBus::new(10)));
+        let mut c0 = crate::config::Config::default().audio;
+        c0.shout_margin_db = 15.0;
+        c0.shout_sensitivity = 1.0;
+        let am = AudioManager::new(c0, Arc::new(EventBus::new(10)));
         let fires = |cfg: &AudioConfig| {
             let mut det = ShoutDetector::new();
             (0..100).filter_map(|i| det.push(&shout_frame(i), cfg)).count()
@@ -733,7 +736,7 @@ mod tests {
             "shout_threshold_db":-15.0,"shout_sensitivity":1.0,"vad_threshold":0.5,
             "punch_threshold":1.0,"punch_alpha":0.5}"#;
         let o: crate::models::GameTunables = serde_json::from_str(old).unwrap();
-        assert_eq!(o.shout_margin_db, 15.0);
+        assert_eq!(o.shout_margin_db, 30.0);
         assert_eq!(o.shout_min_features, 3);
     }
 

@@ -73,7 +73,7 @@ audio:
   # Shout detection (services/shout_detector.rs). Pipeline: band-pass -> adaptive
   # noise floor -> VAD gate w/ hangover -> shout features -> score -> ShoutDetected.
   # All keys optional (defaults shown). Target latency < 300ms from onset.
-  shout_margin_db: 15.0            # required dB above the adaptive noise floor
+  shout_margin_db: 30.0            # required dB above the adaptive noise floor
   shout_playback_margin_db: 8.0    # extra margin while our speakers play (Fight)
   vad_hangover_frames: 6           # keep VAD gate open N frames (16ms) after speech
   shout_f0_min_hz: 150.0           # voiced pitch range of a shout
@@ -85,7 +85,7 @@ audio:
   shout_min_features: 3            # of 4 checks (voiced/centroid/tilt/flatness) required
   shout_min_duration_sec: 0.12     # sustained shouty time before firing (keep < 0.3); tuned on tune1 (160 ms median latency)
   shout_gap_frames: 3              # non-shouty frames tolerated inside a shout
-  shout_sensitivity: 1.0           # score gain per shouty frame
+  shout_sensitivity: 0.4           # score gain per shouty frame
   shout_score_threshold: 12.0      # score at which ShoutDetected fires
   shout_score_decay: 0.9           # per-frame score decay when not shouty
 

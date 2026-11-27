@@ -192,7 +192,7 @@ pub struct GameTunables {
     pub punch_alpha: f32,
 }
 
-fn d_margin() -> f32 { 15.0 }
+fn d_margin() -> f32 { 30.0 }
 fn d_playback_margin() -> f32 { 8.0 }
 fn d_min_duration() -> f32 { 0.2 }
 fn d_min_features() -> u32 { 3 }

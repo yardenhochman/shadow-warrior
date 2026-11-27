@@ -190,7 +190,11 @@ mod tests {
     use crate::config::Config;
 
     fn cfg() -> AudioConfig {
-        Config::default().audio
+        // Tests were written against margin 15 / sensitivity 1.0; the shipped defaults are 30 / 0.4.
+        let mut c = Config::default().audio;
+        c.shout_margin_db = 15.0;
+        c.shout_sensitivity = 1.0;
+        c
     }
 
     /// Quiet background frame (party bass leakage / ambience).
@@ -386,7 +390,7 @@ mod tests {
     fn old_config_without_new_keys_loads() {
         let y = "sample_rate: 16000\nchannels: 1\nbuffer_size: 1024\nshout_threshold_db: -15.0\nshout_min_duration_sec: 0.5\nshout_sensitivity: 1.0\nvad_threshold: 0.5\n";
         let c: AudioConfig = serde_yaml::from_str(y).unwrap();
-        assert_eq!(c.shout_margin_db, 15.0);
+        assert_eq!(c.shout_margin_db, 30.0);
         assert_eq!(c.vad_hangover_frames, 6);
     }
 }
