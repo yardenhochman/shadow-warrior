@@ -60,6 +60,8 @@ Standard Bluetooth speakers are used for the speakers. They are connected to the
   `BRAIN_BLE='{auto_connect=false}'` and point `wled.controllers` at a stand-in
   (`simulator/live/live.py brain --wled none --layout simulator/live/layouts/four-columns.yaml`, or `bridge.py --brain ... --wled none`), not at the real WLED.
 
+- Runtime configuration lives in the SQLite DB (`DATABASE_URL`, default `shadow_warrior.db` in the working dir); `brain-rs/config.yaml` is only imported once on the first boot of an empty DB. For a dev brain use `BRAIN_*` env overrides, `--seed-config`, or `shadow-warrior-brain config set/import` (a fresh `DATABASE_URL` re-seeds). Offline tools (`eval-wav`, `shout_replay`) still read YAML.
+
 ## Task tracking and status docs
 
 - Work items, status and planning live in **beads** (`bd ready`, `bd list`, `bd show <id>`). It is the only source of truth for what is open, in progress or done.

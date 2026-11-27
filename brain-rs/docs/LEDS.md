@@ -112,7 +112,7 @@ wled:
 An entry with only `name`/`mac` is resolved by mDNS at startup. After 3 consecutive failed contacts
 the brain browses `_wled._tcp.local.` (at most once per 10 s), matches by name, then by MAC, and
 re-points that controller (HTTP address, realtime UDP socket, status registry; one INFO line
-`WLED <name> moved <old> -> <new>`, event `WledMoved`). `config.yaml` is never rewritten. An entry
+`WLED <name> moved <old> -> <new>`, event `WledMoved`). The stored configuration is never rewritten. An entry
 with only `ip` learns its MAC at first contact, so existing configs get this without editing.
 
 Validation at load: the strips' LEDs must sum to `num_leds` if given, no column twice, no

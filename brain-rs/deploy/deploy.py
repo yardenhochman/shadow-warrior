@@ -9,8 +9,10 @@
 
 Layout on the station: /opt/shadow-brain/{shadow-warrior-brain,config.yaml,src/web,
 shadow_warrior.db,...}, run by the unit deploy/shadow-brain.service. The station
-keeps its own config.yaml (adapter, WLED addresses...): it is only pushed on the
-first install or with --config.
+keeps its configuration in SQLite (shadow_warrior.db, next to the binary); config.yaml is only a
+seed, copied on the first install and imported by the brain on its first start. Deploys never touch
+the database. --config copies the repo config.yaml and runs `config import` on it (it replaces
+the sections the file contains).
 """
 import argparse
 import pathlib
@@ -36,7 +38,7 @@ def main():
     ap.add_argument("--ssh-opt", action="append", default=[], help="extra ssh -o option, e.g. HostKeyAlias=...")
     ap.add_argument("--image", default="brain-build", help="podman build image (see `just image`)")
     ap.add_argument("--no-build", action="store_true", help="deploy the existing release binary")
-    ap.add_argument("--config", action="store_true", help="also overwrite the station's config.yaml")
+    ap.add_argument("--config", action="store_true", help="copy config.yaml to the station and `config import` it into the database (replaces the sections it contains)")
     ap.add_argument("--no-restart", action="store_true")
     a = ap.parse_args()
 
@@ -64,9 +66,10 @@ def main():
         f"sudo systemctl stop shadow-brain 2>/dev/null || true",
         f"sudo install -m 755 -o {u} -g {u} ~/{STAGE}/shadow-warrior-brain {d}/",
         f"sudo rsync -a --delete --chown={u}:{u} ~/{STAGE}/src/web {d}/src/",
-        (f"sudo install -m 644 -o {u} -g {u} ~/{STAGE}/config.yaml {d}/config.yaml" if a.config else
-         f"[ -f {d}/config.yaml ] || sudo install -m 644 -o {u} -g {u} ~/{STAGE}/config.yaml {d}/config.yaml"),
+        # config.yaml is only the first-boot seed; the live configuration is in the database.
+        f"[ -f {d}/config.yaml ] || sudo install -m 644 -o {u} -g {u} ~/{STAGE}/config.yaml {d}/config.yaml",
         f"sudo install -m 644 ~/{STAGE}/shadow-brain.service /etc/systemd/system/shadow-brain.service",
+        *([f"cd {d} && sudo -u {u} ./shadow-warrior-brain config import ~/{STAGE}/config.yaml"] if a.config else []),
         "sudo systemctl daemon-reload",
         "sudo systemctl enable shadow-brain",
     ]

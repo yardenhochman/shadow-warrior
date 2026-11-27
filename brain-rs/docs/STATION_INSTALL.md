@@ -105,7 +105,7 @@ the log says `a2dp-sink profile connect failed: Protocol not available`.
       (`deploy.py` fills in the uid). The brain plays through PipeWire's ALSA default and
       PipeWire moves the stream onto the speaker by itself when its sink appears.
 - [ ] **Reconnect supervision** (verified 2026-11-17): add the speaker to the station's
-      `config.yaml`, restart the service:
+      config (`config set speaker '{"address": "...", "adapter": "builtin"}'`, service stopped), restart the service:
       ```
       speaker:
         address: "10:94:97:40:6F:95"
@@ -211,7 +211,7 @@ On each controller (WLED web UI):
 - [ ] Leave WLED's per-output **Reverse off**; flip a strip with `reverse: true` in
       `config.yaml`. Whether WLED's Reverse also flips UDP realtime frames is unverified.
 
-In `/opt/shadow-brain/config.yaml` on the station:
+In the station's configuration (`config dump`, edit, `config import file.yaml`, or `config set wled.controllers '[...]'`):
 
 ```yaml
 wled:
@@ -241,7 +241,7 @@ wled:
 - The idle/cooldown/warming/fight looks live under `wled.effects`. Defaults equal the chosen
   looks, so on a station with an old config **delete the whole `wled.effects` block** (or copy
   it from the repo `config.yaml`) rather than keeping stale values. `deploy.py --config` would
-  overwrite everything else on the station too, so edit by hand.
+  replace every section the repo file contains, so edit by hand (`config set wled.effects ...`).
 
 Check the strips before trusting the brain:
 
@@ -260,9 +260,12 @@ On your build machine (podman machine running; `just image` once):
 - [ ] `just deploy <host> [--ssh-opt HostKeyAlias=...]` runs `deploy/deploy.py`: it
       cross-builds a release binary, installs it with `src/web` into `/opt/shadow-brain`,
       installs and enables `shadow-brain.service`, restarts it and prints the journal.
-- [ ] First install copies `config.yaml`; edit it **on the station** (`/opt/shadow-brain/config.yaml`):
-      `ble.adapter`, WLED controllers, Tasmota plugs, schedule. Later deploys keep it
-      (pass `--config` to overwrite).
+- [ ] The configuration lives in the station's SQLite database (`/opt/shadow-brain/shadow_warrior.db`), not in
+      `config.yaml`. First install copies the repo `config.yaml` as a seed and the first start imports it once.
+      Change it on the station with the service stopped: `cd /opt/shadow-brain && ./shadow-warrior-brain config set <key> <value>`
+      (`ble.adapter`, WLED controllers, Tasmota plugs, schedule; `config dump` shows everything). Later deploys never
+      touch the database or `config.yaml`; `--config` copies the repo `config.yaml` and runs `config import` on it
+      (replaces the sections the file contains). A bad value: `config history` then `config restore <id>`.
 - [ ] `systemctl is-active shadow-brain`; `sudo journalctl -u shadow-brain -f`.
 - [ ] The service starts with no network and no microphone (verified); missing devices
       show up as errors under `hardware` in `GET /api/state`.

@@ -1363,7 +1363,7 @@ async function tuningSave() {
     try {
         await tuningFlush();
         tuningAdopt(await tuningCall('/api/audio/tuning/save', {}), false);
-        showMsg('tuneOk', 'Saved to config.yaml (the first save keeps config.yaml.bak).');
+        showMsg('tuneOk', 'Saved to the configuration database (undo: config history / config restore on the brain).');
     } catch (e) { showMsg('tuneError', e.message); }
     btn.disabled = false;
 }

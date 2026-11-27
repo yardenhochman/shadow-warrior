@@ -46,7 +46,31 @@ Modern Rust rewrite of the Shadow Warrior training system brain with improved ar
 
 ## Configuration
 
-Edit `config.yaml`:
+**The SQLite database (`DATABASE_URL`, default `sqlite:shadow_warrior.db` in the working directory) is the single
+source of runtime configuration.** `settings` holds one JSON row per top-level section (`audio`, `wled`, `station`,
+`schedule`, ...), `config_history` the last 500 changes. `config.yaml` is only a **seed**: on the first boot (empty
+database) the brain imports it once and never reads or modifies it again; the repo `config.yaml` documents every key.
+Sections or keys missing from the database fall back to the built-in defaults. `BRAIN_*` environment variables still
+overlay everything (e.g. `BRAIN_AUDIO='{input=false}'`).
+
+Everything that changes configuration at runtime (dashboard "Save to config", schedule edits) writes to the database.
+Edit it offline (stop the service) with the `config` subcommands:
+
+```bash
+shadow-warrior-brain config get audio.shout_margin_db
+shadow-warrior-brain config set audio.shout_margin_db 25      # JSON or YAML scalar; rejected if the config would not load
+shadow-warrior-brain config dump > backup.yaml                # whole effective config as YAML
+shadow-warrior-brain config import backup.yaml                # replaces the sections present in the file
+shadow-warrior-brain config history 20
+shadow-warrior-brain config restore <history-id>              # undo that one change
+shadow-warrior-brain --reset-config                           # start with the stored sections wiped (history kept)
+```
+
+Bootstrap values that cannot live in the database: `DATABASE_URL`, and the HTTP address/port (`--bind ADDR`,
+`--port N`, or `BRAIN_SERVER='{port=8080}'`). `--seed-config PATH` (or `SEED_CONFIG`) selects another seed file.
+`config import` and `--reset-config` do not re-seed from `config.yaml` automatically after the first boot.
+
+Example of the seed file (`config.yaml`):
 
 ```yaml
 server:
@@ -232,7 +256,7 @@ To record on the station itself through the brain's own pipeline, use `POST /api
 ### Evaluating WAV files offline (comparing microphones)
 `just eval` runs the brain's own front-end and shout detector (`src/services/wav_eval.rs`, the
 same `FrontEnd` + earshot VAD + `ShoutDetector` code the live brain runs) over WAV files, with
-the `audio:` settings from `config.yaml` (plus `BRAIN_*` env):
+the `audio:` settings from a YAML file (`--config`, default `config.yaml`; plus `BRAIN_*` env; offline tools do not read the database, use `config dump > f.yaml` to evaluate the live values):
 ```bash
 just eval clips/a.wav clips/b.wav                       # per-second table + every detection
 just eval clips/a.wav --set shout_margin_db=12 --set vad_threshold=0.4   # try other tunables
@@ -303,7 +327,7 @@ brain-rs/
 │       ├── index.html
 │       ├── style.css
 │       └── app.js
-├── config.yaml              # Configuration
+├── config.yaml              # Seed for the first boot (the database holds the live config)
 └── Cargo.toml
 ```
 

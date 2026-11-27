@@ -34,3 +34,7 @@ record label="clip" *args:
 # Offline shout evaluation with the live front-end + detector: `just eval clips/a.wav clips/b.wav [--csv f.csv --json r.json --set shout_margin_db=12]`
 eval +args:
     cargo run -q -- eval-wav {{args}}
+
+# Inspect/edit the stored configuration (SQLite) offline: `just config get audio.shout_margin_db`, `just config dump` (stop the service first on a station)
+config +args:
+    cargo run -q -- config {{args}}

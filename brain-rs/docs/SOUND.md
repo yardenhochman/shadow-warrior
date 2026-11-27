@@ -115,14 +115,14 @@ The dashboard Config tab has a "Shout tuning" card: sliders for the meter (`shou
 `vad_hangover_frames`, sensitivity, VAD, pitch/centroid/tilt/flatness gates), with the live `ShoutLevel`
 (dB above floor on an axis with the lo/hi marks), the noise floor and a "detected" flash per `ShoutDetected`.
 Sliders apply within one audio frame (the meter and detector re-read the shared `AudioConfig` every frame); nothing
-restarts. Values not saved are lost on restart.
+restarts. Values not saved are lost on restart. Save writes to the database, which is the source of truth (config.yaml is only the first-boot seed).
 
 | Endpoint | Effect |
 | --- | --- |
 | `GET /api/audio/tuning` | `{values, defaults, params[key,label,group,kind,min,max,step,unit,help], modified}` |
 | `POST /api/audio/tuning` | partial `{key: value}`; clamped to the descriptor range, unknown key or non-number rejects the whole request; returns the new state |
 | `POST /api/audio/tuning/reset` | back to the last loaded/saved values |
-| `POST /api/audio/tuning/save` | writes the values into the `audio:` section of `config.yaml` (comments kept, existing keys edited in place, changed missing keys appended, atomic, `config.yaml.bak` written once) |
+| `POST /api/audio/tuning/save` | writes the values into the `audio` section stored in the SQLite database (keys already stored or differing from the built-in defaults; recorded in `config_history` with source `tuning`; `config.yaml` is never touched). Undo with `shadow-warrior-brain config restore <id>` while the service is stopped |
 
 To expose another numeric `audio.*` key, add one `param!` row to `PARAMS` in `services/audio_tuning.rs`;
 the API and the card pick it up. If a `ShoutLevel` event carries `ambient_db` / `adaptive_offset_db` the card shows them.
@@ -215,7 +215,7 @@ cargo run --bin shout_replay -- clips/dual/<rec>/station_1.wav --labels clips/du
     --sweep shout_margin_db=8,10,12,15 --sweep shout_min_features=2,3 --sweep vad_hangover_frames=6,10 --top 10
 ```
 
-Tunables are the `audio:` keys of `config.yaml` (`shout_margin_db`, `vad_hangover_frames`,
+Tunables are the `audio:` keys of a YAML config (`config dump > f.yaml` exports the live ones from the database) (`shout_margin_db`, `vad_hangover_frames`,
 `shout_min_features`, `shout_min_duration_sec`, `shout_score_threshold`, `shout_sensitivity`,
 `shout_f0_min_hz`, ...), read from `--config` (default `config.yaml`; missing means `Config::default`)
 and then `--set`. A cue's audio time is `t + start_offset_sec + --offset`.

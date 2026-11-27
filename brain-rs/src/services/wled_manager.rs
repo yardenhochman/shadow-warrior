@@ -722,7 +722,7 @@ impl WledManager {
     }
 
     /// Re-point controller `old` to `new` everywhere: runtime list (HTTP base URL), per-address
-    /// bookkeeping, realtime UDP sockets, status registry (via `WledMoved`). config.yaml is untouched.
+    /// bookkeeping, realtime UDP sockets, status registry (via `WledMoved`). the stored config is untouched.
     async fn apply_move(&self, old: &str, new: &str, label: Option<&str>) {
         {
             let mut controllers = self.controllers.write().await;
