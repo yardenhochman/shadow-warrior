@@ -105,7 +105,7 @@ pub async fn tuning_reset(State(state): State<AppState>) -> Json<ApiResponse<Tun
     Json(ApiResponse::success(state.audio.tuning_state().await))
 }
 
-/// POST /api/audio/tuning/save - persist the live values into the `audio:` section of config.yaml
+/// POST /api/audio/tuning/save - persist the live values into the `audio` config section in the database
 pub async fn tuning_save(State(state): State<AppState>) -> Json<ApiResponse<TuningState>> {
     match state.audio.tuning_save().await {
         Ok(()) => Json(ApiResponse::success(state.audio.tuning_state().await)),
@@ -134,6 +134,38 @@ mod tests {
         assert_eq!(am.tuning_state().await.modified, vec!["shout_meter_lo_db"]);
         am.tuning_reset().await;
         assert!(am.tuning_state().await.modified.is_empty());
+    }
+
+    #[tokio::test]
+    async fn tuning_save_persists_in_the_database_across_restarts() {
+        use crate::services::database_manager::DatabaseManager;
+        let p = std::env::temp_dir().join(format!("tuning-save-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let url = format!("sqlite:{}", p.display());
+        let db = DatabaseManager::new(&url).await.unwrap();
+        let am = AudioManager::new(Config::default().audio, Arc::new(EventBus::new(10)))
+            .with_config_store(db.config());
+        let mut m = serde_json::Map::new();
+        m.insert("shout_margin_db".into(), serde_json::json!(21.0));
+        am.tuning_apply(&m).await.unwrap();
+        assert_eq!(am.tuning_state().await.modified, vec!["shout_margin_db"]);
+        am.tuning_save().await.unwrap();
+        // saved: no longer "unsaved changes", and reset now returns to the saved value
+        assert!(am.tuning_state().await.modified.is_empty());
+        drop(am);
+        drop(db);
+        // new store on the same database file
+        let db2 = DatabaseManager::new(&url).await.unwrap();
+        let cfg = db2.config().load_config().await.unwrap();
+        assert_eq!(cfg.audio.shout_margin_db, 21.0);
+        let h = db2.config().history(5).await.unwrap();
+        assert_eq!((h[0].key.as_str(), h[0].source.as_str()), ("audio", "tuning"));
+        std::fs::remove_file(&p).ok();
+    }
+
+    #[tokio::test]
+    async fn tuning_save_without_store_is_an_error() {
+        assert!(audio().tuning_save().await.is_err());
     }
 
     #[tokio::test]

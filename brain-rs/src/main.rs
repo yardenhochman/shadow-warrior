@@ -23,7 +23,6 @@ use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
 use crate::api::{arena, status, SharedState};
-use crate::config::Config;
 use crate::core::{EventBus, StateMachine};
 use crate::services::{
     ArenaManager, AudioManager, BleManager, DatabaseManager, DiscoveryManager, MusicManager,
@@ -38,8 +37,31 @@ async fn main() -> Result<()> {
         return services::wav_eval::cli(&args[2..]);
     }
 
-    // Load configuration
-    let config = Config::load()?;
+    if args.get(1).map(String::as_str) == Some("config") {
+        return services::config_cli::cli(&args[2..]).await;
+    }
+    let flags = StartFlags::parse(&args[1..])?;
+
+    // Database first: it holds the configuration (the DB path itself comes from DATABASE_URL).
+    let database_url = services::database_manager::database_url();
+    if database_url == "sqlite:shadow_warrior.db" && !std::path::Path::new("shadow_warrior.db").exists() {
+        std::fs::File::create("shadow_warrior.db")?;
+    }
+    let db_manager: Arc<DatabaseManager> = Arc::new(DatabaseManager::new(&database_url).await?);
+    let config_store = db_manager.config();
+    if flags.reset_config {
+        config_store.reset("reset-config flag").await?;
+    }
+    // First boot only: import config.yaml (never modified afterwards). See services/config_store.rs.
+    config_store.seed_from_yaml(&flags.seed_path).await?;
+    let mut config = config_store.load_config().await?;
+    // Bootstrap values that override the stored ones: --bind / --port (BRAIN_SERVER works too).
+    if let Some(b) = &flags.bind {
+        config.server.host = b.clone();
+    }
+    if let Some(p) = flags.port {
+        config.server.port = p;
+    }
 
     // Initialize logging
     let subscriber = FmtSubscriber::builder()
@@ -55,15 +77,10 @@ async fn main() -> Result<()> {
     tracing::subscriber::set_global_default(subscriber)?;
 
     info!("🥊 Shadow Warrior Brain starting...");
-    info!("Configuration loaded successfully");
-
-    // Initialize database
-    let database_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite:shadow_warrior.db".to_string());
-    if !std::path::Path::new("shadow_warrior.db").exists() {
-        std::fs::File::create("shadow_warrior.db")?;
+    info!("Configuration loaded from the database {}", database_url);
+    if flags.reset_config {
+        tracing::warn!("--reset-config: stored configuration wiped, running on built-in defaults");
     }
-    let db_manager: Arc<DatabaseManager> = Arc::new(DatabaseManager::new(&database_url).await?);
-    info!("Database manager initialized");
 
     // Initialize event bus
     let event_bus = Arc::new(EventBus::new(1000));
@@ -77,7 +94,7 @@ async fn main() -> Result<()> {
     let ble_manager = Arc::new(BleManager::new(config.ble.clone(), event_bus.clone()));
     info!("BLE manager initialized");
 
-    let audio_manager = Arc::new(AudioManager::new(config.audio.clone(), event_bus.clone()));
+    let audio_manager = Arc::new(AudioManager::new(config.audio.clone(), event_bus.clone()).with_config_store(config_store.clone()));
     info!("Audio manager initialized");
 
     let wled_manager = Arc::new(WledManager::new(config.wled.clone(), db_manager.clone(), event_bus.clone()).with_led_config(config.led.clone()));
@@ -92,8 +109,11 @@ async fn main() -> Result<()> {
     let music_manager = Arc::new(MusicManager::new(config.music.clone(), event_bus.clone()));
     info!("Music manager initialized");
 
-    ScheduleManager::validate(&config.schedule)
-        .map_err(|e| anyhow::anyhow!("invalid schedule in config: {e}"))?;
+    // A bad stored schedule must not keep the installation down: run unscheduled and say so.
+    if let Err(e) = ScheduleManager::validate(&config.schedule) {
+        tracing::error!("Invalid schedule in config ({e}); ignoring it. Fix with `config set schedule ...`");
+        config.schedule = config::ScheduleConfig::default();
+    }
     let schedule_manager = Arc::new(
         ScheduleManager::new(
             config.schedule.clone(),
@@ -478,6 +498,38 @@ fn strip_ansi(s: &str) -> String {
         result.push(c);
     }
     result
+}
+
+/// Start flags (bootstrap values that cannot live in the database).
+#[derive(Debug, Default)]
+struct StartFlags {
+    reset_config: bool,
+    seed_path: std::path::PathBuf,
+    port: Option<u16>,
+    bind: Option<String>,
+}
+
+impl StartFlags {
+    fn parse(args: &[String]) -> Result<Self> {
+        let mut f = StartFlags {
+            seed_path: std::env::var("SEED_CONFIG").unwrap_or_else(|_| "config.yaml".into()).into(),
+            ..Default::default()
+        };
+        let mut it = args.iter();
+        while let Some(a) = it.next() {
+            let mut val = |name: &str| it.next().cloned().ok_or_else(|| anyhow::anyhow!("{name} needs a value"));
+            match a.as_str() {
+                "--reset-config" => f.reset_config = true,
+                "--seed-config" => f.seed_path = val("--seed-config")?.into(),
+                "--port" => f.port = Some(val("--port")?.parse().map_err(|_| anyhow::anyhow!("--port: not a port number"))?),
+                "--bind" => f.bind = Some(val("--bind")?),
+                other => anyhow::bail!(
+                    "unknown argument {other}\nflags: --reset-config  --seed-config PATH (env SEED_CONFIG)  --port N  --bind ADDR\nsubcommands: config, eval-wav"
+                ),
+            }
+        }
+        Ok(f)
+    }
 }
 
 #[derive(Clone, Copy)]

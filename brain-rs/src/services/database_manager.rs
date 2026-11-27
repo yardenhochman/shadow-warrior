@@ -4,6 +4,7 @@ use std::str::FromStr;
 use std::time::Duration;
 use std::sync::Arc;
 use tracing::info;
+use super::config_store::ConfigStore;
 use serde::Serialize;
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -18,6 +19,12 @@ pub struct DeviceRecord {
 
 pub struct DatabaseManager {
     pool: Pool<Sqlite>,
+    config: Arc<ConfigStore>,
+}
+
+/// Database location: `DATABASE_URL`, default `sqlite:shadow_warrior.db` (a bootstrap value, not in the DB).
+pub fn database_url() -> String {
+    std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite:shadow_warrior.db".to_string())
 }
 
 impl DatabaseManager {
@@ -36,10 +43,16 @@ impl DatabaseManager {
             .await
             .context("Failed to connect to SQLite")?;
 
-        let manager = Self { pool };
+        let config = Arc::new(ConfigStore::new(pool.clone()).await?);
+        let manager = Self { pool, config };
         manager.run_migrations().await?;
-        
+
         Ok(manager)
+    }
+
+    /// Runtime configuration (single source of truth, see config_store.rs).
+    pub fn config(&self) -> Arc<ConfigStore> {
+        self.config.clone()
     }
 
     async fn run_migrations(&self) -> Result<()> {

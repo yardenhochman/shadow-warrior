@@ -849,9 +849,18 @@ pub struct ScheduleWindow {
 }
 
 impl Config {
-    /// Load configuration from config.yaml and environment variables
+    /// Load configuration from config.yaml and environment variables. Offline tools only: the
+    /// brain itself reads the database (`Config::from_sections`).
     pub fn load() -> Result<Self, Box<figment::Error>> {
         Self::from_sources(Figment::from(Yaml::file("config.yaml")).merge(Env::prefixed("BRAIN_")))
+    }
+
+    /// Config from stored sections (services/config_store.rs): serde defaults, then the sections,
+    /// then `BRAIN_*` env on top.
+    pub fn from_sections(
+        sections: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<Self, Box<figment::Error>> {
+        Self::from_sources(Figment::from(Serialized::defaults(sections)).merge(Env::prefixed("BRAIN_")))
     }
 
     /// Like `load`, from `path` (a missing file means defaults), then `overrides`: dotted keys

@@ -24,7 +24,7 @@ pub struct AudioManager {
     config: Arc<RwLock<AudioConfig>>,
     /// Values the live tuning resets to: the config as loaded, or as last saved to disk.
     tuning_base: std::sync::RwLock<AudioConfig>,
-    config_path: std::path::PathBuf,
+    store: Option<Arc<super::config_store::ConfigStore>>,
     event_bus: SharedEventBus,
     _stream: Arc<RwLock<Option<Stream>>>,
     connected: Arc<AtomicBool>,
@@ -44,7 +44,7 @@ impl AudioManager {
         Self {
             config,
             tuning_base,
-            config_path: "config.yaml".into(),
+            store: None,
             event_bus,
             _stream: Arc::new(RwLock::new(None)),
             connected: Arc::new(AtomicBool::new(false)),
@@ -55,6 +55,12 @@ impl AudioManager {
             actual_channels: Arc::new(RwLock::new(1)),
             recorder: SessionRecorder::default(),
         }
+    }
+
+    /// Where "Save to config" writes (the `audio` section). Without one, saving is refused.
+    pub fn with_config_store(mut self, store: Arc<super::config_store::ConfigStore>) -> Self {
+        self.store = Some(store);
+        self
     }
 
     /// Start audio capture — negotiates best supported config with device
@@ -506,11 +512,15 @@ impl AudioManager {
         audio_tuning::reset(&mut *self.config.write().await, &base);
     }
 
-    /// Write the live values into the config file; they become the new reset target.
+    /// Write the live values into the stored `audio` config section; they become the new reset target.
     pub async fn tuning_save(&self) -> Result<(), String> {
+        let store = self.store.clone().ok_or("no config database attached")?;
         let cur = self.config.read().await.clone();
-        let base = self.tuning_base.read().unwrap().clone();
-        audio_tuning::save_to_file(&self.config_path, &cur, &base)?;
+        let defaults = crate::config::Config::default().audio;
+        store
+            .update_section("audio", "tuning", |v| audio_tuning::save_into_json(v, &cur, &defaults))
+            .await
+            .map_err(|e| format!("{e:#}"))?;
         *self.tuning_base.write().unwrap() = cur;
         Ok(())
     }

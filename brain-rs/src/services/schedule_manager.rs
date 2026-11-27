@@ -123,10 +123,10 @@ impl ScheduleManager {
     }
 
     /// Persist API edits in `db` and restore the saved schedule, which
-    /// overrides the config.yaml one. An unreadable saved schedule is ignored.
+    /// overrides the one in the loaded config. An unreadable saved schedule is ignored.
     pub async fn with_persistence(mut self, db: Arc<DatabaseManager>) -> Self {
-        match db.get_setting(SETTING_KEY).await {
-            Ok(Some(json)) => match serde_json::from_str::<ScheduleConfig>(&json) {
+        match db.config().get_section(SETTING_KEY).await {
+            Ok(Some(json)) => match serde_json::from_value::<ScheduleConfig>(json) {
                 Ok(cfg) if parse_config(&cfg).is_ok() => {
                     info!("Schedule: restored saved config");
                     self.config = Mutex::new(cfg);
@@ -160,8 +160,9 @@ impl ScheduleManager {
     pub async fn update_config(&self, cfg: ScheduleConfig) -> Result<(), String> {
         parse_config(&cfg)?;
         if let Some(db) = &self.db {
-            let json = serde_json::to_string(&cfg).map_err(|e| e.to_string())?;
-            db.set_setting(SETTING_KEY, &json)
+            let json = serde_json::to_value(&cfg).map_err(|e| e.to_string())?;
+            db.config()
+                .set_section(SETTING_KEY, json, "schedule")
                 .await
                 .map_err(|e| format!("failed to persist schedule: {e}"))?;
         }

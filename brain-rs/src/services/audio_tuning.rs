@@ -8,13 +8,11 @@
 //!   API and the dashboard are generated from it: a new numeric `audio.*` key appears in the UI
 //!   by adding one row here;
 //! * [`apply`] / [`values`] / [`reset`]: partial update with clamping, readout, defaults;
-//! * [`save_into_yaml`]: persists values into the `audio:` section of a config file as a minimal
-//!   text edit (comments and other content preserved).
+//! * [`save_into_json`]: merges values into the stored `audio` config section (services/config_store.rs).
 
 use crate::config::AudioConfig;
 use serde::Serialize;
 use serde_json::{Map, Value};
-use std::path::Path;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -206,119 +204,21 @@ pub fn reset(cfg: &mut AudioConfig, defaults: &AudioConfig) {
     }
 }
 
-fn yaml_scalar(p: &Param, cfg: &AudioConfig) -> String {
-    let v = (p.get)(cfg);
-    match p.kind {
-        Kind::Bool => (v >= 0.5).to_string(),
-        Kind::Int => format!("{}", v.round() as i64),
-        Kind::Float => {
-            let s = format!("{}", v as f32);
-            if s.contains('.') || s.contains('e') { s } else { format!("{s}.0") }
-        }
+/// Write the tunables into the stored `audio` section (a JSON object). A key is written when it is
+/// already stored or differs from `defaults` (the built-in `Config::default().audio`), so keys the
+/// operator never touched keep following the defaults.
+pub fn save_into_json(section: &mut Value, cfg: &AudioConfig, defaults: &AudioConfig) -> Result<(), String> {
+    if section.is_null() {
+        *section = Value::Object(Map::new());
     }
-}
-
-fn is_top_level_content(line: &str) -> bool {
-    let t = line.trim_end();
-    !t.is_empty() && !t.starts_with(' ') && !t.starts_with('\t') && !t.starts_with('#')
-}
-
-/// Rewrite the `audio:` section of `text`: replace the value of existing keys in place (keeping
-/// indentation, comment column and the trailing comment), append missing keys that differ from
-/// `defaults` at the end of the section. Everything else is untouched.
-pub fn save_into_yaml(text: &str, cfg: &AudioConfig, defaults: &AudioConfig) -> Result<String, String> {
-    let had_newline = text.ends_with('\n');
-    let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
-    let start = lines.iter().position(|l| l.trim_end() == "audio:" || l.starts_with("audio: #"));
-    let Some(start) = start else {
-        if lines.iter().any(|l| l.starts_with("audio:")) {
-            return Err("config 'audio:' section is not a block mapping; edit it by hand".into());
-        }
-        // No audio section: append one with the modified keys only.
-        let mut out = text.to_string();
-        if !out.is_empty() && !out.ends_with('\n') {
-            out.push('\n');
-        }
-        out.push_str("\naudio:\n");
-        for p in PARAMS.iter().filter(|p| (p.get)(cfg) != (p.get)(defaults)) {
-            out.push_str(&format!("  {}: {}\n", p.key, yaml_scalar(p, cfg)));
-        }
-        return Ok(out);
-    };
-    let mut end = start + 1;
-    while end < lines.len() && !is_top_level_content(&lines[end]) {
-        end += 1;
-    }
-    // New keys go right after the last non-blank line of the section.
-    let mut insert_at = end;
-    while insert_at > start + 1 && lines[insert_at - 1].trim().is_empty() {
-        insert_at -= 1;
-    }
-    let indent = lines[start + 1..end]
-        .iter()
-        .find(|l| !l.trim().is_empty() && !l.trim_start().starts_with('#'))
-        .map(|l| l[..l.len() - l.trim_start().len()].to_string())
-        .unwrap_or_else(|| "  ".to_string());
-    let mut appended = Vec::new();
+    let obj = section
+        .as_object_mut()
+        .ok_or("stored 'audio' section is not an object; fix it with `config set audio '{}'`")?;
     for p in PARAMS {
-        let new = yaml_scalar(p, cfg);
-        let prefix = format!("{indent}{}:", p.key);
-        match (start + 1..end).find(|&i| lines[i].starts_with(&prefix)) {
-            Some(i) => {
-                let rest = &lines[i][prefix.len()..];
-                let lead = rest.len() - rest.trim_start().len();
-                let body = &rest[lead..];
-                let (val, comment) = match body.find(" #") {
-                    Some(c) => (&body[..c], &body[c..]),
-                    None => (body, ""),
-                };
-                let val_trim = val.trim_end();
-                if val_trim.is_empty() || val_trim.starts_with(['{', '[', '"', '\'', '|', '>', '&', '*']) {
-                    return Err(format!("{}: unsupported existing value '{}', edit by hand", p.key, val_trim));
-                }
-                // Unchanged (also "200" vs "200.0"): leave the line alone.
-                let same_num = val_trim.parse::<f32>().is_ok_and(|x| x as f64 == (p.get)(cfg) as f32 as f64);
-                if val_trim == new || (p.kind != Kind::Bool && same_num) {
-                    continue;
-                }
-                let spaces = " ".repeat(lead.max(1));
-                lines[i] = if comment.is_empty() {
-                    format!("{prefix}{spaces}{new}")
-                } else {
-                    // Keep the comment column while the new value fits the old field.
-                    let pad = " ".repeat(val.len().saturating_sub(new.len()));
-                    format!("{prefix}{spaces}{new}{pad}{comment}")
-                };
-            }
-            None => {
-                if (p.get)(cfg) != (p.get)(defaults) {
-                    appended.push(format!("{prefix} {new}"));
-                }
-            }
+        if obj.contains_key(p.key) || (p.get)(cfg) != (p.get)(defaults) {
+            obj.insert(p.key.to_string(), json_value(p, (p.get)(cfg)));
         }
     }
-    for (n, l) in appended.into_iter().enumerate() {
-        lines.insert(insert_at + n, l);
-    }
-    let mut out = lines.join("\n");
-    if had_newline {
-        out.push('\n');
-    }
-    Ok(out)
-}
-
-/// Persist into the config file: `.bak` once, atomic replace.
-pub fn save_to_file(path: &Path, cfg: &AudioConfig, defaults: &AudioConfig) -> Result<(), String> {
-    let text = std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
-    let out = save_into_yaml(&text, cfg, defaults)?;
-    serde_yaml::from_str::<serde_yaml::Value>(&out).map_err(|e| format!("edited config does not parse: {e}"))?;
-    let bak = path.with_extension("yaml.bak");
-    if !bak.exists() {
-        std::fs::write(&bak, &text).map_err(|e| format!("write {}: {e}", bak.display()))?;
-    }
-    let tmp = path.with_extension("yaml.tmp");
-    std::fs::write(&tmp, &out).map_err(|e| format!("write {}: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, path).map_err(|e| format!("rename {}: {e}", tmp.display()))?;
     Ok(())
 }
 
@@ -409,75 +309,26 @@ mod tests {
         assert_eq!(keys.len(), PARAMS.len());
     }
 
-    const SAMPLE: &str = "# top comment\nbrain:\n  name: x\n\naudio:\n  sample_rate: 16000\n  # section comment\n  shout_margin_db: 15.0            # required dB above floor\n  shout_meter_lo_db: 45.0          # lo\n  shout_meter_gate: false          # gate\n  vad_hangover_frames: 6\n  clip_dir: \"./clips\"\n\nwled:\n  controllers: []\n";
-
-    fn line_with<'a>(s: &'a str, key: &str) -> &'a str {
-        s.lines().find(|l| l.trim_start().starts_with(key)).unwrap()
-    }
-
     #[test]
-    fn yaml_edit_preserves_everything_else() {
+    fn save_writes_changed_and_already_stored_keys_only() {
         let defaults = cfg();
         let mut c = defaults.clone();
-        apply(&mut c, &upd(json!({"shout_margin_db": 12.5, "shout_meter_lo_db": 8.0, "shout_meter_gate": true, "vad_hangover_frames": 10, "shout_score_threshold": 9.0}))).unwrap();
-        let out = save_into_yaml(SAMPLE, &c, &defaults).unwrap();
-        for (key, val, cmt) in [("shout_margin_db", "12.5", "# required dB above floor"), ("shout_meter_lo_db", "8.0", "# lo"), ("shout_meter_gate", "true", "# gate")] {
-            let (old, new) = (line_with(SAMPLE, key), line_with(&out, key));
-            assert!(new.starts_with(&format!("  {key}: {val}")), "{new}");
-            assert!(new.ends_with(cmt), "{new}");
-            assert_eq!(old.find('#'), new.find('#'), "comment column moved: {new}");
-        }
-        assert!(out.contains("  vad_hangover_frames: 10\n"), "{out}");
-        // missing key that differs from the default is appended inside audio:, before the blank line
-        assert!(out.contains("  clip_dir: \"./clips\"\n  shout_score_threshold: 9.0\n\nwled:"), "{out}");
-        for keep in ["# top comment", "brain:\n  name: x", "  # section comment", "wled:\n  controllers: []"] {
-            assert!(out.contains(keep), "lost {keep}");
-        }
-        let v: serde_yaml::Value = serde_yaml::from_str(&out).unwrap();
-        assert_eq!(v["audio"]["shout_meter_lo_db"].as_f64(), Some(8.0));
-        assert_eq!(v["audio"]["shout_score_threshold"].as_f64(), Some(9.0));
-        assert_eq!(v["audio"]["shout_meter_gate"].as_bool(), Some(true));
-        // saving again is idempotent
-        assert_eq!(save_into_yaml(&out, &c, &defaults).unwrap(), out);
-    }
-
-    #[test]
-    fn yaml_without_audio_section_gets_one() {
-        let defaults = cfg();
-        let mut c = defaults.clone();
-        apply(&mut c, &upd(json!({"shout_margin_db": 20.0}))).unwrap();
-        let out = save_into_yaml("wled:\n  x: 1\n", &c, &defaults).unwrap();
-        let v: serde_yaml::Value = serde_yaml::from_str(&out).unwrap();
-        assert_eq!(v["audio"]["shout_margin_db"].as_f64(), Some(20.0));
-        assert_eq!(v["wled"]["x"].as_i64(), Some(1));
-    }
-
-    #[test]
-    fn real_config_round_trips() {
-        let real = include_str!("../../config.yaml");
-        let defaults = cfg();
-        let mut c = defaults.clone();
-        apply(&mut c, &upd(json!({"shout_meter_lo_db": 40.0}))).unwrap();
-        let out = save_into_yaml(real, &c, &defaults).unwrap();
-        assert_eq!(out.lines().count(), real.lines().count());
-        assert!(line_with(&out, "shout_meter_lo_db").contains("40.0"));
-    }
-
-    #[test]
-    fn save_to_file_makes_one_backup() {
-        let dir = std::env::temp_dir().join(format!("tuning-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("config.yaml");
-        std::fs::write(&path, SAMPLE).unwrap();
-        let defaults = cfg();
-        let mut c = defaults.clone();
-        apply(&mut c, &upd(json!({"shout_margin_db": 11.0}))).unwrap();
-        save_to_file(&path, &c, &defaults).unwrap();
-        apply(&mut c, &upd(json!({"shout_margin_db": 12.0}))).unwrap();
-        save_to_file(&path, &c, &defaults).unwrap();
-        assert_eq!(std::fs::read_to_string(dir.join("config.yaml.bak")).unwrap(), SAMPLE);
-        assert!(std::fs::read_to_string(&path).unwrap().contains("shout_margin_db: 12.0"));
-        assert!(!dir.join("config.yaml.tmp").exists());
-        std::fs::remove_dir_all(&dir).ok();
+        apply(&mut c, &upd(json!({"shout_margin_db": 20.0, "shout_meter_lo_db": 33.0}))).unwrap();
+        let mut stored = json!({"sample_rate": 16000, "shout_sensitivity": defaults.shout_sensitivity});
+        save_into_json(&mut stored, &c, &defaults).unwrap();
+        assert_eq!(stored["shout_margin_db"], json!(20.0));
+        assert_eq!(stored["shout_meter_lo_db"], json!(33.0));
+        assert_eq!(stored["sample_rate"], json!(16000), "foreign keys untouched");
+        assert!(stored.get("shout_sensitivity").is_some(), "already stored key stays");
+        assert!(stored.get("vad_threshold").is_none(), "unchanged default is not pinned");
+        // idempotent
+        let again = stored.clone();
+        save_into_json(&mut stored, &c, &defaults).unwrap();
+        assert_eq!(stored, again);
+        // a null section becomes an object
+        let mut n = Value::Null;
+        save_into_json(&mut n, &c, &defaults).unwrap();
+        assert_eq!(n["shout_margin_db"], json!(20.0));
+        assert!(save_into_json(&mut json!(5), &c, &defaults).is_err());
     }
 }

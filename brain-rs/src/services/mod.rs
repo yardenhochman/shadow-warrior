@@ -7,6 +7,8 @@ pub mod audio_output;
 pub mod audio_source;
 pub mod ble_manager;
 pub mod ble_status;
+pub mod config_cli;
+pub mod config_store;
 pub mod database_manager;
 pub mod discovery_manager;
 pub mod mdns_advert;
